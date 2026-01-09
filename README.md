@@ -115,6 +115,7 @@ claude
 | `/orchestrator <task>` | Complex multi-step task coordination |
 | `/ralph-loop <task>` | Self-referential loop until task completion |
 | `/cancel-ralph` | Cancel active Ralph Loop |
+| `/update` | Check for and install updates |
 
 ### Examples
 
@@ -155,6 +156,77 @@ Just include these words anywhere in your prompt:
 
 > analyze why the tests are failing
 ```
+
+---
+
+## Auto-Update
+
+Oh-my-claude-sisyphus includes a silent auto-update system that checks for updates in the background. Updates are applied automatically without interrupting your workflow.
+
+To manually check for updates:
+```bash
+/update
+```
+
+---
+
+## Hooks System
+
+Oh-my-claude-sisyphus includes 18 lifecycle hooks that enhance Claude Code's behavior:
+
+### Core Hooks
+
+| Hook | Description |
+|------|-------------|
+| **rules-injector** | Dynamic rules injection with YAML frontmatter parsing |
+| **sisyphus-orchestrator** | Enforces orchestrator behavior and delegation |
+| **auto-slash-command** | Automatic slash command detection and execution |
+| **keyword-detector** | Magic keyword detection (ultrawork, search, analyze) |
+| **ralph-loop** | Self-referential development loop management |
+| **todo-continuation** | Ensures todo list completion |
+
+### Context & Recovery
+
+| Hook | Description |
+|------|-------------|
+| **context-window-limit-recovery** | Token limit error handling and recovery |
+| **preemptive-compaction** | Context usage monitoring to prevent limits |
+| **session-recovery** | Session state recovery on crashes |
+| **directory-readme-injector** | README context injection |
+
+### Quality & Validation
+
+| Hook | Description |
+|------|-------------|
+| **comment-checker** | BDD detection and directive filtering |
+| **thinking-block-validator** | Extended thinking validation |
+| **empty-message-sanitizer** | Empty message handling |
+| **edit-error-recovery** | Automatic recovery from edit errors |
+
+### Environment & Notifications
+
+| Hook | Description |
+|------|-------------|
+| **non-interactive-env** | CI/non-interactive environment handling |
+| **agent-usage-reminder** | Reminder to use specialized agents |
+| **background-notification** | Background task completion notifications |
+
+---
+
+## Builtin Skills
+
+Six builtin skills provide specialized capabilities:
+
+| Skill | Description |
+|-------|-------------|
+| **sisyphus** | Multi-agent orchestration mode |
+| **orchestrator** | Master coordinator for complex tasks |
+| **ultrawork** | Maximum performance with parallel agents |
+| **ralph-loop** | Self-referential development until completion |
+| **frontend-ui-ux** | Designer-turned-developer UI/UX expertise |
+| **git-master** | Git expert for atomic commits and history |
+
+Skills are automatically activated via slash commands or magic keywords.
 
 ---
 
@@ -387,29 +459,25 @@ The original oh-my-opencode used multiple AI providers. This port uses Claude mo
 | Feature | Description |
 |---------|-------------|
 | **11 Specialized Agents** | Oracle, Librarian, Explore, Frontend Engineer, Document Writer, Multimodal Looker, Momus, Metis, Orchestrator-Sisyphus, Sisyphus-Junior, Prometheus |
+| **18 Lifecycle Hooks** | rules-injector, sisyphus-orchestrator, auto-slash-command, keyword-detector, ralph-loop, todo-continuation, context-window-limit-recovery, preemptive-compaction, session-recovery, directory-readme-injector, comment-checker, thinking-block-validator, empty-message-sanitizer, edit-error-recovery, non-interactive-env, agent-usage-reminder, background-notification, think-mode |
+| **6 Builtin Skills** | sisyphus, orchestrator, ultrawork, ralph-loop, frontend-ui-ux, git-master |
 | **Magic Keywords** | `ultrawork`, `search`, `analyze`, `ultrathink` trigger enhanced modes |
-| **Slash Commands** | `/sisyphus`, `/sisyphus-default`, `/ultrawork`, `/deepsearch`, `/analyze`, `/plan`, `/review`, `/prometheus`, `/orchestrator`, `/ralph-loop`, `/cancel-ralph` |
+| **Slash Commands** | `/sisyphus`, `/sisyphus-default`, `/ultrawork`, `/deepsearch`, `/analyze`, `/plan`, `/review`, `/prometheus`, `/orchestrator`, `/ralph-loop`, `/cancel-ralph`, `/update` |
+| **Auto-Update System** | Silent background updates with manual `/update` command |
 | **Configuration System** | JSONC config with multi-source merging |
 | **Context Injection** | Auto-loads CLAUDE.md and AGENTS.md files |
-| **Continuation Enforcement** | System prompt enforces task completion |
+| **Continuation Enforcement** | System prompt and hooks enforce task completion |
+| **Session Recovery** | Automatic state recovery on crashes |
+| **Background Task Manager** | Async agent execution with concurrency limits |
+| **Context Window Recovery** | Multi-stage recovery when hitting token limits |
 | **MCP Server Configs** | Exa, Context7, grep.app server definitions |
 | **LSP Tools** | Real LSP server integration with 11 tools |
 | **AST Tools** | ast-grep integration for structural code search/replace |
-
-#### Partially Implemented ⚠️
-
-| Feature | What Works | What's Missing |
-|---------|------------|----------------|
-| **Continuation Hook** | System prompt enforcement | Actual todo state checking |
 
 #### Not Implemented ❌
 
 | Feature | Original Capability | Why Not Ported |
 |---------|---------------------|----------------|
-| **22 Lifecycle Hooks** | PreToolUse, PostToolUse, Stop, etc. | Claude Code handles hooks differently |
-| **Background Task Manager** | Async agent execution with concurrency limits | Claude Code's Task tool handles this |
-| **Context Window Compaction** | Multi-stage recovery when hitting token limits | Claude Code manages this internally |
-| **Thinking Block Validator** | Validates AI thinking format | Not needed for Claude |
 | **Multi-Model Routing** | Route to GPT/Gemini/Grok based on task | Claude-only by design |
 | **Per-Model Concurrency** | Fine-grained concurrency per provider | Single provider simplifies this |
 | **Interactive Bash + Tmux** | Advanced terminal with Tmux integration | Standard Bash tool sufficient |
