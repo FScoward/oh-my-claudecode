@@ -18,14 +18,11 @@ import { tmpdir } from 'os';
 import {
   parseTokenLimitError,
   containsTokenLimitError,
-  TOKEN_LIMIT_PATTERNS,
-  TOKEN_LIMIT_KEYWORDS,
 } from './parser.js';
 import {
   CONTEXT_LIMIT_RECOVERY_MESSAGE,
   CONTEXT_LIMIT_SHORT_MESSAGE,
   NON_EMPTY_CONTENT_RECOVERY_MESSAGE,
-  TRUNCATION_APPLIED_MESSAGE,
   RECOVERY_FAILED_MESSAGE,
 } from './constants.js';
 import type {
@@ -34,7 +31,7 @@ import type {
   TruncateState,
   RecoveryResult,
 } from './types.js';
-import { RETRY_CONFIG, TRUNCATE_CONFIG } from './types.js';
+import { RETRY_CONFIG } from './types.js';
 
 const DEBUG = process.env.CONTEXT_LIMIT_RECOVERY_DEBUG === '1';
 const DEBUG_FILE = path.join(tmpdir(), 'context-limit-recovery-debug.log');

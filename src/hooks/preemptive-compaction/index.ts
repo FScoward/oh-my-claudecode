@@ -18,19 +18,14 @@ import { tmpdir } from 'os';
 import {
   DEFAULT_THRESHOLD,
   CRITICAL_THRESHOLD,
-  MIN_TOKENS_FOR_COMPACTION,
   COMPACTION_COOLDOWN_MS,
   MAX_WARNINGS,
   CLAUDE_DEFAULT_CONTEXT_LIMIT,
   CHARS_PER_TOKEN,
   CONTEXT_WARNING_MESSAGE,
   CONTEXT_CRITICAL_MESSAGE,
-  COMPACTION_SUCCESS_MESSAGE,
 } from './constants.js';
 import type {
-  PreemptiveCompactionState,
-  TokenInfo,
-  ModelLimits,
   ContextUsageResult,
   PreemptiveCompactionConfig,
 } from './types.js';
@@ -47,18 +42,6 @@ function debugLog(...args: unknown[]): void {
       .join(' ')}\n`;
     fs.appendFileSync(DEBUG_FILE, msg);
   }
-}
-
-/**
- * Pattern to match Claude model IDs
- */
-const CLAUDE_MODEL_PATTERN = /claude-(opus|sonnet|haiku)/i;
-
-/**
- * Check if model is a supported Claude model
- */
-function isSupportedModel(modelID: string): boolean {
-  return CLAUDE_MODEL_PATTERN.test(modelID);
 }
 
 /**
@@ -321,9 +304,6 @@ export function resetSessionTokenEstimate(sessionId: string): void {
 
 // Re-export types and constants
 export type {
-  PreemptiveCompactionState,
-  TokenInfo,
-  ModelLimits,
   ContextUsageResult,
   PreemptiveCompactionConfig,
 } from './types.js';
@@ -331,12 +311,10 @@ export type {
 export {
   DEFAULT_THRESHOLD,
   CRITICAL_THRESHOLD,
-  MIN_TOKENS_FOR_COMPACTION,
   COMPACTION_COOLDOWN_MS,
   MAX_WARNINGS,
   CLAUDE_DEFAULT_CONTEXT_LIMIT,
   CHARS_PER_TOKEN,
   CONTEXT_WARNING_MESSAGE,
   CONTEXT_CRITICAL_MESSAGE,
-  COMPACTION_SUCCESS_MESSAGE,
 } from './constants.js';

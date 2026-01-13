@@ -78,8 +78,8 @@ export function formatFile(filePath: string): { success: boolean; message: strin
   try {
     execSync(`${formatter} "${filePath}"`, { encoding: 'utf-8', stdio: 'pipe' });
     return { success: true, message: `Formatted ${filePath}` };
-  } catch (error) {
-    return { success: false, message: `Format failed: ${error}` };
+  } catch (_error) {
+    return { success: false, message: `Format failed: ${_error}` };
   }
 }
 
@@ -134,7 +134,7 @@ export function lintFile(filePath: string): { success: boolean; message: string 
   try {
     execSync(`${linter} "${filePath}"`, { encoding: 'utf-8', stdio: 'pipe' });
     return { success: true, message: `Lint passed for ${filePath}` };
-  } catch (error) {
+  } catch (_error) {
     return { success: false, message: `Lint errors in ${filePath}` };
   }
 }
@@ -242,7 +242,7 @@ export function runTypeCheck(directory: string): { success: boolean; message: st
   try {
     execSync('tsc --noEmit', { cwd: directory, encoding: 'utf-8', stdio: 'pipe' });
     return { success: true, message: 'Type check passed' };
-  } catch (error) {
+  } catch (_error) {
     return { success: false, message: 'Type errors found' };
   }
 }
@@ -264,7 +264,7 @@ export function runTests(directory: string): { success: boolean; message: string
         execSync('npm test', { cwd: directory, encoding: 'utf-8', stdio: 'pipe' });
         return { success: true, message: 'Tests passed' };
       }
-    } catch (error) {
+    } catch (_error) {
       return { success: false, message: 'Tests failed' };
     }
   }
@@ -274,7 +274,7 @@ export function runTests(directory: string): { success: boolean; message: string
     try {
       execSync('pytest', { cwd: directory, encoding: 'utf-8', stdio: 'pipe' });
       return { success: true, message: 'Tests passed' };
-    } catch (error) {
+    } catch (_error) {
       return { success: false, message: 'Tests failed' };
     }
   }

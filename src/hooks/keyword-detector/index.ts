@@ -63,7 +63,7 @@ export function extractPromptText(
  */
 export function detectKeywordsWithType(
   text: string,
-  agentName?: string
+  _agentName?: string
 ): DetectedKeyword[] {
   const detected: DetectedKeyword[] = [];
 

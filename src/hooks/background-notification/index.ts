@@ -36,7 +36,7 @@ function formatTaskNotification(task: BackgroundTask): string {
   const duration = formatDuration(task.startedAt, task.completedAt);
   const emoji = task.status === 'completed' ? '✓' : task.status === 'error' ? '✗' : '○';
 
-  let lines = [
+  const lines = [
     `${emoji} [${status}] ${task.description}`,
     `  Agent: ${task.agent}`,
     `  Duration: ${duration}`,

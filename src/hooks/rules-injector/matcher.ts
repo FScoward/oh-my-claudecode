@@ -16,7 +16,7 @@ import type { RuleMetadata, MatchResult } from './types.js';
  */
 function matchGlob(pattern: string, filePath: string): boolean {
   // Convert glob pattern to regex
-  let regexStr = pattern
+  const regexStr = pattern
     .replace(/\./g, '\\.')           // Escape dots
     .replace(/\*\*/g, '<<<GLOBSTAR>>>')  // Temporarily replace **
     .replace(/\*/g, '[^/]*')         // * matches any characters except /

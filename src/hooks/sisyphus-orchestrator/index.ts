@@ -8,7 +8,6 @@
  * Adapted from oh-my-opencode's sisyphus-orchestrator hook for shell-based hooks.
  */
 
-import { existsSync, readFileSync } from 'fs';
 import { execSync } from 'child_process';
 import {
   HOOK_NAME,

@@ -13,13 +13,12 @@
  * ```
  */
 
-import { detectKeywordsWithType, extractPromptText, removeCodeBlocks, type DetectedKeyword } from './keyword-detector/index.js';
-import { readRalphState, incrementRalphIteration, clearRalphState, detectCompletionPromise, type RalphLoopState } from './ralph-loop/index.js';
+import { detectKeywordsWithType, removeCodeBlocks } from './keyword-detector/index.js';
+import { readRalphState, incrementRalphIteration, clearRalphState, detectCompletionPromise } from './ralph-loop/index.js';
 import {
   readVerificationState,
   startVerification,
   getOracleVerificationPrompt,
-  detectOracleApproval,
   clearVerificationState
 } from './ralph-verifier/index.js';
 import { checkIncompleteTodos } from './todo-continuation/index.js';

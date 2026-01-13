@@ -107,7 +107,7 @@ function countFilePaths(prompt: string): number {
  */
 function countCodeBlocks(prompt: string): number {
   const fencedBlocks = (prompt.match(/```[\s\S]*?```/g) || []).length;
-  const indentedBlocks = (prompt.match(/(?:^|\n)(?:    |\t)[^\n]+(?:\n(?:    |\t)[^\n]+)*/g) || []).length;
+  const indentedBlocks = (prompt.match(/(?:^|\n)(?:\s{4}|\t)[^\n]+(?:\n(?:\s{4}|\t)[^\n]+)*/g) || []).length;
   return fencedBlocks + Math.floor(indentedBlocks / 2);
 }
 

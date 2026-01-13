@@ -16,12 +16,12 @@ import {
   saveAgentUsageState,
   clearAgentUsageState,
 } from './storage.js';
-import { TARGET_TOOLS, AGENT_TOOLS, REMINDER_MESSAGE, AGENT_USAGE_REMINDER_STORAGE } from './constants.js';
+import { TARGET_TOOLS, AGENT_TOOLS, REMINDER_MESSAGE } from './constants.js';
 import type { AgentUsageState } from './types.js';
 
 // Re-export types and utilities
 export { loadAgentUsageState, saveAgentUsageState, clearAgentUsageState } from './storage.js';
-export { TARGET_TOOLS, AGENT_TOOLS, REMINDER_MESSAGE, AGENT_USAGE_REMINDER_STORAGE as AGENT_USAGE_STORAGE_DIR } from './constants.js';
+export { TARGET_TOOLS, AGENT_TOOLS, REMINDER_MESSAGE } from './constants.js';
 export type { AgentUsageState } from './types.js';
 
 interface ToolExecuteInput {

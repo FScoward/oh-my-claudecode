@@ -34,7 +34,7 @@ export function adaptPromptForHaiku(basePrompt: string): string {
  */
 function condensePrompt(prompt: string): string {
   // Remove common filler phrases
-  let condensed = prompt
+  const condensed = prompt
     .replace(/please\s+/gi, '')
     .replace(/could you\s+/gi, '')
     .replace(/i would like you to\s+/gi, '')

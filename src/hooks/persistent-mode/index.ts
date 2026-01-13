@@ -23,8 +23,7 @@ import {
   readRalphState,
   incrementRalphIteration,
   clearRalphState,
-  detectCompletionPromise,
-  type RalphLoopState
+  detectCompletionPromise
 } from '../ralph-loop/index.js';
 import {
   readVerificationState,
@@ -34,8 +33,7 @@ import {
   getOracleRejectionContinuationPrompt,
   detectOracleApproval,
   detectOracleRejection,
-  clearVerificationState,
-  type VerificationState
+  clearVerificationState
 } from '../ralph-verifier/index.js';
 import { checkIncompleteTodos, getNextPendingTodo } from '../todo-continuation/index.js';
 import { TODO_CONTINUATION_PROMPT } from '../../installer/hooks.js';

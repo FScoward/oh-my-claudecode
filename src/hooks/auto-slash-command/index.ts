@@ -13,32 +13,20 @@
 import {
   detectSlashCommand,
   extractPromptText,
-  parseSlashCommand,
-  removeCodeBlocks,
-  isExcludedCommand,
 } from './detector.js';
 import {
   executeSlashCommand,
   findCommand,
-  discoverAllCommands,
   listAvailableCommands,
 } from './executor.js';
 import {
   HOOK_NAME,
   AUTO_SLASH_COMMAND_TAG_OPEN,
   AUTO_SLASH_COMMAND_TAG_CLOSE,
-  SLASH_COMMAND_PATTERN,
-  EXCLUDED_COMMANDS,
 } from './constants.js';
 import type {
   AutoSlashCommandHookInput,
-  AutoSlashCommandHookOutput,
-  ParsedSlashCommand,
   AutoSlashCommandResult,
-  CommandInfo,
-  CommandMetadata,
-  CommandScope,
-  ExecuteResult,
 } from './types.js';
 
 // Re-export all submodules

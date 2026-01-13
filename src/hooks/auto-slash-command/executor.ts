@@ -7,7 +7,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from 'fs';
-import { join, basename, dirname } from 'path';
+import { join, basename } from 'path';
 import { homedir } from 'os';
 import type {
   ParsedSlashCommand,

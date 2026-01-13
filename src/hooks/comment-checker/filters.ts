@@ -67,7 +67,7 @@ export function filterDirectiveComments(comment: CommentInfo): FilterResult {
  * Filter for docstring comments in non-public functions
  * (More lenient - only flags excessive docstrings)
  */
-export function filterDocstringComments(comment: CommentInfo): FilterResult {
+export function filterDocstringComments(_comment: CommentInfo): FilterResult {
   // We don't skip docstrings by default - they should be reviewed
   // This filter is here for extensibility
   return { shouldSkip: false };

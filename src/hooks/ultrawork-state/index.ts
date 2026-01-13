@@ -25,7 +25,7 @@ export interface UltraworkState {
   last_checked_at: string;
 }
 
-const DEFAULT_STATE: UltraworkState = {
+const _DEFAULT_STATE: UltraworkState = {
   active: false,
   started_at: '',
   original_prompt: '',

@@ -22,7 +22,6 @@ import { homedir } from 'os';
 import { execSync } from 'child_process';
 import {
   HOOK_SCRIPTS,
-  HOOKS_SETTINGS_CONFIG,
   getHookScripts,
   getHooksSettingsConfig,
   isWindows,
@@ -2270,7 +2269,7 @@ export function install(options: InstallOptions = {}): InstallResult {
       writeFileSync(SETTINGS_FILE, JSON.stringify(existingSettings, null, 2));
       log('  Hooks configured in settings.json');
       result.hooksConfigured = true;
-    } catch (e) {
+    } catch (_e) {
       log('  Warning: Could not configure hooks in settings.json (non-fatal)');
       result.hooksConfigured = false;
     }

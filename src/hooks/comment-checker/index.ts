@@ -57,7 +57,7 @@ function detectComments(content: string, filePath: string): CommentInfo[] {
   }
 
   const comments: CommentInfo[] = [];
-  const lines = content.split('\n');
+  const _lines = content.split('\n');
 
   // Reset regex state
   pattern.lastIndex = 0;

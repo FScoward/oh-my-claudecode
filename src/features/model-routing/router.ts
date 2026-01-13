@@ -10,8 +10,6 @@ import type {
   RoutingDecision,
   RoutingConfig,
   ComplexityTier,
-  ComplexitySignals,
-  RoutingRule,
 } from './types.js';
 import {
   DEFAULT_ROUTING_CONFIG,

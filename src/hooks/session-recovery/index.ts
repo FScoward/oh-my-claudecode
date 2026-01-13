@@ -40,7 +40,6 @@ import {
   DEBUG_LOG_PATH,
   PLACEHOLDER_TEXT,
   RECOVERY_MESSAGES,
-  RECOVERY_RESUME_TEXT,
 } from "./constants.js";
 
 /**
@@ -441,7 +440,6 @@ export type {
 
 export {
   RECOVERY_MESSAGES,
-  RECOVERY_RESUME_TEXT,
   PLACEHOLDER_TEXT,
 } from "./constants.js";
 
