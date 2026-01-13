@@ -2,7 +2,9 @@
 
 ![oh-my-claude-sisyphus](https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claude-sisyphus-website/main/social-preview.png)
 
-[![npm version](https://badge.fury.io/js/oh-my-claude-sisyphus.svg)](https://www.npmjs.com/package/oh-my-claude-sisyphus)
+# 🚀 v2.0.0-beta.1 - Intelligent Model Routing
+
+[![Version](https://img.shields.io/badge/version-2.0.0--beta.1-ff6b6b)](https://github.com/Yeachan-Heo/oh-my-claude-sisyphus/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Agents](https://img.shields.io/badge/Agents-11-ff0040)](https://github.com/Yeachan-Heo/oh-my-claude-sisyphus)
 [![Days Since Ban](https://img.shields.io/badge/Days%20Since%20Ban-0-00ffff)](https://github.com/Yeachan-Heo/oh-my-claude-sisyphus)
@@ -15,6 +17,26 @@
 [Install](#quick-install) • [Usage](#usage) • [Agents](#the-eleven-agents) • [Architecture](docs/ARCHITECTURE.md) • [Website](https://yeachan-heo.github.io/oh-my-claude-sisyphus-website)
 
 </div>
+
+---
+
+## ⚡ NEW in 2.0: Intelligent Model Routing
+
+**Revolutionary change:** The orchestrator now analyzes task complexity and routes to the optimal model tier.
+
+| Task Type | Model | Why |
+|-----------|-------|-----|
+| "Where is auth?" | **Haiku** | Simple lookup - fast & cheap |
+| "Add validation" | **Sonnet** | Module work - balanced |
+| "Debug race condition" | **Opus** | Complex - needs deep reasoning |
+
+**All agents are now adaptive** (except orchestrators which need Opus to analyze and delegate).
+
+```
+Orchestrator (Opus) → Analyzes complexity → Routes to Haiku/Sonnet/Opus
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ---
 

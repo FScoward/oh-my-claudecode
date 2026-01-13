@@ -1,6 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
 **Project:** Oh-My-ClaudeCode-Sisyphus
+**Version:** 2.0.0-beta.1
 **Purpose:** Multi-agent orchestration system for Claude Code CLI
 **Inspired by:** oh-my-opencode
 
@@ -9,6 +10,7 @@
 Oh-My-ClaudeCode-Sisyphus is an enhancement system for Claude Code (Anthropic's official CLI) that adds multi-agent orchestration, persistence mechanisms, and advanced productivity features. Think "oh-my-zsh" for Claude Code.
 
 **Key Features:**
+- **🚀 NEW: Intelligent Model Routing** - Orchestrator analyzes complexity and routes to optimal model (Haiku/Sonnet/Opus)
 - Multi-agent orchestration with specialized subagents
 - Persistent work loops (Ralph Loop)
 - Boulder state management for complex plans
@@ -16,6 +18,18 @@ Oh-My-ClaudeCode-Sisyphus is an enhancement system for Claude Code (Anthropic's 
 - Todo continuation enforcement
 - Rules injection from project/user config
 - Automatic edit error recovery
+
+## v2.0 INTELLIGENT MODEL ROUTING
+
+The orchestrator (always Opus) analyzes task complexity BEFORE delegation:
+
+| Task Type | Routes To | Example |
+|-----------|-----------|---------|
+| Simple lookup | **Haiku** | "Where is auth configured?" |
+| Module work | **Sonnet** | "Add validation to login form" |
+| Complex/risky | **Opus** | "Debug this race condition" |
+
+**All agents are adaptive** (except orchestrators). See `src/features/model-routing/` for implementation.
 
 ## STRUCTURE
 
@@ -47,7 +61,14 @@ oh-my-claude-sisyphus/
 │   │   ├── sisyphus-orchestrator/ # Orchestrator behavior
 │   │   ├── auto-slash-command/  # Slash command detection
 │   │   └── bridge.ts            # Shell hook bridge
-│   ├── features/            # 5 feature modules
+│   ├── features/            # 6 feature modules
+│   │   ├── model-routing/       # 🆕 v2.0: Intelligent model routing
+│   │   │   ├── types.ts         # Routing types & config
+│   │   │   ├── signals.ts       # Complexity signal extraction
+│   │   │   ├── scorer.ts        # Weighted complexity scoring
+│   │   │   ├── rules.ts         # Routing rules engine
+│   │   │   ├── router.ts        # Main routing logic
+│   │   │   └── prompts/         # Tier-specific prompt adaptations
 │   │   ├── boulder-state/       # Plan state management
 │   │   ├── context-injector/    # Context enhancement
 │   │   ├── background-agent/    # Background task management

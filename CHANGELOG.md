@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-beta.1] - 2026-01-13
+
+### 🚀 Revolutionary: Intelligent Model Routing
+
+**This is a major release introducing adaptive model routing for all agents.**
+
+The orchestrator (Opus) now analyzes task complexity BEFORE delegation and routes to the appropriate model tier (Haiku/Sonnet/Opus). This dramatically improves efficiency - simple tasks use faster, cheaper models while complex tasks get the full power of Opus.
+
+### Added
+- **Intelligent Model Routing System** (`src/features/model-routing/`)
+  - `types.ts`: Core types for routing (ComplexityTier, RoutingDecision, etc.)
+  - `signals.ts`: Complexity signal extraction (lexical, structural, context)
+  - `scorer.ts`: Weighted scoring system for complexity calculation
+  - `rules.ts`: Priority-based routing rules engine
+  - `router.ts`: Main routing logic with `getModelForTask()` API
+  - `prompts/`: Tier-specific prompt adaptations (opus.ts, sonnet.ts, haiku.ts)
+
+- **Adaptive Routing for ALL Agents**
+  - Only orchestrators are fixed to Opus (they analyze and delegate)
+  - All other agents adapt based on task complexity:
+    - `oracle`: lookup → Haiku, tracing → Sonnet, debugging → Opus
+    - `prometheus`: breakdown → Haiku, planning → Sonnet, strategic → Opus
+    - `momus`: checklist → Haiku, gap analysis → Sonnet, adversarial → Opus
+    - `metis`: impact → Haiku, deps → Sonnet, risk analysis → Opus
+    - `explore`: simple search → Haiku, complex → Sonnet
+    - `document-writer`: simple docs → Haiku, complex → Sonnet
+    - `sisyphus-junior`: simple fix → Haiku, module work → Sonnet, risky → Opus
+
+- **Complexity Signal Detection**
+  - Lexical: word count, keywords (architecture, debugging, risk, simple)
+  - Structural: subtask count, cross-file deps, impact scope, reversibility
+  - Context: previous failures, conversation depth, plan complexity
+
+- **Tiered Prompt Adaptations**
+  - Haiku: Concise, direct prompts for speed
+  - Sonnet: Balanced prompts for efficiency
+  - Opus: Deep reasoning prompts with thinking mode
+
+### Changed
+- **Orchestrator Prompts** updated with intelligent routing guidance
+- **Configuration** (`src/config/loader.ts`) now includes routing options
+- **Types** (`src/shared/types.ts`) extended with routing configuration
+
+### Breaking Changes
+- Routing is now proactive (orchestrator decides upfront) instead of reactive
+- Deprecated `routeWithEscalation()` - use `getModelForTask()` instead
+
+### Migration Guide
+No action needed - the system automatically routes based on complexity. To override:
+```typescript
+Task(subagent_type="oracle", model="opus", prompt="Force Opus for this task")
+```
+
+---
+
 ## [1.11.0] - 2026-01-13
 
 ### Added
