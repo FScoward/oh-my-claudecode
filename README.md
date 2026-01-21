@@ -68,7 +68,7 @@ Want explicit control? Include these words anywhere in your message:
 
 ---
 
-## Data Analysis & Research (v3.3.3)
+## Data Analysis & Research (v3.3.4)
 
 ### Scientist Agent Tiers
 
@@ -141,7 +141,7 @@ I'll intelligently determine what to stop based on context.
 - **28 Specialized Agents** - architect, researcher, explore, designer, writer, vision, critic, analyst, executor, planner, qa-tester, scientist (with tier variants)
 - **30 Skills** - orchestrate, ultrawork, ralph, planner, deepsearch, deepinit, git-master, frontend-ui-ux, learner, research, and more
 - **Persistent Python REPL** - True variable persistence for data analysis
-- **Research Workflow** - Parallel scientist orchestration with `/research` command (new in 3.3.3)
+- **Research Workflow** - Parallel scientist orchestration with `/research` command (new in 3.3.x)
 - **HUD Statusline** - Real-time visualization of orchestration state
 - **Learned Skills** - Extract reusable insights from sessions with `/learner`
 - **Memory System** - Persistent context that survives compaction

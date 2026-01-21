@@ -48,7 +48,7 @@ export const VERSION_FILE = join(CLAUDE_CONFIG_DIR, '.omc-version.json');
 export const CORE_COMMANDS: string[] = [];
 
 /** Current version */
-export const VERSION = '3.2.5';
+export const VERSION = '3.3.4';
 
 /** Installation result */
 export interface InstallResult {
