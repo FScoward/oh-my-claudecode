@@ -134,6 +134,20 @@ ${originalPrompt}
 IMPORTANT: Invoke the skill IMMEDIATELY. Do not proceed without loading the skill instructions.`;
 }
 
+/**
+ * Create proper hook output with additionalContext (Claude Code hooks API)
+ * The 'message' field is NOT a valid hook output - use hookSpecificOutput.additionalContext
+ */
+function createHookOutput(additionalContext) {
+  return {
+    continue: true,
+    hookSpecificOutput: {
+      hookEventName: 'UserPromptSubmit',
+      additionalContext
+    }
+  };
+}
+
 // Main
 async function main() {
   try {
@@ -161,10 +175,7 @@ async function main() {
     if (/\b(stop|cancel|abort)\b/i.test(cleanPrompt)) {
       // Special: clear state files instead of creating them
       clearStateFiles(directory, ['ralph', 'autopilot', 'ultrapilot', 'ultrawork', 'ecomode', 'swarm', 'pipeline']);
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('cancel', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('cancel', prompt))));
       return;
     }
 
@@ -172,10 +183,7 @@ async function main() {
     if (/\b(ralph|don't stop|must complete|until done)\b/i.test(cleanPrompt)) {
       activateState(directory, prompt, 'ralph');
       activateState(directory, prompt, 'ultrawork');
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('ralph', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('ralph', prompt))));
       return;
     }
 
@@ -190,10 +198,7 @@ async function main() {
         /\bend\s+to\s+end\b/i.test(cleanPrompt) ||
         /\be2e\s+this\b/i.test(cleanPrompt)) {
       activateState(directory, prompt, 'autopilot');
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('autopilot', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('autopilot', prompt))));
       return;
     }
 
@@ -202,30 +207,21 @@ async function main() {
         /\bparallel\s+build\b/i.test(cleanPrompt) ||
         /\bswarm\s+build\b/i.test(cleanPrompt)) {
       activateState(directory, prompt, 'ultrapilot');
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('ultrapilot', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('ultrapilot', prompt))));
       return;
     }
 
     // Priority 5: Ultrawork keywords
     if (/\b(ultrawork|ulw|uw)\b/i.test(cleanPrompt)) {
       activateState(directory, prompt, 'ultrawork');
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('ultrawork', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('ultrawork', prompt))));
       return;
     }
 
     // Priority 6: Ecomode keywords (includes "efficient")
     if (/\b(eco|ecomode|eco-mode|efficient|save-tokens|budget)\b/i.test(cleanPrompt)) {
       activateState(directory, prompt, 'ecomode');
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('ecomode', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('ecomode', prompt))));
       return;
     }
 
@@ -233,37 +229,25 @@ async function main() {
     const swarmMatch = cleanPrompt.match(/\bswarm\s+(\d+)\s+agents?\b/i);
     if (swarmMatch || /\bcoordinated\s+agents\b/i.test(cleanPrompt)) {
       const agentCount = swarmMatch ? swarmMatch[1] : '3'; // default 3
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('swarm', prompt, agentCount)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('swarm', prompt, agentCount))));
       return;
     }
 
     // Priority 8: Pipeline
     if (/\b(pipeline)\b/i.test(cleanPrompt) || /\bchain\s+agents\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('pipeline', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('pipeline', prompt))));
       return;
     }
 
     // Priority 9: Ralplan keyword (before plan to avoid false match)
     if (/\b(ralplan)\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('ralplan', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('ralplan', prompt))));
       return;
     }
 
     // Priority 10: Plan keywords
     if (/\b(plan this|plan the)\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('plan', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('plan', prompt))));
       return;
     }
 
@@ -271,10 +255,7 @@ async function main() {
     if (/\b(tdd)\b/i.test(cleanPrompt) ||
         /\btest\s+first\b/i.test(cleanPrompt) ||
         /\bred\s+green\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('tdd', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('tdd', prompt))));
       return;
     }
 
@@ -283,16 +264,13 @@ async function main() {
     if (/\b(research)\b/i.test(cleanPrompt) ||
         /\banalyze\s+data\b/i.test(cleanPrompt) ||
         /\bstatistics\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('research', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('research', prompt))));
       return;
     }
 
     // Priority 13: Ultrathink/think keywords (keep inline message)
     if (/\b(ultrathink|think hard|think deeply)\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({ continue: true, message: ULTRATHINK_MESSAGE }));
+      console.log(JSON.stringify(createHookOutput(ULTRATHINK_MESSAGE)));
       return;
     }
 
@@ -300,10 +278,7 @@ async function main() {
     if (/\b(deepsearch)\b/i.test(cleanPrompt) ||
         /\bsearch\s+(the\s+)?(codebase|code|files?|project)\b/i.test(cleanPrompt) ||
         /\bfind\s+(in\s+)?(codebase|code|all\s+files?)\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('deepsearch', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('deepsearch', prompt))));
       return;
     }
 
@@ -311,10 +286,7 @@ async function main() {
     if (/\b(deep\s*analyze)\b/i.test(cleanPrompt) ||
         /\binvestigate\s+(the|this|why)\b/i.test(cleanPrompt) ||
         /\bdebug\s+(the|this|why)\b/i.test(cleanPrompt)) {
-      console.log(JSON.stringify({
-        continue: true,
-        message: createSkillInvocation('analyze', prompt)
-      }));
+      console.log(JSON.stringify(createHookOutput(createSkillInvocation('analyze', prompt))));
       return;
     }
 

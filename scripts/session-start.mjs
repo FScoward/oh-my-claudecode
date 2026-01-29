@@ -171,7 +171,13 @@ ${cleanContent}
     }
 
     if (messages.length > 0) {
-      console.log(JSON.stringify({ continue: true, message: messages.join('\n') }));
+      console.log(JSON.stringify({
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'SessionStart',
+          additionalContext: messages.join('\n')
+        }
+      }));
     } else {
       console.log(JSON.stringify({ continue: true }));
     }

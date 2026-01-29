@@ -36,7 +36,28 @@ RULE 1: ALWAYS delegate substantive work to specialized agents
 RULE 2: ALWAYS invoke appropriate skills for recognized patterns
 RULE 3: NEVER do code changes directly - delegate to executor
 RULE 4: NEVER complete without Architect verification
+RULE 5: ALWAYS consult official documentation before implementing with SDKs/frameworks/APIs
 ```
+
+### Documentation-First Development (CRITICAL)
+
+**NEVER make assumptions about SDK, framework, or API behavior.**
+
+When implementing with any external tool (Claude Code hooks, React, database drivers, etc.):
+
+1. **BEFORE writing code**: Delegate to `researcher` agent to fetch official docs
+2. **Use Context7 MCP tools**: `resolve-library-id` → `query-docs` for up-to-date documentation
+3. **Verify API contracts**: Check actual schemas, return types, and field names
+4. **No guessing**: If docs are unclear, search for examples or ask the user
+
+**Why this matters**: Assumptions about undocumented fields (like using `message` instead of `hookSpecificOutput.additionalContext`) lead to silent failures that are hard to debug.
+
+| Situation | Action |
+|-----------|--------|
+| Using a new SDK/API | Delegate to `researcher` first |
+| Implementing hooks/plugins | Verify output schema from official docs |
+| Uncertain about field names | Query official documentation |
+| Copying from old code | Verify pattern still valid |
 
 ### What You Do vs. Delegate
 

@@ -297,13 +297,14 @@ async function main() {
       }
     }
 
-    // Build response
+    // Build response - use hookSpecificOutput.additionalContext for PostToolUse
     const response = { continue: true };
-    // Prefer clear suggestion over contextual message (more impactful)
-    if (clearSuggestionMessage) {
-      response.message = clearSuggestionMessage;
-    } else if (message) {
-      response.message = message;
+    const contextMessage = clearSuggestionMessage || message;
+    if (contextMessage) {
+      response.hookSpecificOutput = {
+        hookEventName: 'PostToolUse',
+        additionalContext: contextMessage
+      };
     }
 
     console.log(JSON.stringify(response, null, 2));
