@@ -36,14 +36,25 @@ export function parseSkillFile(rawContent: string): SkillParseResult {
   try {
     const metadata = parseYamlMetadata(yamlContent);
 
-    // Validate required fields
-    if (!metadata.id) errors.push('Missing required field: id');
+    // Derive id from name if missing
+    if (!metadata.id && metadata.name) {
+      metadata.id = metadata.name
+        .toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9-]/g, '');
+    }
+
+    // Default source to 'manual' if missing
+    if (!metadata.source) {
+      metadata.source = 'manual';
+    }
+
+    // Validate required fields (only truly required ones)
     if (!metadata.name) errors.push('Missing required field: name');
     if (!metadata.description) errors.push('Missing required field: description');
     if (!metadata.triggers || metadata.triggers.length === 0) {
       errors.push('Missing required field: triggers');
     }
-    if (!metadata.source) errors.push('Missing required field: source');
 
     return {
       metadata,

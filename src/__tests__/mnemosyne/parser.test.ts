@@ -41,7 +41,7 @@ Content without required fields.
     const result = parseSkillFile(content);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain('Missing required field: id');
+    expect(result.errors).toContain('Missing required field: description');
     expect(result.errors).toContain('Missing required field: triggers');
   });
 
