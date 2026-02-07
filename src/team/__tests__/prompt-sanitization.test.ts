@@ -1,18 +1,5 @@
 import { describe, it, expect } from 'vitest';
-
-// sanitizePromptContent and buildTaskPrompt are not exported, so we test via
-// the module's internal behavior by importing the module and testing via the bridge's
-// buildTaskPrompt. Since these are private functions, we use a workaround:
-// re-implement the sanitization logic inline and test the actual bridge output.
-
-// For direct testing, we extract the logic:
-function sanitizePromptContent(content: string, maxLength: number): string {
-  let sanitized = content.length > maxLength ? content.slice(0, maxLength) : content;
-  sanitized = sanitized.replace(/<(\/?)(TASK_SUBJECT)>/g, '[$1$2]');
-  sanitized = sanitized.replace(/<(\/?)(TASK_DESCRIPTION)>/g, '[$1$2]');
-  sanitized = sanitized.replace(/<(\/?)(INBOX_MESSAGE)>/g, '[$1$2]');
-  return sanitized;
-}
+import { sanitizePromptContent } from '../mcp-team-bridge.js';
 
 describe('sanitizePromptContent', () => {
   it('truncates content at maxLength', () => {

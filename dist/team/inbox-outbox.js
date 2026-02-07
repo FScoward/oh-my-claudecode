@@ -5,13 +5,18 @@
  * File-based communication channels between team lead and MCP workers.
  * Uses JSONL format with offset cursor for efficient incremental reads.
  */
-import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync, renameSync, openSync, readSync, closeSync } from 'fs';
+import { readFileSync, existsSync, statSync, unlinkSync, renameSync, openSync, readSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { sanitizeName } from './tmux-session.js';
+import { appendFileWithMode, writeFileWithMode, ensureDirWithMode, validateResolvedPath } from './fs-utils.js';
+/** Maximum bytes to read from inbox in a single call (10 MB) */
+const MAX_INBOX_READ_SIZE = 10 * 1024 * 1024;
 // --- Path helpers ---
 function teamsDir(teamName) {
-    return join(homedir(), '.claude', 'teams', sanitizeName(teamName));
+    const result = join(homedir(), '.claude', 'teams', sanitizeName(teamName));
+    validateResolvedPath(result, join(homedir(), '.claude', 'teams'));
+    return result;
 }
 function inboxPath(teamName, workerName) {
     return join(teamsDir(teamName), 'inbox', `${sanitizeName(workerName)}.jsonl`);
@@ -25,11 +30,13 @@ function outboxPath(teamName, workerName) {
 function signalPath(teamName, workerName) {
     return join(teamsDir(teamName), 'signals', `${sanitizeName(workerName)}.shutdown`);
 }
+function drainSignalPath(teamName, workerName) {
+    return join(teamsDir(teamName), 'signals', `${sanitizeName(workerName)}.drain`);
+}
 /** Ensure directory exists for a file path */
 function ensureDir(filePath) {
     const dir = dirname(filePath);
-    if (!existsSync(dir))
-        mkdirSync(dir, { recursive: true });
+    ensureDirWithMode(dir);
 }
 // --- Outbox (worker -> lead) ---
 /**
@@ -39,7 +46,7 @@ function ensureDir(filePath) {
 export function appendOutbox(teamName, workerName, message) {
     const filePath = outboxPath(teamName, workerName);
     ensureDir(filePath);
-    appendFileSync(filePath, JSON.stringify(message) + '\n', 'utf-8');
+    appendFileWithMode(filePath, JSON.stringify(message) + '\n');
 }
 /**
  * Rotate outbox if it exceeds maxLines.
@@ -58,9 +65,38 @@ export function rotateOutboxIfNeeded(teamName, workerName, maxLines) {
         // Keep the most recent half
         const keepCount = Math.floor(maxLines / 2);
         const kept = lines.slice(-keepCount);
-        const tmpPath = filePath + '.tmp.' + process.pid;
-        writeFileSync(tmpPath, kept.join('\n') + '\n', 'utf-8');
+        const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+        writeFileWithMode(tmpPath, kept.join('\n') + '\n');
         renameSync(tmpPath, filePath);
+    }
+    catch {
+        // Rotation failure is non-fatal
+    }
+}
+/**
+ * Rotate inbox if it exceeds maxSizeBytes.
+ * Keeps the most recent half of lines, discards older.
+ * Prevents unbounded growth of inbox files.
+ */
+export function rotateInboxIfNeeded(teamName, workerName, maxSizeBytes) {
+    const filePath = inboxPath(teamName, workerName);
+    if (!existsSync(filePath))
+        return;
+    try {
+        const stat = statSync(filePath);
+        if (stat.size <= maxSizeBytes)
+            return;
+        const content = readFileSync(filePath, 'utf-8');
+        const lines = content.split('\n').filter(l => l.trim());
+        // Keep the most recent half
+        const keepCount = Math.max(1, Math.floor(lines.length / 2));
+        const kept = lines.slice(-keepCount);
+        const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+        writeFileWithMode(tmpPath, kept.join('\n') + '\n');
+        renameSync(tmpPath, filePath);
+        // Reset cursor since file content changed
+        const cursorFile = inboxCursorPath(teamName, workerName);
+        writeFileWithMode(cursorFile, JSON.stringify({ bytesRead: 0 }));
     }
     catch {
         // Rotation failure is non-fatal
@@ -101,9 +137,14 @@ export function readNewInboxMessages(teamName, workerName) {
     }
     if (stat.size <= offset)
         return []; // No new data
-    // Read from offset
+    // Read from offset (capped to prevent OOM on huge inboxes)
+    const readSize = stat.size - offset;
+    const cappedSize = Math.min(readSize, MAX_INBOX_READ_SIZE);
+    if (cappedSize < readSize) {
+        console.warn(`[inbox-outbox] Inbox for ${workerName} exceeds ${MAX_INBOX_READ_SIZE} bytes, reading truncated`);
+    }
     const fd = openSync(inbox, 'r');
-    const buffer = Buffer.alloc(stat.size - offset);
+    const buffer = Buffer.alloc(cappedSize);
     try {
         readSync(fd, buffer, 0, buffer.length, offset);
     }
@@ -132,7 +173,7 @@ export function readNewInboxMessages(teamName, workerName) {
     const newOffset = offset + (lastNewlineOffset > 0 ? lastNewlineOffset : 0);
     ensureDir(cursorFile);
     const newCursor = { bytesRead: newOffset > offset ? newOffset : offset };
-    writeFileSync(cursorFile, JSON.stringify(newCursor), 'utf-8');
+    writeFileWithMode(cursorFile, JSON.stringify(newCursor));
     return messages;
 }
 /** Read ALL inbox messages (for initial load or debugging) */
@@ -163,13 +204,13 @@ export function clearInbox(teamName, workerName) {
     const cursorFile = inboxCursorPath(teamName, workerName);
     if (existsSync(inbox)) {
         try {
-            writeFileSync(inbox, '', 'utf-8');
+            writeFileWithMode(inbox, '');
         }
         catch { /* ignore */ }
     }
     if (existsSync(cursorFile)) {
         try {
-            writeFileSync(cursorFile, JSON.stringify({ bytesRead: 0 }), 'utf-8');
+            writeFileWithMode(cursorFile, JSON.stringify({ bytesRead: 0 }));
         }
         catch { /* ignore */ }
     }
@@ -184,7 +225,7 @@ export function writeShutdownSignal(teamName, workerName, requestId, reason) {
         reason,
         timestamp: new Date().toISOString(),
     };
-    writeFileSync(filePath, JSON.stringify(signal, null, 2), 'utf-8');
+    writeFileWithMode(filePath, JSON.stringify(signal, null, 2));
 }
 /** Check if shutdown signal exists, return parsed content or null */
 export function checkShutdownSignal(teamName, workerName) {
@@ -209,6 +250,41 @@ export function deleteShutdownSignal(teamName, workerName) {
         catch { /* ignore */ }
     }
 }
+// --- Drain signals ---
+/** Write a drain signal for a worker */
+export function writeDrainSignal(teamName, workerName, requestId, reason) {
+    const filePath = drainSignalPath(teamName, workerName);
+    ensureDir(filePath);
+    const signal = {
+        requestId,
+        reason,
+        timestamp: new Date().toISOString(),
+    };
+    writeFileWithMode(filePath, JSON.stringify(signal, null, 2));
+}
+/** Check if a drain signal exists for a worker */
+export function checkDrainSignal(teamName, workerName) {
+    const filePath = drainSignalPath(teamName, workerName);
+    if (!existsSync(filePath))
+        return null;
+    try {
+        const raw = readFileSync(filePath, 'utf-8');
+        return JSON.parse(raw);
+    }
+    catch {
+        return null;
+    }
+}
+/** Delete a drain signal file */
+export function deleteDrainSignal(teamName, workerName) {
+    const filePath = drainSignalPath(teamName, workerName);
+    if (existsSync(filePath)) {
+        try {
+            unlinkSync(filePath);
+        }
+        catch { /* ignore */ }
+    }
+}
 // --- Cleanup ---
 /** Remove all inbox/outbox/signal files for a worker */
 export function cleanupWorkerFiles(teamName, workerName) {
@@ -217,6 +293,7 @@ export function cleanupWorkerFiles(teamName, workerName) {
         inboxCursorPath(teamName, workerName),
         outboxPath(teamName, workerName),
         signalPath(teamName, workerName),
+        drainSignalPath(teamName, workerName),
     ];
     for (const f of files) {
         if (existsSync(f)) {

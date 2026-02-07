@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { validateConfigPath } from '../bridge-entry.js';
 
 describe('bridge-entry security', () => {
   const source = readFileSync(join(__dirname, '..', 'bridge-entry.ts'), 'utf-8');
@@ -66,5 +67,29 @@ describe('bridge-entry security', () => {
     expect(source).toContain('maxConsecutiveErrors');
     expect(source).toContain('outboxMaxLines');
     expect(source).toContain('maxRetries');
+  });
+});
+
+describe('validateConfigPath', () => {
+  const home = '/home/user';
+
+  it('should reject paths outside home directory', () => {
+    expect(validateConfigPath('/tmp/.omc/config.json', home)).toBe(false);
+  });
+
+  it('should reject paths without trusted subpath', () => {
+    expect(validateConfigPath('/home/user/project/config.json', home)).toBe(false);
+  });
+
+  it('should accept paths under ~/.claude/', () => {
+    expect(validateConfigPath('/home/user/.claude/teams/foo/config.json', home)).toBe(true);
+  });
+
+  it('should accept paths under project/.omc/', () => {
+    expect(validateConfigPath('/home/user/project/.omc/state/config.json', home)).toBe(true);
+  });
+
+  it('should reject path that matches subpath but not home', () => {
+    expect(validateConfigPath('/other/.claude/config.json', home)).toBe(false);
   });
 });

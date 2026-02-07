@@ -5,7 +5,8 @@ import { homedir } from 'os';
 import {
   appendOutbox, rotateOutboxIfNeeded, readNewInboxMessages,
   readAllInboxMessages, clearInbox, writeShutdownSignal,
-  checkShutdownSignal, deleteShutdownSignal, cleanupWorkerFiles,
+  checkShutdownSignal, deleteShutdownSignal, writeDrainSignal,
+  checkDrainSignal, deleteDrainSignal, cleanupWorkerFiles,
   rotateInboxIfNeeded
 } from '../inbox-outbox.js';
 import { sanitizeName } from '../tmux-session.js';
@@ -143,10 +144,38 @@ describe('shutdown signals', () => {
   });
 });
 
+describe('drain signals', () => {
+  it('writes and reads drain signal', () => {
+    writeDrainSignal(TEST_TEAM, 'w1', 'req-1', 'scaling down');
+    const signal = checkDrainSignal(TEST_TEAM, 'w1');
+    expect(signal).not.toBeNull();
+    expect(signal!.requestId).toBe('req-1');
+    expect(signal!.reason).toBe('scaling down');
+    expect(signal!.timestamp).toBeTruthy();
+  });
+
+  it('returns null when no drain signal exists', () => {
+    const signal = checkDrainSignal(TEST_TEAM, 'no-such-worker');
+    expect(signal).toBeNull();
+  });
+
+  it('deletes drain signal', () => {
+    writeDrainSignal(TEST_TEAM, 'w1', 'req-1', 'test');
+    expect(checkDrainSignal(TEST_TEAM, 'w1')).not.toBeNull();
+    deleteDrainSignal(TEST_TEAM, 'w1');
+    expect(checkDrainSignal(TEST_TEAM, 'w1')).toBeNull();
+  });
+
+  it('delete does not throw for non-existent signal', () => {
+    expect(() => deleteDrainSignal(TEST_TEAM, 'nonexistent')).not.toThrow();
+  });
+});
+
 describe('cleanupWorkerFiles', () => {
   it('removes inbox, outbox, cursor, signal files', () => {
     appendOutbox(TEST_TEAM, 'w1', { type: 'idle', timestamp: '2026-01-01T00:00:00Z' });
     writeShutdownSignal(TEST_TEAM, 'w1', 'req', 'test');
+    writeDrainSignal(TEST_TEAM, 'w1', 'req', 'test');
     writeFileSync(join(TEAMS_DIR, 'inbox', 'w1.jsonl'), '{}');
     writeFileSync(join(TEAMS_DIR, 'inbox', 'w1.offset'), '{}');
 
@@ -155,6 +184,7 @@ describe('cleanupWorkerFiles', () => {
     expect(existsSync(join(TEAMS_DIR, 'inbox', 'w1.jsonl'))).toBe(false);
     expect(existsSync(join(TEAMS_DIR, 'inbox', 'w1.offset'))).toBe(false);
     expect(existsSync(join(TEAMS_DIR, 'signals', 'w1.shutdown'))).toBe(false);
+    expect(existsSync(join(TEAMS_DIR, 'signals', 'w1.drain'))).toBe(false);
   });
 });
 

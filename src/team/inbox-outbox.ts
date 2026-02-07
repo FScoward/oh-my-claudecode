@@ -14,7 +14,7 @@ import {
 } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
-import type { InboxMessage, OutboxMessage, ShutdownSignal, InboxCursor } from './types.js';
+import type { InboxMessage, OutboxMessage, ShutdownSignal, DrainSignal, InboxCursor } from './types.js';
 import { sanitizeName } from './tmux-session.js';
 import { appendFileWithMode, writeFileWithMode, ensureDirWithMode, validateResolvedPath } from './fs-utils.js';
 
@@ -43,6 +43,10 @@ function outboxPath(teamName: string, workerName: string): string {
 
 function signalPath(teamName: string, workerName: string): string {
   return join(teamsDir(teamName), 'signals', `${sanitizeName(workerName)}.shutdown`);
+}
+
+function drainSignalPath(teamName: string, workerName: string): string {
+  return join(teamsDir(teamName), 'signals', `${sanitizeName(workerName)}.drain`);
 }
 
 /** Ensure directory exists for a file path */
@@ -266,6 +270,40 @@ export function deleteShutdownSignal(teamName: string, workerName: string): void
   }
 }
 
+// --- Drain signals ---
+
+/** Write a drain signal for a worker */
+export function writeDrainSignal(teamName: string, workerName: string, requestId: string, reason: string): void {
+  const filePath = drainSignalPath(teamName, workerName);
+  ensureDir(filePath);
+  const signal: DrainSignal = {
+    requestId,
+    reason,
+    timestamp: new Date().toISOString(),
+  };
+  writeFileWithMode(filePath, JSON.stringify(signal, null, 2));
+}
+
+/** Check if a drain signal exists for a worker */
+export function checkDrainSignal(teamName: string, workerName: string): DrainSignal | null {
+  const filePath = drainSignalPath(teamName, workerName);
+  if (!existsSync(filePath)) return null;
+  try {
+    const raw = readFileSync(filePath, 'utf-8');
+    return JSON.parse(raw) as DrainSignal;
+  } catch {
+    return null;
+  }
+}
+
+/** Delete a drain signal file */
+export function deleteDrainSignal(teamName: string, workerName: string): void {
+  const filePath = drainSignalPath(teamName, workerName);
+  if (existsSync(filePath)) {
+    try { unlinkSync(filePath); } catch { /* ignore */ }
+  }
+}
+
 // --- Cleanup ---
 
 /** Remove all inbox/outbox/signal files for a worker */
@@ -275,6 +313,7 @@ export function cleanupWorkerFiles(teamName: string, workerName: string): void {
     inboxCursorPath(teamName, workerName),
     outboxPath(teamName, workerName),
     signalPath(teamName, workerName),
+    drainSignalPath(teamName, workerName),
   ];
   for (const f of files) {
     if (existsSync(f)) {

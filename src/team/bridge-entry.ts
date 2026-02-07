@@ -16,6 +16,16 @@ import { getWorktreeRoot } from '../lib/worktree-paths.js';
 import { sanitizeName } from './tmux-session.js';
 
 /**
+ * Validate that a config path is under the user's home directory
+ * and contains a trusted subpath (/.claude/ or /.omc/).
+ */
+export function validateConfigPath(configPath: string, homeDir: string): boolean {
+  const isUnderHome = configPath.startsWith(homeDir + '/') || configPath === homeDir;
+  const isTrustedSubpath = configPath.includes('/.claude/') || configPath.includes('/.omc/');
+  return isUnderHome && isTrustedSubpath;
+}
+
+/**
  * Validate the bridge working directory is safe:
  * - Must exist and be a directory
  * - Must resolve (via realpathSync) to a path under the user's home directory
@@ -59,8 +69,8 @@ function main(): void {
 
   // Validate config path is from a trusted location
   const home = homedir();
-  if (!configPath.startsWith(home + '/.claude/') && !configPath.includes('/.omc/')) {
-    console.error(`Config path must be under ~/.claude/ or contain /.omc/: ${configPath}`);
+  if (!validateConfigPath(configPath, home)) {
+    console.error(`Config path must be under ~/ with .claude/ or .omc/ subpath: ${configPath}`);
     process.exit(1);
   }
 
@@ -126,4 +136,7 @@ function main(): void {
   });
 }
 
-main();
+// Only run main if this file is the entry point (not imported for testing)
+if (require.main === module) {
+  main();
+}

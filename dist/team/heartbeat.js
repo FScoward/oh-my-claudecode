@@ -6,18 +6,10 @@
  * The lead checks freshness to detect dead workers.
  * Files stored at: .omc/state/team-bridge/{team}/{worker}.heartbeat.json
  */
-import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, renameSync, rmdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, existsSync, readdirSync, unlinkSync, rmdirSync } from 'fs';
+import { join } from 'path';
 import { sanitizeName } from './tmux-session.js';
-/** Atomic write helper */
-function atomicWriteJson(filePath, data) {
-    const dir = dirname(filePath);
-    if (!existsSync(dir))
-        mkdirSync(dir, { recursive: true });
-    const tmpPath = filePath + '.tmp.' + process.pid;
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
-    renameSync(tmpPath, filePath);
-}
+import { atomicWriteJson } from './fs-utils.js';
 /** Heartbeat file path */
 function heartbeatPath(workingDirectory, teamName, workerName) {
     return join(workingDirectory, '.omc', 'state', 'team-bridge', sanitizeName(teamName), `${sanitizeName(workerName)}.heartbeat.json`);

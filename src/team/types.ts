@@ -48,7 +48,7 @@ export interface InboxMessage {
 
 /** JSONL message from worker -> lead (outbox) */
 export interface OutboxMessage {
-  type: 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'heartbeat' | 'error';
+  type: 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'drain_ack' | 'heartbeat' | 'error';
   taskId?: string;
   summary?: string;
   message?: string;
@@ -59,6 +59,13 @@ export interface OutboxMessage {
 
 /** Shutdown signal file content */
 export interface ShutdownSignal {
+  requestId: string;
+  reason: string;
+  timestamp: string;
+}
+
+/** Drain signal: finish current task, then shut down gracefully */
+export interface DrainSignal {
   requestId: string;
   reason: string;
   timestamp: string;
@@ -114,3 +121,19 @@ export interface TaskFailureSidecar {
   retryCount: number;
   lastFailedAt: string;
 }
+
+/** Worker backend type */
+export type WorkerBackend = 'claude-native' | 'mcp-codex' | 'mcp-gemini';
+
+/** Worker capability tag */
+export type WorkerCapability =
+  | 'code-edit'
+  | 'code-review'
+  | 'security-review'
+  | 'architecture'
+  | 'testing'
+  | 'documentation'
+  | 'ui-design'
+  | 'refactoring'
+  | 'research'
+  | 'general';

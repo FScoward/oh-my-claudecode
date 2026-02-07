@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { readTask, updateTask, findNextTask, areBlockersResolved, writeTaskFailure, readTaskFailure, listTaskIds } from '../task-file-ops.js';
-const TEST_TEAM = '__test_team_ops__';
+import { readTask, updateTask, findNextTask, areBlockersResolved, writeTaskFailure, readTaskFailure, listTaskIds, isTaskRetryExhausted } from '../task-file-ops.js';
+const TEST_TEAM = 'test-team-ops';
 const TASKS_DIR = join(homedir(), '.claude', 'tasks', TEST_TEAM);
 function writeTask(task) {
     mkdirSync(TASKS_DIR, { recursive: true });
@@ -57,33 +57,43 @@ describe('updateTask', () => {
     });
 });
 describe('findNextTask', () => {
-    it('finds pending task assigned to worker', () => {
+    it('finds pending task assigned to worker', async () => {
         writeTask({ id: '1', subject: 'T1', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
-        const result = findNextTask(TEST_TEAM, 'w1');
+        const result = await findNextTask(TEST_TEAM, 'w1');
         expect(result?.id).toBe('1');
     });
-    it('skips completed tasks', () => {
+    it('skips completed tasks', async () => {
         writeTask({ id: '1', subject: 'T1', description: 'D', status: 'completed', owner: 'w1', blocks: [], blockedBy: [] });
-        expect(findNextTask(TEST_TEAM, 'w1')).toBeNull();
+        expect(await findNextTask(TEST_TEAM, 'w1')).toBeNull();
     });
-    it('skips tasks owned by other workers', () => {
+    it('skips tasks owned by other workers', async () => {
         writeTask({ id: '1', subject: 'T1', description: 'D', status: 'pending', owner: 'w2', blocks: [], blockedBy: [] });
-        expect(findNextTask(TEST_TEAM, 'w1')).toBeNull();
+        expect(await findNextTask(TEST_TEAM, 'w1')).toBeNull();
     });
-    it('skips tasks with unresolved blockers', () => {
+    it('skips tasks with unresolved blockers', async () => {
         writeTask({ id: '1', subject: 'T1', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
         writeTask({ id: '2', subject: 'T2', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: ['1'] });
-        const result = findNextTask(TEST_TEAM, 'w1');
+        const result = await findNextTask(TEST_TEAM, 'w1');
         expect(result?.id).toBe('1');
     });
-    it('returns blocked task when blockers resolved', () => {
+    it('returns blocked task when blockers resolved', async () => {
         writeTask({ id: '1', subject: 'T1', description: 'D', status: 'completed', owner: 'w1', blocks: [], blockedBy: [] });
         writeTask({ id: '2', subject: 'T2', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: ['1'] });
-        const result = findNextTask(TEST_TEAM, 'w1');
+        const result = await findNextTask(TEST_TEAM, 'w1');
         expect(result?.id).toBe('2');
     });
-    it('returns null for empty dir', () => {
-        expect(findNextTask(TEST_TEAM, 'w1')).toBeNull();
+    it('returns null for empty dir', async () => {
+        expect(await findNextTask(TEST_TEAM, 'w1')).toBeNull();
+    });
+    it('writes claim marker with claimedBy and claimPid', async () => {
+        writeTask({ id: '1', subject: 'T1', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
+        const result = await findNextTask(TEST_TEAM, 'w1');
+        expect(result).not.toBeNull();
+        // After findNextTask, the task file should have claim fields
+        const raw = JSON.parse(readFileSync(join(TASKS_DIR, '1.json'), 'utf-8'));
+        expect(raw.claimedBy).toBe('w1');
+        expect(raw.claimPid).toBe(process.pid);
+        expect(typeof raw.claimedAt).toBe('number');
     });
 });
 describe('areBlockersResolved', () => {
@@ -133,6 +143,30 @@ describe('listTaskIds', () => {
     });
     it('returns empty for nonexistent team', () => {
         expect(listTaskIds('nonexistent_team_xyz')).toEqual([]);
+    });
+});
+describe('isTaskRetryExhausted', () => {
+    it('returns true after 5 failures (default max)', () => {
+        for (let i = 0; i < 5; i++) {
+            writeTaskFailure(TEST_TEAM, '1', `error-${i}`);
+        }
+        expect(isTaskRetryExhausted(TEST_TEAM, '1')).toBe(true);
+    });
+    it('returns false after 4 failures (below default max)', () => {
+        for (let i = 0; i < 4; i++) {
+            writeTaskFailure(TEST_TEAM, '1', `error-${i}`);
+        }
+        expect(isTaskRetryExhausted(TEST_TEAM, '1')).toBe(false);
+    });
+    it('returns false when no failure sidecar exists', () => {
+        expect(isTaskRetryExhausted(TEST_TEAM, '999')).toBe(false);
+    });
+    it('respects custom maxRetries parameter', () => {
+        for (let i = 0; i < 3; i++) {
+            writeTaskFailure(TEST_TEAM, '1', `error-${i}`);
+        }
+        expect(isTaskRetryExhausted(TEST_TEAM, '1', 3)).toBe(true);
+        expect(isTaskRetryExhausted(TEST_TEAM, '1', 4)).toBe(false);
     });
 });
 //# sourceMappingURL=task-file-ops.test.js.map

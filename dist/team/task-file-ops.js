@@ -5,19 +5,11 @@
  * Read/write/scan task JSON files with atomic writes (temp + rename).
  * Tasks live at ~/.claude/tasks/{teamName}/{id}.json
  */
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, renameSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, readdirSync, existsSync } from 'fs';
+import { join } from 'path';
 import { homedir } from 'os';
 import { sanitizeName } from './tmux-session.js';
-/** Atomic write: write to temp file, then rename (prevents corruption on crash) */
-function atomicWriteJson(filePath, data) {
-    const dir = dirname(filePath);
-    if (!existsSync(dir))
-        mkdirSync(dir, { recursive: true });
-    const tmpPath = filePath + '.tmp.' + process.pid;
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
-    renameSync(tmpPath, filePath);
-}
+import { atomicWriteJson, validateResolvedPath } from './fs-utils.js';
 /** Validate task ID to prevent path traversal */
 function sanitizeTaskId(taskId) {
     if (!/^[A-Za-z0-9._-]+$/.test(taskId)) {
@@ -27,7 +19,9 @@ function sanitizeTaskId(taskId) {
 }
 /** Paths helper */
 function tasksDir(teamName) {
-    return join(homedir(), '.claude', 'tasks', sanitizeName(teamName));
+    const result = join(homedir(), '.claude', 'tasks', sanitizeName(teamName));
+    validateResolvedPath(result, join(homedir(), '.claude', 'tasks'));
+    return result;
 }
 function taskPath(teamName, taskId) {
     return join(tasksDir(teamName), `${sanitizeTaskId(taskId)}.json`);
@@ -78,10 +72,13 @@ export function updateTask(teamName, taskId, updates) {
  *   - all blockedBy tasks have status 'completed'
  * Sorted by ID ascending.
  *
- * Ownership guard: re-reads task after finding candidate to ensure
- * owner hasn't changed between scan and claim.
+ * TOCTOU mitigation (best-effort, not true flock()):
+ * 1. Write claim marker {claimedBy, claimedAt, claimPid} via updateTask
+ * 2. Wait 50ms for other workers to also write their claims
+ * 3. Re-read task and verify claimedBy + claimPid still match this worker
+ * 4. If mismatch, another worker won the race — skip to next task
  */
-export function findNextTask(teamName, workerName) {
+export async function findNextTask(teamName, workerName) {
     const dir = tasksDir(teamName);
     if (!existsSync(dir))
         return null;
@@ -96,9 +93,20 @@ export function findNextTask(teamName, workerName) {
             continue;
         if (!areBlockersResolved(teamName, task.blockedBy))
             continue;
-        // Ownership guard: re-read to ensure owner hasn't been reassigned
+        // Write claim marker
+        updateTask(teamName, id, {
+            claimedBy: workerName,
+            claimedAt: Date.now(),
+            claimPid: process.pid,
+        });
+        // Wait for other workers to also attempt claims
+        await new Promise(resolve => setTimeout(resolve, 50));
+        // Re-read and verify claim still belongs to us
         const freshTask = readTask(teamName, id);
-        if (!freshTask || freshTask.owner !== workerName || freshTask.status !== 'pending') {
+        if (!freshTask ||
+            freshTask.status !== 'pending' ||
+            freshTask.claimedBy !== workerName ||
+            freshTask.claimPid !== process.pid) {
             continue;
         }
         return freshTask;
@@ -143,6 +151,15 @@ export function readTaskFailure(teamName, taskId) {
     catch {
         return null;
     }
+}
+/** Default maximum retries before a task is permanently failed */
+export const DEFAULT_MAX_TASK_RETRIES = 5;
+/** Check if a task has exhausted its retry budget */
+export function isTaskRetryExhausted(teamName, taskId, maxRetries = DEFAULT_MAX_TASK_RETRIES) {
+    const failure = readTaskFailure(teamName, taskId);
+    if (!failure)
+        return false;
+    return failure.retryCount >= maxRetries;
 }
 /** List all task IDs in a team directory, sorted ascending */
 export function listTaskIds(teamName) {

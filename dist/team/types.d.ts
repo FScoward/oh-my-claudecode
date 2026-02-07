@@ -14,6 +14,7 @@ export interface BridgeConfig {
     taskTimeoutMs: number;
     maxConsecutiveErrors: number;
     outboxMaxLines: number;
+    maxRetries?: number;
 }
 /** Mirrors the JSON structure of ~/.claude/tasks/{team}/{id}.json */
 export interface TaskFile {
@@ -26,9 +27,12 @@ export interface TaskFile {
     blocks: string[];
     blockedBy: string[];
     metadata?: Record<string, unknown>;
+    claimedBy?: string;
+    claimedAt?: number;
+    claimPid?: number;
 }
 /** Partial update for a task file (only fields being changed) */
-export type TaskFileUpdate = Partial<Pick<TaskFile, 'status' | 'owner'>>;
+export type TaskFileUpdate = Partial<Pick<TaskFile, 'status' | 'owner' | 'metadata' | 'claimedBy' | 'claimedAt' | 'claimPid'>>;
 /** JSONL message from lead -> worker (inbox) */
 export interface InboxMessage {
     type: 'message' | 'context';
@@ -37,7 +41,7 @@ export interface InboxMessage {
 }
 /** JSONL message from worker -> lead (outbox) */
 export interface OutboxMessage {
-    type: 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'heartbeat' | 'error';
+    type: 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'drain_ack' | 'heartbeat' | 'error';
     taskId?: string;
     summary?: string;
     message?: string;
@@ -47,6 +51,12 @@ export interface OutboxMessage {
 }
 /** Shutdown signal file content */
 export interface ShutdownSignal {
+    requestId: string;
+    reason: string;
+    timestamp: string;
+}
+/** Drain signal: finish current task, then shut down gracefully */
+export interface DrainSignal {
     requestId: string;
     reason: string;
     timestamp: string;

@@ -29,13 +29,13 @@ import { readProbeResult, writeProbeResult, registerMcpWorker, unregisterMcpWork
 // ============================================================
 // Shared test constants and helpers
 // ============================================================
-const EDGE_TEAM_TASKS = '__test_edge_tasks__';
-const EDGE_TEAM_IO = '__test_edge_io__';
+const EDGE_TEAM_TASKS = 'test-edge-tasks';
+const EDGE_TEAM_IO = 'test-edge-io';
 const TASKS_DIR = join(homedir(), '.claude', 'tasks', EDGE_TEAM_TASKS);
 const TEAMS_IO_DIR = join(homedir(), '.claude', 'teams', EDGE_TEAM_IO);
-const HB_DIR = join(tmpdir(), '__test_edge_hb__');
-const REG_DIR = join(tmpdir(), '__test_edge_reg__');
-const REG_TEAM = '__test_edge_reg_team__';
+const HB_DIR = join(tmpdir(), 'test-edge-hb');
+const REG_DIR = join(tmpdir(), 'test-edge-reg');
+const REG_TEAM = 'test-edge-reg-team';
 const CONFIG_DIR = join(homedir(), '.claude', 'teams', REG_TEAM);
 function writeTaskHelper(task) {
     mkdirSync(TASKS_DIR, { recursive: true });
@@ -138,17 +138,17 @@ describe('task-file-ops edge cases', () => {
         });
     });
     describe('findNextTask returns null for nonexistent team', () => {
-        it('returns null gracefully when team directory missing', () => {
-            expect(findNextTask('completely_nonexistent_team_xyz', 'w1')).toBeNull();
+        it('returns null gracefully when team directory missing', async () => {
+            expect(await findNextTask('completely_nonexistent_team_xyz', 'w1')).toBeNull();
         });
     });
     describe('findNextTask with in_progress task', () => {
-        it('skips tasks that are already in_progress', () => {
+        it('skips tasks that are already in_progress', async () => {
             writeTaskHelper({
                 id: '1', subject: 'T', description: 'D',
                 status: 'in_progress', owner: 'w1', blocks: [], blockedBy: [],
             });
-            expect(findNextTask(EDGE_TEAM_TASKS, 'w1')).toBeNull();
+            expect(await findNextTask(EDGE_TEAM_TASKS, 'w1')).toBeNull();
         });
     });
     describe('readTask with empty file', () => {
@@ -220,11 +220,11 @@ describe('task-file-ops edge cases', () => {
         });
     });
     describe('findNextTask with multiple pending tasks returns first by sorted ID', () => {
-        it('returns the lowest-sorted pending task', () => {
+        it('returns the lowest-sorted pending task', async () => {
             writeTaskHelper({ id: '3', subject: 'T3', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
             writeTaskHelper({ id: '1', subject: 'T1', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
             writeTaskHelper({ id: '2', subject: 'T2', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
-            const result = findNextTask(EDGE_TEAM_TASKS, 'w1');
+            const result = await findNextTask(EDGE_TEAM_TASKS, 'w1');
             expect(result?.id).toBe('1');
         });
     });

@@ -1,4 +1,4 @@
-import type { InboxMessage, OutboxMessage, ShutdownSignal } from './types.js';
+import type { InboxMessage, OutboxMessage, ShutdownSignal, DrainSignal } from './types.js';
 /**
  * Append a message to the outbox JSONL file.
  * Creates directories if needed.
@@ -10,6 +10,12 @@ export declare function appendOutbox(teamName: string, workerName: string, messa
  * Prevents unbounded growth.
  */
 export declare function rotateOutboxIfNeeded(teamName: string, workerName: string, maxLines: number): void;
+/**
+ * Rotate inbox if it exceeds maxSizeBytes.
+ * Keeps the most recent half of lines, discards older.
+ * Prevents unbounded growth of inbox files.
+ */
+export declare function rotateInboxIfNeeded(teamName: string, workerName: string, maxSizeBytes: number): void;
 /**
  * Read new inbox messages using offset cursor.
  *
@@ -33,6 +39,12 @@ export declare function writeShutdownSignal(teamName: string, workerName: string
 export declare function checkShutdownSignal(teamName: string, workerName: string): ShutdownSignal | null;
 /** Delete the shutdown signal file after processing */
 export declare function deleteShutdownSignal(teamName: string, workerName: string): void;
+/** Write a drain signal for a worker */
+export declare function writeDrainSignal(teamName: string, workerName: string, requestId: string, reason: string): void;
+/** Check if a drain signal exists for a worker */
+export declare function checkDrainSignal(teamName: string, workerName: string): DrainSignal | null;
+/** Delete a drain signal file */
+export declare function deleteDrainSignal(teamName: string, workerName: string): void;
 /** Remove all inbox/outbox/signal files for a worker */
 export declare function cleanupWorkerFiles(teamName: string, workerName: string): void;
 //# sourceMappingURL=inbox-outbox.d.ts.map

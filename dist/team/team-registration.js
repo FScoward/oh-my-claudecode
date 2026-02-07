@@ -5,25 +5,21 @@
  * Dual-path registration: config.json (if tolerated) or shadow registry (fallback).
  * Auto-detects strategy via cached probe result.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
 import { homedir } from 'os';
 import { sanitizeName } from './tmux-session.js';
-// --- Atomic write helper ---
-function atomicWriteJson(filePath, data) {
-    const dir = dirname(filePath);
-    if (!existsSync(dir))
-        mkdirSync(dir, { recursive: true });
-    const tmpPath = filePath + '.tmp.' + process.pid;
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
-    renameSync(tmpPath, filePath);
-}
+import { atomicWriteJson, validateResolvedPath } from './fs-utils.js';
 // --- Config paths ---
 function configPath(teamName) {
-    return join(homedir(), '.claude', 'teams', sanitizeName(teamName), 'config.json');
+    const result = join(homedir(), '.claude', 'teams', sanitizeName(teamName), 'config.json');
+    validateResolvedPath(result, join(homedir(), '.claude', 'teams'));
+    return result;
 }
 function shadowRegistryPath(workingDirectory) {
-    return join(workingDirectory, '.omc', 'state', 'team-mcp-workers.json');
+    const result = join(workingDirectory, '.omc', 'state', 'team-mcp-workers.json');
+    validateResolvedPath(result, join(workingDirectory, '.omc', 'state'));
+    return result;
 }
 function probeResultPath(workingDirectory) {
     return join(workingDirectory, '.omc', 'state', 'config-probe-result.json');

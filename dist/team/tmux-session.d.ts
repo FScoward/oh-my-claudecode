@@ -5,7 +5,7 @@ export declare function sanitizeName(name: string): string;
 /** Build session name: "omc-team-{teamName}-{workerName}" */
 export declare function sessionName(teamName: string, workerName: string): string;
 /** Create a detached tmux session. Kills stale session with same name first. */
-export declare function createSession(teamName: string, workerName: string): string;
+export declare function createSession(teamName: string, workerName: string, workingDirectory?: string): string;
 /** Kill a session by team/worker name. No-op if not found. */
 export declare function killSession(teamName: string, workerName: string): void;
 /** Check if a session exists */
