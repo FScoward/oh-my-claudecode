@@ -232,6 +232,7 @@ describe('Inline prompt validation - empty and background', () => {
         });
         expect(result.isError).toBe(true);
         expect(result.content[0].text).toContain('Inline prompt is empty');
+        expect(spawn).not.toHaveBeenCalled();
     });
     it('should reject empty/whitespace-only inline prompt for Gemini with explicit message', async () => {
         const result = await handleAskGemini({
@@ -240,6 +241,7 @@ describe('Inline prompt validation - empty and background', () => {
         });
         expect(result.isError).toBe(true);
         expect(result.content[0].text).toContain('Inline prompt is empty');
+        expect(spawn).not.toHaveBeenCalled();
     });
     it('should reject empty string inline prompt for Codex', async () => {
         const result = await handleAskCodex({

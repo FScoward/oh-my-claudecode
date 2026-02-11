@@ -573,7 +573,7 @@ export async function handleAskCodex(args: {
   background?: boolean;
   working_directory?: string;
 }): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
-  if (!args || typeof args !== 'object') {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
     return singleErrorBlock('Invalid request: args must be an object.');
   }
 

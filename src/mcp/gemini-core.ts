@@ -434,7 +434,7 @@ export async function handleAskGemini(args: {
   background?: boolean;
   working_directory?: string;
 }): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
-  if (!args || typeof args !== 'object') {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
     return singleErrorBlock('Invalid request: args must be an object.');
   }
 
@@ -692,7 +692,7 @@ ${resolvedPrompt}`;
     promptResult ? `**Prompt File:** ${promptResult.filePath}` : null,
     expectedResponsePath ? `**Response File:** ${expectedResponsePath}` : null,
     `**Resolved Working Directory:** ${baseDirReal}`,
-    `**Path Policy:** OMC_ALLOW_EXTERNAL_WORKDIR=${process.env.OMC_ALLOW_EXTERNAL_WORKDIR || '0 (enforced)'}`,
+    `**Path Policy:** ${pathPolicy}`,
   ].filter(Boolean).join('\n');
 
   // Build fallback chain using the resolver

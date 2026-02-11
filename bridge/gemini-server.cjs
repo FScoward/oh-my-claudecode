@@ -16878,7 +16878,7 @@ function validateAndReadFile(filePath, baseDir) {
   }
 }
 async function handleAskGemini(args) {
-  if (!args || typeof args !== "object") {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
     return singleErrorBlock("Invalid request: args must be an object.");
   }
   const { agent_role, files } = args;
@@ -17085,7 +17085,7 @@ ${detection.installHint}`);
     promptResult ? `**Prompt File:** ${promptResult.filePath}` : null,
     expectedResponsePath ? `**Response File:** ${expectedResponsePath}` : null,
     `**Resolved Working Directory:** ${baseDirReal}`,
-    `**Path Policy:** OMC_ALLOW_EXTERNAL_WORKDIR=${process.env.OMC_ALLOW_EXTERNAL_WORKDIR || "0 (enforced)"}`
+    `**Path Policy:** ${pathPolicy}`
   ].filter(Boolean).join("\n");
   const fallbackChain = buildFallbackChain("gemini", resolvedModel, config2.externalModels);
   let resolvedOutputPath;

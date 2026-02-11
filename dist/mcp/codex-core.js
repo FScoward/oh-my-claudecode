@@ -511,7 +511,7 @@ export function validateAndReadFile(filePath, baseDir) {
  * the SDK server and the standalone stdio server.
  */
 export async function handleAskCodex(args) {
-    if (!args || typeof args !== 'object') {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
         return singleErrorBlock('Invalid request: args must be an object.');
     }
     const { agent_role, context_files } = args;
