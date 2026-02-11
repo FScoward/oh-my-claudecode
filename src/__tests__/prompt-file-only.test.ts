@@ -34,7 +34,7 @@ describe('prompt_file-only enforcement', () => {
         output_file: '/tmp/test-output.md',
       });
       expect(result.isError).toBe(true);
-      expectMissingPromptError(result.content[0].text);
+      expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
     });
 
     it('should return error for invalid agent_role', async () => {
@@ -75,7 +75,7 @@ describe('prompt_file-only enforcement', () => {
         output_file: '/tmp/test-output.md',
       });
       expect(result.isError).toBe(true);
-      expectMissingPromptError(result.content[0].text);
+      expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
     });
 
     it('should return error for invalid agent_role', async () => {
@@ -110,7 +110,7 @@ describe('non-string input handling', () => {
     });
     // prompt_file is present (even non-string), so file mode, not inline
     expect(result.isError).toBe(true);
-    expectMissingPromptError(result.content[0].text);
+    expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
   });
 
   it('should treat non-string prompt_file as file mode (null)', async () => {
@@ -121,7 +121,7 @@ describe('non-string input handling', () => {
       output_file: '/tmp/test-output.md',
     });
     expect(result.isError).toBe(true);
-    expectMissingPromptError(result.content[0].text);
+    expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
   });
 
   it('should treat non-string prompt as missing (number)', async () => {
@@ -142,7 +142,7 @@ describe('non-string input handling', () => {
       output_file: '/tmp/test-output.md',
     });
     expect(result.isError).toBe(true);
-    expectMissingPromptError(result.content[0].text);
+    expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
   });
 });
 

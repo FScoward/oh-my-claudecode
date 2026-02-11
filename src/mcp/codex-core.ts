@@ -636,8 +636,8 @@ Suggested: use a working_directory within the project worktree, or set OMC_ALLOW
 
 
   // Validate agent_role - must be non-empty and pass character validation
-  if (!agent_role || !agent_role.trim()) {
-    return singleErrorBlock(`agent_role is required. Recommended roles for Codex: ${CODEX_RECOMMENDED_ROLES.join(', ')}`);
+  if (typeof agent_role !== 'string' || !agent_role.trim()) {
+    return singleErrorBlock('agent_role is required and must be a non-empty string.');
   }
   if (!isValidAgentRoleName(agent_role)) {
     return singleErrorBlock(`Invalid agent_role: "${agent_role}". Role names must contain only lowercase letters, numbers, and hyphens. Recommended for Codex: ${CODEX_RECOMMENDED_ROLES.join(', ')}`);
@@ -673,6 +673,11 @@ Suggested: use a working_directory within the project worktree, or set OMC_ALLOW
   // Inline mode is foreground only - check BEFORE any file persistence to avoid leaks
   if (isInlineMode && args.background) {
     return singleErrorBlock('Inline prompt mode is foreground only. Use prompt_file for background execution.');
+  }
+
+  // Explicit type error for non-string prompt_file (e.g., null, number, object)
+  if (hasPromptFileField && !promptFileInput) {
+    return singleErrorBlock('prompt_file must be a non-empty string when provided. Received non-string or empty value.');
   }
 
   let inlineRequestId: string | undefined;

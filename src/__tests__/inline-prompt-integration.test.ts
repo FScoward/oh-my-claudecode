@@ -54,7 +54,7 @@ const parityMatrix: Array<{
   { name: 'missing prompt source', args: { agent_role: 'architect' }, expectError: true, expectMsg: 'Either' },
   { name: 'empty inline', args: { agent_role: 'architect', prompt: '' }, expectError: true, expectMsg: 'empty' },
   { name: 'whitespace inline', args: { agent_role: 'architect', prompt: '   ' }, expectError: true, expectMsg: 'empty' },
-  { name: 'prompt_file: null forces file mode', args: { agent_role: 'architect', prompt: 'test', prompt_file: null, output_file: '/tmp/o.md' }, expectError: true, expectMsg: 'Either' },
+  { name: 'prompt_file: null forces file mode', args: { agent_role: 'architect', prompt: 'test', prompt_file: null, output_file: '/tmp/o.md' }, expectError: true, expectMsg: 'prompt_file must be a non-empty string' },
   { name: 'prompt_file: undefined allows inline', args: { agent_role: 'architect', prompt: 'test', prompt_file: undefined }, expectError: false },
   { name: 'background + inline rejected', args: { agent_role: 'architect', prompt: 'test', background: true }, expectError: true, expectMsg: 'foreground' },
   { name: 'missing output_file in file mode', args: { agent_role: 'architect', prompt_file: '/tmp/f.md' }, expectError: true, expectMsg: 'output_file' },
@@ -129,7 +129,7 @@ describe('Inline prompt integration - Codex', () => {
     });
     expect(result.isError).toBe(true);
     const text = result.content[0].text;
-    expectMissingPromptError(text);
+    expect(text).toContain('prompt_file must be a non-empty string');
   });
 
   it('should handle path traversal in inline prompt safely', async () => {
@@ -193,7 +193,7 @@ describe('Inline prompt integration - Gemini', () => {
     });
     expect(result.isError).toBe(true);
     const text = result.content[0].text;
-    expectMissingPromptError(text);
+    expect(text).toContain('prompt_file must be a non-empty string');
   });
 
   it('should error when neither prompt nor prompt_file provided', async () => {
@@ -388,7 +388,7 @@ describe('Inline prompt edge cases', () => {
       output_file: '/tmp/test-output.md',
     });
     expect(result.isError).toBe(true);
-    expectMissingPromptError(result.content[0].text);
+    expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
   });
 
   it('prompt_file: null with valid prompt treats null as defined (file mode) for Gemini', async () => {
@@ -399,7 +399,7 @@ describe('Inline prompt edge cases', () => {
       output_file: '/tmp/test-output.md',
     });
     expect(result.isError).toBe(true);
-    expectMissingPromptError(result.content[0].text);
+    expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
   });
 
   it('rejects oversized inline prompts', async () => {
@@ -432,5 +432,27 @@ describe('Inline prompt edge cases', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toHaveLength(1);
     expect(result.content[0].text).toContain('output_file is required');
+  });
+
+  it('Codex: prompt_file number returns explicit prompt_file type error', async () => {
+    const result = await handleAskCodex({
+      agent_role: 'architect',
+      prompt: 'test inline prompt',
+      prompt_file: 123 as any,
+      output_file: '/tmp/test-output.md',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
+  });
+
+  it('Gemini: prompt_file number returns explicit prompt_file type error', async () => {
+    const result = await handleAskGemini({
+      agent_role: 'designer',
+      prompt: 'test inline prompt',
+      prompt_file: 123 as any,
+      output_file: '/tmp/test-output.md',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('prompt_file must be a non-empty string');
   });
 });

@@ -61,26 +61,19 @@ function renameOverwritingSync(fromPath: string, toPath: string): void {
  * @param maxWords - Maximum number of words to include (default 4)
  * @returns A filesystem-safe slug
  */
-export function slugify(text: string, maxWords = 4): string {
+export function slugify(text: string, _maxWords = 4): string {
   if (!text || typeof text !== 'string') {
     return 'prompt';
   }
 
-  // Take first maxWords words
-  const words = text.trim().split(/\s+/).slice(0, maxWords);
-
-  // Join, lowercase, replace non-alphanumeric with hyphens
-  let slug = words
-    .join('-')
+  const slug = text
     .toLowerCase()
+    .replace(/\.\./g, '')
+    .replace(/[/\\]/g, '')
     .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')  // Collapse multiple hyphens
-    .replace(/^-|-$/g, ''); // Trim leading/trailing hyphens
-
-  // Truncate to 40 chars max
-  if (slug.length > 40) {
-    slug = slug.substring(0, 40).replace(/-$/, '');
-  }
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 50);
 
   return slug || 'prompt';
 }

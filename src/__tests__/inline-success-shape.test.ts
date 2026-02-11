@@ -128,4 +128,13 @@ describe('Inline success response shape', () => {
     expect(result.content[1].text).toContain('--- UNTRUSTED CLI RESPONSE');
     expect(result.content[1].text).toContain('--- END UNTRUSTED CLI RESPONSE');
   });
+
+  it('Gemini inline success metadata should not duplicate "Resolved Working Directory" key', async () => {
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess('Gemini response', 0));
+    const result = await handleAskGemini({ agent_role: 'designer', prompt: 'Test' });
+    expect(result.isError).toBeFalsy();
+    const metadataText = result.content[0].text;
+    const occurrences = (metadataText.match(/Resolved Working Directory/g) ?? []).length;
+    expect(occurrences).toBeLessThanOrEqual(1);
+  });
 });
