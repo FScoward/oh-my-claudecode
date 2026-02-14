@@ -91,7 +91,7 @@ export function getOMCConfig() {
  * Check if silent auto-updates are enabled
  */
 export function isSilentAutoUpdateEnabled() {
-    return getOMCConfig().silentAutoUpdate;
+    return false;
 }
 /**
  * Check if auto-upgrade prompt is enabled at session start

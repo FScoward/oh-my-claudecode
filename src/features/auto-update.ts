@@ -184,7 +184,7 @@ export function getOMCConfig(): OMCConfig {
  * Check if silent auto-updates are enabled
  */
 export function isSilentAutoUpdateEnabled(): boolean {
-  return getOMCConfig().silentAutoUpdate;
+  return false;
 }
 
 /**
