@@ -75,7 +75,7 @@ Bật Claude Code native teams trong `~/.claude/settings.json`:
 Nếu gặp sự cố sau khi cập nhật, hãy xóa cache plugin cũ:
 
 ```bash
-/oh-my-claudecode:doctor
+/oh-my-claudecode:omc-doctor
 ```
 
 <h1 align="center">Your Claude Just Have been Steroided.</h1>

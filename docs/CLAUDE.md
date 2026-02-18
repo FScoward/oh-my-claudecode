@@ -1,5 +1,5 @@
 <!-- OMC:START -->
-<!-- OMC:VERSION:4.2.7 -->
+<!-- OMC:VERSION:4.2.11 -->
 # oh-my-claudecode - Intelligent Multi-Agent Orchestration
 
 You are running with oh-my-claudecode (OMC), a multi-agent orchestration layer for Claude Code.
@@ -81,6 +81,7 @@ Domain Specialists:
 - `writer` (haiku): docs, migration notes, user guidance
 - `qa-tester` (sonnet): interactive CLI/service runtime validation
 - `scientist` (sonnet): data/statistical analysis
+- `document-specialist` (sonnet): external documentation & reference lookup
 - `git-master` (sonnet): commit strategy, history hygiene
 
 Product Lane:
@@ -93,7 +94,7 @@ Coordination:
 - `critic` (opus): plan/design critical challenge
 - `vision` (sonnet): image/screenshot/diagram analysis
 
-Deprecated aliases (backward compatibility): `researcher` -> `dependency-expert`, `tdd-guide` -> `test-engineer`.
+Deprecated aliases (backward compatibility): `researcher` -> `document-specialist`, `tdd-guide` -> `test-engineer`.
 
 Some roles are alias prompts mapped to core agent types; the canonical set is in `src/agents/definitions.ts`.
 </agent_catalog>
@@ -142,7 +143,7 @@ OMC State:
 - `state_read`, `state_write`, `state_clear`, `state_list_active`, `state_get_status`
 - State stored at `{worktree}/.omc/state/{mode}-state.json` (not in `~/.claude/`)
 - Session-scoped state: `.omc/state/sessions/{sessionId}/` when session id is available; legacy `.omc/state/{mode}-state.json` as fallback
-- Supported modes: autopilot, ultrapilot, team, pipeline, ralph, ultrawork, ultraqa, ecomode
+- Supported modes: autopilot, ultrapilot, team, pipeline, ralph, ultrawork, ultraqa
 
 Team Coordination (Claude Code native):
 - `TeamCreate`, `TeamDelete`, `SendMessage`, `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`
@@ -177,13 +178,13 @@ Workflow Skills:
 - `ultrawork` ("ulw", "ultrawork"): maximum parallelism with parallel agent orchestration
 - `swarm` ("swarm"): compatibility facade over Team; preserves `/swarm` syntax, routes to Team staged pipeline
 - `ultrapilot` ("ultrapilot", "parallel build"): compatibility facade over Team; maps onto Team's staged runtime
-- `ecomode` ("eco", "ecomode", "budget"): token-efficient execution using haiku and sonnet
 - `team` ("team", "coordinated team", "team ralph"): N coordinated agents using Claude Code native teams with stage-aware agent routing; supports `team ralph` for persistent team execution
 - `pipeline` ("pipeline", "chain agents"): sequential agent chaining with data passing
 - `ultraqa` (activated by autopilot): QA cycling -- test, verify, fix, repeat
 - `plan` ("plan this", "plan the"): strategic planning; supports `--consensus` and `--review` modes
 - `ralplan` ("ralplan", "consensus plan"): alias for `/plan --consensus` -- iterative planning with Planner, Architect, Critic until consensus
-- `research` ("research", "analyze data"): parallel scientist agents for comprehensive research
+- `sciomc` ("sciomc"): parallel scientist agents for comprehensive analysis
+- `external-context`: invoke parallel document-specialist agents for web searches
 - `deepinit` ("deepinit"): deep codebase init with hierarchical AGENTS.md
 
 Agent Shortcuts (thin wrappers; call the agent directly with `model` for more control):
@@ -205,9 +206,9 @@ MCP Delegation (auto-detected when an intent phrase is present):
 
 Notifications: `configure-discord` ("configure discord", "setup discord", "discord webhook"), `configure-telegram` ("configure telegram", "setup telegram", "telegram bot")
 
-Utilities: `cancel`, `note`, `learner`, `omc-setup`, `mcp-setup`, `hud`, `doctor`, `help`, `trace`, `release`, `project-session-manager` (psm), `skill`, `writer-memory`, `ralph-init`, `learn-about-omc`
+Utilities: `cancel`, `note`, `learner`, `omc-setup`, `mcp-setup`, `hud`, `omc-doctor`, `omc-help`, `trace`, `release`, `project-session-manager` (psm), `skill`, `writer-memory`, `ralph-init`, `learn-about-omc`
 
-Conflict resolution: explicit mode keywords (`ulw`, `ultrawork`, `eco`, `ecomode`) override defaults. When both are present, ecomode wins. Generic "fast"/"parallel" reads `~/.claude/.omc-config.json` -> `defaultExecutionMode`. Ralph includes ultrawork (persistence wrapper). Ecomode is a model-routing modifier only. Autopilot can transition to ralph or ultraqa. Autopilot and ultrapilot are mutually exclusive.
+Conflict resolution: explicit mode keywords (`ulw`, `ultrawork`) override defaults. Generic "fast"/"parallel" reads `~/.claude/.omc-config.json` -> `defaultExecutionMode`. Ralph includes ultrawork (persistence wrapper). Autopilot can transition to ralph or ultraqa. Autopilot and ultrapilot are mutually exclusive.
 </skills>
 
 ---

@@ -583,7 +583,7 @@ Use the AskUserQuestion tool to prompt the user:
 
 **Options:**
 1. **ultrawork (maximum capability)** - Uses all agent tiers including Opus for complex tasks. Best for challenging work where quality matters most. (Recommended)
-2. **ecomode (token efficient)** - Prefers Haiku/Sonnet agents, avoids Opus. Best for pro-plan users who want cost efficiency.
+2. ** (token efficient)** - Prefers Haiku/Sonnet agents, avoids Opus. Best for pro-plan users who want cost efficiency.
 
 Store the preference in `~/.claude/.omc-config.json`:
 
@@ -598,7 +598,7 @@ else
   EXISTING='{}'
 fi
 
-# Set defaultExecutionMode (replace USER_CHOICE with "ultrawork" or "ecomode")
+# Set defaultExecutionMode (replace USER_CHOICE with "ultrawork" or "")
 echo "$EXISTING" | jq --arg mode "USER_CHOICE" '. + {defaultExecutionMode: $mode, configuredAt: (now | todate)}' > "$CONFIG_FILE"
 echo "Default execution mode set to: USER_CHOICE"
 ```
@@ -607,10 +607,10 @@ echo "Default execution mode set to: USER_CHOICE"
 
 ### Optional: Disable Ecomode Entirely
 
-If the user wants to disable ecomode completely (so ecomode keywords are ignored), add to the config:
+If the user wants to disable  completely (so  keywords are ignored), add to the config:
 
 ```bash
-echo "$EXISTING" | jq '. + {ecomode: {enabled: false}}' > "$CONFIG_FILE"
+echo "$EXISTING" | jq '. + {: {enabled: false}}' > "$CONFIG_FILE"
 echo "Ecomode disabled completely"
 ```
 
@@ -629,8 +629,8 @@ Ask user: "Would you like to install the OMC CLI for standalone analytics? (Reco
 The CLI (`omc` command) is **no longer supported** via npm/bun global install.
 
 All functionality is available through the plugin system:
-- Use `/oh-my-claudecode:help` for guidance
-- Use `/oh-my-claudecode:doctor` for diagnostics
+- Use `/oh-my-claudecode:omc-help` for guidance
+- Use `/oh-my-claudecode:omc-doctor` for diagnostics
 
 Skip this step - the plugin provides all features.
 

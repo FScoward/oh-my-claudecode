@@ -9,10 +9,10 @@ describe('Builtin Skills', () => {
         it('should return correct number of skills (40)', () => {
             const skills = createBuiltinSkills();
             // 40 skills: analyze, autopilot, build-fix, cancel, code-review, configure-discord, configure-telegram,
-            // deepinit, deepsearch, doctor, ecomode, frontend-ui-ux, git-master, help, hud, learn-about-omc,
-            // learner, mcp-setup, note, omc-setup, pipeline, plan, project-session-manager, psm, ralph,
-            // ralph-init, ralplan, release, research, review, security-review, skill, swarm, tdd, team,
-            // trace, ultrapilot, ultraqa, ultrawork, writer-memory
+            // deepinit, deepsearch, omc-doctor, external-context, frontend-ui-ux, git-master, omc-help, hud,
+            // learn-about-omc, learner, mcp-setup, note, omc-setup, pipeline, plan, project-session-manager,
+            // psm, ralph, ralph-init, ralplan, release, review, sciomc, security-review, skill, swarm, tdd,
+            // team, trace, ultrapilot, ultraqa, ultrawork, writer-memory
             expect(skills).toHaveLength(40);
         });
         it('should return an array of BuiltinSkill objects', () => {
@@ -65,11 +65,11 @@ describe('Builtin Skills', () => {
                 'configure-telegram',
                 'deepinit',
                 'deepsearch',
-                'doctor',
-                'ecomode',
+                'omc-doctor',
+                'external-context',
                 'frontend-ui-ux',
                 'git-master',
-                'help',
+                'omc-help',
                 'hud',
                 'learn-about-omc',
                 'learner',
@@ -84,8 +84,8 @@ describe('Builtin Skills', () => {
                 'ralph-init',
                 'ralplan',
                 'release',
-                'research',
                 'review',
+                'sciomc',
                 'security-review',
                 'skill',
                 'swarm',
@@ -144,8 +144,8 @@ describe('Builtin Skills', () => {
             expect(names).toContain('plan');
             expect(names).toContain('deepinit');
             expect(names).toContain('release');
-            expect(names).toContain('doctor');
-            expect(names).toContain('help');
+            expect(names).toContain('omc-doctor');
+            expect(names).toContain('omc-help');
             expect(names).toContain('hud');
             expect(names).toContain('note');
             expect(names).toContain('omc-setup');

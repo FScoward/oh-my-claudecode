@@ -75,7 +75,7 @@ Enable Claude Code native teams in `~/.claude/settings.json`:
 If you experience issues after updating, clear the old plugin cache:
 
 ```bash
-/oh-my-claudecode:doctor
+/oh-my-claudecode:omc-doctor
 ```
 
 <h1 align="center">Your Claude Just Have been Steroided.</h1>

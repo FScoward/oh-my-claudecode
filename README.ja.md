@@ -51,7 +51,7 @@ autopilot: build a REST API for managing tasks
 更新後に問題が発生した場合は、古いプラグインキャッシュをクリアしてください：
 
 ```bash
-/oh-my-claudecode:doctor
+/oh-my-claudecode:omc-doctor
 ```
 
 <h1 align="center">あなたの Claude がステロイド級にパワーアップ。</h1>

@@ -141,13 +141,6 @@ export async function saveModeSummary(directory) {
                 : null,
         },
         {
-            file: "ecomode-state.json",
-            key: "ecomode",
-            extract: (s) => s.active
-                ? { original_prompt: s.original_prompt || s.prompt || "" }
-                : null,
-        },
-        {
             file: "pipeline-state.json",
             key: "pipeline",
             extract: (s) => s.active
@@ -315,11 +308,6 @@ export function formatCompactSummary(checkpoint) {
         if (checkpoint.active_modes.ultrapilot) {
             const up = checkpoint.active_modes.ultrapilot;
             lines.push(`- **Ultrapilot** (Workers: ${up.worker_count})`);
-        }
-        if (checkpoint.active_modes.ecomode) {
-            const eco = checkpoint.active_modes.ecomode;
-            lines.push(`- **Ecomode**`);
-            lines.push(`  Prompt: ${eco.original_prompt.substring(0, 50)}...`);
         }
         if (checkpoint.active_modes.pipeline) {
             const pipe = checkpoint.active_modes.pipeline;

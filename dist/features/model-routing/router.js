@@ -4,7 +4,7 @@
  * Main routing engine that determines which model tier to use for a given task.
  * Combines signal extraction, scoring, and rules evaluation.
  */
-import { DEFAULT_ROUTING_CONFIG, TIER_MODELS, TIER_TO_MODEL_TYPE, } from './types.js';
+import { DEFAULT_ROUTING_CONFIG, TIER_TO_MODEL_TYPE, } from './types.js';
 import { extractAllSignals } from './signals.js';
 import { calculateComplexityScore, calculateConfidence, scoreToTier } from './scorer.js';
 import { evaluateRules, DEFAULT_ROUTING_RULES } from './rules.js';
@@ -15,17 +15,17 @@ export function routeTask(context, config = {}) {
     const mergedConfig = { ...DEFAULT_ROUTING_CONFIG, ...config };
     // If routing is disabled, use default tier
     if (!mergedConfig.enabled) {
-        return createDecision(mergedConfig.defaultTier, ['Routing disabled, using default tier'], false);
+        return createDecision(mergedConfig.defaultTier, mergedConfig.tierModels, ['Routing disabled, using default tier'], false);
     }
     // If explicit model is specified, respect it
     if (context.explicitModel) {
-        const tier = modelTypeToTier(context.explicitModel);
-        return createDecision(tier, ['Explicit model specified by user'], false);
+        const explicitTier = modelTypeToTier(context.explicitModel);
+        return createDecision(explicitTier, mergedConfig.tierModels, ['Explicit model specified by user'], false, explicitTier);
     }
     // Check for agent-specific overrides
     if (context.agentType && mergedConfig.agentOverrides?.[context.agentType]) {
         const override = mergedConfig.agentOverrides[context.agentType];
-        return createDecision(override.tier, [override.reason], false);
+        return createDecision(override.tier, mergedConfig.tierModels, [override.reason], false, override.tier);
     }
     // Extract signals from the task
     const signals = extractAllSignals(context.taskPrompt, context);
@@ -33,21 +33,32 @@ export function routeTask(context, config = {}) {
     const ruleResult = evaluateRules(context, signals, DEFAULT_ROUTING_RULES);
     if (ruleResult.tier === 'EXPLICIT') {
         // Explicit model was handled above, this shouldn't happen
-        return createDecision('MEDIUM', ['Unexpected EXPLICIT tier'], false);
+        return createDecision('MEDIUM', mergedConfig.tierModels, ['Unexpected EXPLICIT tier'], false);
     }
     // Calculate score for confidence and logging
     const score = calculateComplexityScore(signals);
     const scoreTier = scoreToTier(score);
     const confidence = calculateConfidence(score, ruleResult.tier);
+    let finalTier = ruleResult.tier;
     const reasons = [
         ruleResult.reason,
         `Rule: ${ruleResult.ruleName}`,
         `Score: ${score} (${scoreTier} tier by score)`,
     ];
+    // Enforce minTier if configured
+    if (mergedConfig.minTier) {
+        const tierOrder = ['LOW', 'MEDIUM', 'HIGH'];
+        const currentIdx = tierOrder.indexOf(finalTier);
+        const minIdx = tierOrder.indexOf(mergedConfig.minTier);
+        if (currentIdx < minIdx) {
+            finalTier = mergedConfig.minTier;
+            reasons.push(`Min tier enforced: ${ruleResult.tier} -> ${finalTier}`);
+        }
+    }
     return {
-        model: mergedConfig.tierModels[ruleResult.tier],
-        modelType: TIER_TO_MODEL_TYPE[ruleResult.tier],
-        tier: ruleResult.tier,
+        model: mergedConfig.tierModels[finalTier],
+        modelType: TIER_TO_MODEL_TYPE[finalTier],
+        tier: finalTier,
         confidence,
         reasons,
         escalated: false,
@@ -56,9 +67,9 @@ export function routeTask(context, config = {}) {
 /**
  * Create a routing decision for a given tier
  */
-function createDecision(tier, reasons, escalated, originalTier) {
+function createDecision(tier, tierModels, reasons, escalated, originalTier) {
     return {
-        model: TIER_MODELS[tier],
+        model: tierModels[tier],
         modelType: TIER_TO_MODEL_TYPE[tier],
         tier,
         confidence: escalated ? 0.9 : 0.7, // Higher confidence after escalation
@@ -169,6 +180,7 @@ export function quickTierForAgent(agentType) {
         analyst: 'HIGH',
         explore: 'LOW',
         'writer': 'LOW',
+        'document-specialist': 'MEDIUM',
         researcher: 'MEDIUM',
         'executor': 'MEDIUM',
         'designer': 'MEDIUM',

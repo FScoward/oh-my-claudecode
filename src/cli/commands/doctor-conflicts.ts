@@ -150,7 +150,7 @@ export function checkConfigIssues(): ConflictReport['configIssues'] {
       'taskToolConfig',
       'defaultExecutionMode',
       'bashHistory',
-      'ecomode',
+      'agentTiers',
       'setupCompleted',
       'setupVersion',
       'stopHookCallbacks',

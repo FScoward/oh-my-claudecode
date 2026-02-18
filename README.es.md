@@ -51,7 +51,7 @@ Eso es todo. Todo lo demás es automático.
 Si experimentas problemas despues de actualizar, limpia la cache antigua del plugin:
 
 ```bash
-/oh-my-claudecode:doctor
+/oh-my-claudecode:omc-doctor
 ```
 
 <h1 align="center">Tu Claude acaba de recibir esteroides.</h1>

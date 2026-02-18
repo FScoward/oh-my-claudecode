@@ -75,7 +75,7 @@ Ative os times nativos do Claude Code em `~/.claude/settings.json`:
 Se você tiver problemas depois de atualizar, limpe o cache antigo do plugin:
 
 ```bash
-/oh-my-claudecode:doctor
+/oh-my-claudecode:omc-doctor
 ```
 
 <h1 align="center">Seu Claude acabou de tomar esteroides.</h1>

@@ -76,7 +76,7 @@ describe('state-tools', () => {
 
     it('should add _meta field to written state', async () => {
       const result = await stateWriteTool.handler({
-        mode: 'ecomode',
+        mode: 'ralph',
         state: { someField: 'value' },
         workingDirectory: TEST_DIR,
       });
@@ -138,7 +138,7 @@ describe('state-tools', () => {
     });
 
     it('should clear only the requested session for every execution mode', async () => {
-      const modes = ['autopilot', 'ultrapilot', 'pipeline', 'ralph', 'ultrawork', 'ultraqa', 'ecomode'] as const;
+      const modes = ['autopilot', 'ultrapilot', 'pipeline', 'ralph', 'ultrawork', 'ultraqa'] as const;
       const sessionA = 'session-a';
       const sessionB = 'session-b';
 

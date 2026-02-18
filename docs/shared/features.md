@@ -105,7 +105,7 @@ Sequential agent chaining with data passing between stages.
 | `review` | explore -> architect -> critic -> executor |
 | `implement` | planner -> executor -> tdd-guide |
 | `debug` | explore -> architect -> build-fixer |
-| `research` | parallel(researcher, explore) -> architect -> writer |
+| `research` | parallel(document-specialist, explore) -> architect -> writer |
 | `refactor` | explore -> architect-medium -> executor-high -> qa-tester |
 | `security` | explore -> security-reviewer -> executor -> security-reviewer-low |
 
@@ -117,7 +117,7 @@ Smart cancellation that auto-detects active mode.
 
 **Usage:** `/cancel` or just say "cancelomc", "stopomc"
 
-Auto-detects and cancels: autopilot, ultrapilot, ralph, ultrawork, ultraqa, ecomode, swarm, pipeline
+Auto-detects and cancels: autopilot, ultrapilot, ralph, ultrawork, ultraqa, swarm, pipeline
 Use `--force` or `--all` to clear ALL states.
 
 ## Verification Module (v3.4)
@@ -143,7 +143,7 @@ Standardized state file locations.
 | autopilot | `autopilot-state.json` |
 | ultrapilot | `ultrapilot-state.json` |
 | ultrawork | `ultrawork-state.json` |
-| ecomode | `ecomode-state.json` |
+|  | `-state.json` |
 | ultraqa | `ultraqa-state.json` |
 | pipeline | `pipeline-state.json` |
 | swarm | `swarm-summary.json` + `swarm-active.marker` |

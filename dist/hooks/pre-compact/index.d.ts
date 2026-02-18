@@ -40,9 +40,6 @@ export interface CompactCheckpoint {
             session_id: string;
             worker_count: number;
         };
-        ecomode?: {
-            original_prompt: string;
-        };
         pipeline?: {
             preset: string;
             current_stage: number;

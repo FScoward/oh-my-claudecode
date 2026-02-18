@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
 
-const REPO_ROOT = '/home/bellman/Workspace/oh-my-claudecode-dev';
-const CLI_ENTRY = '/home/bellman/Workspace/oh-my-claudecode-dev/src/cli/index.ts';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(__dirname, '..', '..');
+const CLI_ENTRY = join(REPO_ROOT, 'src', 'cli', 'index.ts');
 
 interface CliRunResult {
   status: number | null;
@@ -65,7 +67,6 @@ describe('omc config-stop-callback tag options', () => {
 
     writeFileSync(configPath, JSON.stringify({
       silentAutoUpdate: false,
-      defaultExecutionMode: 'ecomode',
       taskTool: 'task',
       stopHookCallbacks: {
         telegram: {
@@ -81,7 +82,6 @@ describe('omc config-stop-callback tag options', () => {
     expect(replace.status).toBe(0);
 
     let config = readConfig(configPath);
-    expect(config.defaultExecutionMode).toBe('ecomode');
     expect(config.taskTool).toBe('task');
     expect(config.stopHookCallbacks?.telegram?.tagList).toEqual(['@alice', 'bob']);
 

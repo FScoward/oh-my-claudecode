@@ -312,7 +312,7 @@ async function processKeywordDetector(input: HookInput): Promise<HookOutput> {
         const { createRalphLoopHook } = await import("./ralph/index.js");
         // Activate ralph state which also auto-activates ultrawork
         const hook = createRalphLoopHook(directory);
-        hook.startLoop(sessionId || "cli-session", promptText);
+        hook.startLoop(sessionId, promptText);
         messages.push(RALPH_MESSAGE);
         break;
       }
@@ -343,12 +343,10 @@ async function processKeywordDetector(input: HookInput): Promise<HookOutput> {
       case "cancel":
       case "autopilot":
       case "team":
-      case "ecomode":
       case "pipeline":
       case "ralplan":
       case "plan":
       case "tdd":
-      case "research":
         messages.push(
           `[MODE: ${keywordType.toUpperCase()}] Skill invocation handled by UserPromptSubmit hook.`,
         );
@@ -507,9 +505,14 @@ async function processPersistentMode(input: HookInput): Promise<HookOutput> {
           notify("session-idle", {
             sessionId,
             projectPath: directory,
+            profileName: process.env.OMC_NOTIFY_PROFILE,
           }).catch(() => {})
         ).catch(() => {});
       }
+
+      // IMPORTANT: Do NOT clean up reply-listener/session-registry on Stop hooks.
+      // Stop can fire for normal "idle" turns while the session is still active.
+      // Reply cleanup is handled in the true SessionEnd hook only.
     }
     return output;
   }
@@ -562,8 +565,30 @@ async function processSessionStart(input: HookInput): Promise<HookOutput> {
       notify("session-start", {
         sessionId,
         projectPath: directory,
+        profileName: process.env.OMC_NOTIFY_PROFILE,
       }).catch(() => {})
     ).catch(() => {});
+  }
+
+  // Start reply listener daemon if configured (non-blocking, swallows errors)
+  if (sessionId) {
+    Promise.all([
+      import("../notifications/reply-listener.js"),
+      import("../notifications/config.js"),
+    ]).then(
+      ([
+        { startReplyListener },
+        { getReplyConfig, getNotificationConfig, getReplyListenerPlatformConfig },
+      ]) => {
+      const replyConfig = getReplyConfig();
+      if (!replyConfig) return;
+      const notifConfig = getNotificationConfig();
+      const platformConfig = getReplyListenerPlatformConfig(notifConfig);
+      startReplyListener({
+        ...replyConfig,
+        ...platformConfig,
+      });
+    }).catch(() => {});
   }
 
   const messages: string[] = [];
@@ -722,6 +747,7 @@ export function dispatchAskUserQuestionNotification(
       sessionId,
       projectPath: directory,
       question: questionText,
+      profileName: process.env.OMC_NOTIFY_PROFILE,
     }).catch(() => {})
   ).catch(() => {});
 }
@@ -851,26 +877,69 @@ function processPreToolUse(input: HookInput): HookOutput {
   if (input.toolName === "Task") {
     const dashboard = getAgentDashboard(directory);
     if (dashboard) {
-      const baseMessage = enforcementResult.message || "";
-      const combined = baseMessage
-        ? `${baseMessage}\n\n${dashboard}`
+      const combined = enforcementResult.message
+        ? `${enforcementResult.message}\n\n${dashboard}`
         : dashboard;
-      return { continue: true, message: combined };
+      return {
+        continue: true,
+        message: combined,
+      };
     }
   }
 
-  // Return enforcement message if present (warning), otherwise continue silently
-  return enforcementResult.message
-    ? { continue: true, message: enforcementResult.message }
-    : { continue: true };
+  return {
+    continue: true,
+    ...(enforcementResult.message ? { message: enforcementResult.message } : {}),
+  };
 }
+
 
 /**
  * Process post-tool-use hook
  */
-function processPostToolUse(input: HookInput): HookOutput {
+function getInvokedSkillName(toolInput: unknown): string | null {
+  if (!toolInput || typeof toolInput !== "object") {
+    return null;
+  }
+
+  const input = toolInput as Record<string, unknown>;
+  const rawSkill =
+    input.skill ??
+    input.skill_name ??
+    input.skillName ??
+    input.command ??
+    null;
+
+  if (typeof rawSkill !== "string" || rawSkill.trim().length === 0) {
+    return null;
+  }
+
+  const normalized = rawSkill.trim();
+  const namespaced = normalized.includes(":")
+    ? normalized.split(":").at(-1)
+    : normalized;
+  return namespaced?.toLowerCase() || null;
+}
+
+async function processPostToolUse(input: HookInput): Promise<HookOutput> {
   const directory = resolveToWorktreeRoot(input.directory);
   const messages: string[] = [];
+
+  // Ensure mode state activation also works when execution starts via Skill tool
+  // (e.g., ralplan consensus handoff into Skill("oh-my-claudecode:ralph")).
+  const toolName = (input.toolName || "").toLowerCase();
+  if (toolName === "skill") {
+    const skillName = getInvokedSkillName(input.toolInput);
+    if (skillName === "ralph") {
+      const { createRalphLoopHook } = await import("./ralph/index.js");
+      const promptText =
+        typeof input.prompt === "string" && input.prompt.trim().length > 0
+          ? input.prompt
+          : "Ralph loop activated via Skill tool";
+      const hook = createRalphLoopHook(directory);
+      hook.startLoop(input.sessionId, promptText);
+    }
+  }
 
   // Run orchestrator post-tool processing (remember tags, verification reminders, etc.)
   const orchestratorResult = processOrchestratorPostTool(
@@ -1002,7 +1071,7 @@ export async function processHook(
         return processPreToolUse(input);
 
       case "post-tool-use":
-        return processPostToolUse(input);
+        return await processPostToolUse(input);
 
       case "autopilot":
         return await processAutopilot(input);

@@ -44,7 +44,6 @@ export interface CompactCheckpoint {
     ultrawork?: { original_prompt: string };
     swarm?: { session_id: string; task_count: number };
     ultrapilot?: { session_id: string; worker_count: number };
-    ecomode?: { original_prompt: string };
     pipeline?: { preset: string; current_stage: number };
     ultraqa?: { cycle: number; prompt: string };
   };
@@ -218,14 +217,6 @@ export async function saveModeSummary(
               session_id: s.session_id || "",
               worker_count: s.worker_count || 0,
             }
-          : null,
-    },
-    {
-      file: "ecomode-state.json",
-      key: "ecomode",
-      extract: (s: any) =>
-        s.active
-          ? { original_prompt: s.original_prompt || s.prompt || "" }
           : null,
     },
     {
@@ -430,12 +421,6 @@ export function formatCompactSummary(checkpoint: CompactCheckpoint): string {
     if (checkpoint.active_modes.ultrapilot) {
       const up = checkpoint.active_modes.ultrapilot;
       lines.push(`- **Ultrapilot** (Workers: ${up.worker_count})`);
-    }
-
-    if (checkpoint.active_modes.ecomode) {
-      const eco = checkpoint.active_modes.ecomode;
-      lines.push(`- **Ecomode**`);
-      lines.push(`  Prompt: ${eco.original_prompt.substring(0, 50)}...`);
     }
 
     if (checkpoint.active_modes.pipeline) {

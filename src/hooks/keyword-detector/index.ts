@@ -7,7 +7,7 @@
  * Ported from oh-my-opencode's keyword-detector hook.
  */
 
-import { isEcomodeEnabled, isTeamEnabled } from '../../features/auto-update.js';
+import { isTeamEnabled } from '../../features/auto-update.js';
 
 export type KeywordType =
   | 'cancel'      // Priority 1
@@ -16,18 +16,16 @@ export type KeywordType =
   | 'ultrapilot'  // Priority 4
   | 'team'        // Priority 4.5 (team mode)
   | 'ultrawork'   // Priority 5
-  | 'ecomode'     // Priority 6
-  | 'swarm'       // Priority 7
-  | 'pipeline'    // Priority 8
-  | 'ralplan'     // Priority 9
-  | 'plan'        // Priority 10
-  | 'tdd'         // Priority 11
-  | 'research'    // Priority 12
-  | 'ultrathink'  // Priority 13
-  | 'deepsearch'  // Priority 14
-  | 'analyze'     // Priority 15
-  | 'codex'       // Priority 16
-  | 'gemini';     // Priority 17
+  | 'swarm'       // Priority 6
+  | 'pipeline'    // Priority 7
+  | 'ralplan'     // Priority 8
+  | 'plan'        // Priority 9
+  | 'tdd'         // Priority 10
+  | 'ultrathink'  // Priority 11
+  | 'deepsearch'  // Priority 12
+  | 'analyze'     // Priority 13
+  | 'codex'       // Priority 14
+  | 'gemini';     // Priority 15
 
 export interface DetectedKeyword {
   type: KeywordType;
@@ -35,49 +33,25 @@ export interface DetectedKeyword {
   position: number;
 }
 
-/**
- * Autopilot keywords
- */
-const AUTOPILOT_KEYWORDS = [
-  'autopilot',
-  'auto pilot',
-  'auto-pilot',
-  'autonomous',
-  'full auto',
-  'fullsend',
-];
-
-const AUTOPILOT_PHRASE_PATTERNS = [
-  /\bbuild\s+me\s+/i,
-  /\bcreate\s+me\s+/i,
-  /\bmake\s+me\s+/i,
-  /\bi\s+want\s+a\s+/i,
-  /\bi\s+want\s+an\s+/i,
-  /\bhandle\s+it\s+all\b/i,
-  /\bend\s+to\s+end\b/i,
-  /\be2e\s+this\b/i,
-];
 
 /**
  * Keyword patterns for each mode
  */
 const KEYWORD_PATTERNS: Record<KeywordType, RegExp> = {
   cancel: /\b(cancelomc|stopomc)\b/i,
-  ralph: /\b(ralph|don't stop|must complete|until done)\b/i,
-  autopilot: /\b(autopilot|auto pilot|auto-pilot|autonomous|full auto|fullsend)\b/i,
+  ralph: /\b(ralph)\b/i,
+  autopilot: /\b(autopilot|auto[\s-]?pilot|fullsend|full\s+auto)\b/i,
   ultrapilot: /\b(ultrapilot|ultra-pilot)\b|\bparallel\s+build\b|\bswarm\s+build\b/i,
-  ultrawork: /\b(ultrawork|ulw|uw)\b/i,
-  ecomode: /\b(eco|ecomode|eco-mode|efficient|save-tokens|budget)\b/i,
+  ultrawork: /\b(ultrawork|ulw)\b/i,
   swarm: /\bswarm\s+\d+\s+agents?\b|\bcoordinated\s+agents\b|\bteam\s+mode\b/i,
   team: /(?<!\b(?:my|the|our|a|his|her|their|its)\s)\bteam\b|\bcoordinated\s+team\b/i,
-  pipeline: /\b(pipeline)\b|\bchain\s+agents\b/i,
+  pipeline: /\bagent\s+pipeline\b|\bchain\s+agents\b/i,
   ralplan: /\b(ralplan)\b/i,
   plan: /\bplan\s+(this|the)\b/i,
-  tdd: /\b(tdd)\b|\btest\s+first\b|\bred\s+green\b/i,
-  research: /\b(research)\b|\banalyze\s+data\b|\bstatistics\b/i,
-  ultrathink: /\b(ultrathink|think hard|think deeply)\b/i,
-  deepsearch: /\b(deepsearch)\b|\bsearch\s+(the\s+)?(codebase|code|files?|project)\b|\bfind\s+(in\s+)?(codebase|code|all\s+files?)\b/i,
-  analyze: /\b(deep\s*analyze)\b|\binvestigate\s+(the|this|why)\b|\bdebug\s+(the|this|why)\b/i,
+  tdd: /\b(tdd)\b|\btest\s+first\b/i,
+  ultrathink: /\b(ultrathink)\b/i,
+  deepsearch: /\b(deepsearch)\b|\bsearch\s+the\s+codebase\b|\bfind\s+in\s+(the\s+)?codebase\b/i,
+  analyze: /\b(deep[\s-]?analyze|deepanalyze)\b/i,
   codex: /\b(ask|use|delegate\s+to)\s+(codex|gpt)\b/i,
   gemini: /\b(ask|use|delegate\s+to)\s+gemini\b/i
 };
@@ -86,8 +60,8 @@ const KEYWORD_PATTERNS: Record<KeywordType, RegExp> = {
  * Priority order for keyword detection
  */
 const KEYWORD_PRIORITY: KeywordType[] = [
-  'cancel', 'ralph', 'autopilot', 'ultrapilot', 'team', 'ultrawork', 'ecomode',
-  'swarm', 'pipeline', 'ralplan', 'plan', 'tdd', 'research',
+  'cancel', 'ralph', 'autopilot', 'ultrapilot', 'team', 'ultrawork',
+  'swarm', 'pipeline', 'ralplan', 'plan', 'tdd',
   'ultrathink', 'deepsearch', 'analyze', 'codex', 'gemini'
 ];
 
@@ -146,43 +120,10 @@ export function detectKeywordsWithType(
   const detected: DetectedKeyword[] = [];
   const cleanedText = sanitizeForKeywordDetection(text);
 
-  // Check autopilot phrases first (more specific than keywords)
-  for (const pattern of AUTOPILOT_PHRASE_PATTERNS) {
-    const match = cleanedText.match(pattern);
-    if (match && match.index !== undefined) {
-      detected.push({
-        type: 'autopilot',
-        keyword: match[0],
-        position: match.index
-      });
-      break; // Only need one autopilot match
-    }
-  }
-
-  // Check autopilot keywords
-  for (const keyword of AUTOPILOT_KEYWORDS) {
-    const regex = new RegExp(`\\b${keyword}\\b`, 'i');
-    const match = cleanedText.match(regex);
-    if (match && match.index !== undefined) {
-      // Avoid duplicates from phrase detection
-      const position = cleanedText.toLowerCase().indexOf(keyword.toLowerCase());
-      detected.push({
-        type: 'autopilot',
-        keyword,
-        position: position >= 0 ? position : 0
-      });
-    }
-  }
-
   // Check each keyword type
   for (const type of KEYWORD_PRIORITY) {
     // Skip team-related types when team feature is disabled
     if ((type === 'team' || type === 'ultrapilot' || type === 'swarm') && !isTeamEnabled()) {
-      continue;
-    }
-
-    // Skip ecomode detection if disabled in config
-    if (type === 'ecomode' && !isEcomodeEnabled()) {
       continue;
     }
 
@@ -229,11 +170,6 @@ export function getAllKeywords(text: string): KeywordType[] {
 
   // Exclusive: cancel suppresses everything
   if (types.includes('cancel')) return ['cancel'];
-
-  // Mutual exclusion: ecomode beats ultrawork (only if ecomode is enabled)
-  if (types.includes('ecomode') && types.includes('ultrawork') && isEcomodeEnabled()) {
-    types = types.filter(t => t !== 'ultrawork');
-  }
 
   // Mutual exclusion: team beats autopilot (ultrapilot/swarm now map to team at detection)
   if (types.includes('team') && types.includes('autopilot')) {

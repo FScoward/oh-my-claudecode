@@ -172,7 +172,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | **Analysis** | `architect-low` | `architect-medium` | `architect` |
 | **Execution** | `executor-low` | `executor` | `executor-high` |
 | **Search** | `explore` | - | `explore-high` |
-| **Research** | - | `researcher` | - |
+| **Research** | - | `document-specialist` | - |
 | **Frontend** | `designer-low` | `designer` | `designer-high` |
 | **Docs** | `writer` | - | - |
 | **Visual** | - | `vision` | - |
@@ -201,7 +201,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | UI component | `designer` | sonnet |
 | Complex UI system | `designer-high` | opus |
 | Write docs/comments | `writer` | haiku |
-| Research docs/APIs | `researcher` | sonnet |
+| Research docs/APIs | `document-specialist` | sonnet |
 | Analyze images/diagrams | `vision` | sonnet |
 | Strategic planning | `planner` | opus |
 | Review/critique plan | `critic` | opus |
@@ -233,7 +233,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | `ultrapilot` | Parallel autopilot with 3-5x speedup | `/oh-my-claudecode:ultrapilot` |
 | `swarm` | N coordinated agents with task claiming | `/oh-my-claudecode:swarm` |
 | `pipeline` | Sequential agent chaining | `/oh-my-claudecode:pipeline` |
-| `ecomode` | Token-efficient parallel execution | `/oh-my-claudecode:ecomode` |
+| `` | Token-efficient parallel execution | `/oh-my-claudecode:` |
 | `ralph` | Self-referential development until completion | `/oh-my-claudecode:ralph` |
 | `ralph-init` | Initialize PRD for structured task tracking | `/oh-my-claudecode:ralph-init` |
 | `ultraqa` | Autonomous QA cycling workflow | `/oh-my-claudecode:ultraqa` |
@@ -248,7 +248,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | `deepinit` | Hierarchical AGENTS.md codebase documentation | `/oh-my-claudecode:deepinit` |
 | `deepsearch` | Thorough multi-strategy codebase search | `/oh-my-claudecode:deepsearch` |
 | `analyze` | Deep analysis and investigation | `/oh-my-claudecode:analyze` |
-| `research` | Parallel scientist orchestration | `/oh-my-claudecode:research` |
+| `sciomc` | Parallel scientist orchestration | `/oh-my-claudecode:sciomc` |
 | `frontend-ui-ux` | Designer-turned-developer UI/UX expertise | (silent activation) |
 | `git-master` | Git expert for atomic commits and history | (silent activation) |
 | `tdd` | TDD enforcement: test-first development | `/oh-my-claudecode:tdd` |
@@ -264,8 +264,8 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | `note` | Save notes to compaction-resilient notepad | `/oh-my-claudecode:note` |
 | `cancel` | Unified cancellation for all modes | `/oh-my-claudecode:cancel` |
 | `omc-setup` | One-time setup wizard | `/oh-my-claudecode:omc-setup` |
-| `doctor` | Diagnose and fix installation issues | `/oh-my-claudecode:doctor` |
-| `help` | Show OMC usage guide | `/oh-my-claudecode:help` |
+| `omc-doctor` | Diagnose and fix installation issues | `/oh-my-claudecode:omc-doctor` |
+| `omc-help` | Show OMC usage guide | `/oh-my-claudecode:omc-help` |
 | `hud` | Configure HUD statusline | `/oh-my-claudecode:hud` |
 | `release` | Automated release workflow | `/oh-my-claudecode:release` |
 | `mcp-setup` | Configure MCP servers | `/oh-my-claudecode:mcp-setup` |
@@ -287,7 +287,7 @@ All skills are available as slash commands with the prefix `/oh-my-claudecode:`.
 | `/oh-my-claudecode:ultrapilot <task>` | Parallel autopilot (3-5x faster) |
 | `/oh-my-claudecode:swarm <N>:<agent> <task>` | Coordinated agent swarm |
 | `/oh-my-claudecode:pipeline <stages>` | Sequential agent chaining |
-| `/oh-my-claudecode:ecomode <task>` | Token-efficient parallel execution |
+| `/oh-my-claudecode: <task>` | Token-efficient parallel execution |
 | `/oh-my-claudecode:ralph-init <task>` | Initialize PRD for structured task tracking |
 | `/oh-my-claudecode:ralph <task>` | Self-referential loop until task completion |
 | `/oh-my-claudecode:ultraqa <goal>` | Autonomous QA cycling workflow |
@@ -297,14 +297,14 @@ All skills are available as slash commands with the prefix `/oh-my-claudecode:`.
 | `/oh-my-claudecode:deepsearch <query>` | Thorough multi-strategy codebase search |
 | `/oh-my-claudecode:deepinit [path]` | Index codebase with hierarchical AGENTS.md files |
 | `/oh-my-claudecode:analyze <target>` | Deep analysis and investigation |
-| `/oh-my-claudecode:research <topic>` | Parallel research orchestration |
+| `/oh-my-claudecode:sciomc <topic>` | Parallel research orchestration |
 | `/oh-my-claudecode:tdd <feature>` | TDD workflow enforcement |
 | `/oh-my-claudecode:learner` | Extract reusable skill from session |
 | `/oh-my-claudecode:note <content>` | Save notes to notepad.md |
 | `/oh-my-claudecode:cancel` | Unified cancellation |
 | `/oh-my-claudecode:omc-setup` | One-time setup wizard |
-| `/oh-my-claudecode:doctor` | Diagnose and fix installation issues |
-| `/oh-my-claudecode:help` | Show OMC usage guide |
+| `/oh-my-claudecode:omc-doctor` | Diagnose and fix installation issues |
+| `/oh-my-claudecode:omc-help` | Show OMC usage guide |
 | `/oh-my-claudecode:hud` | Configure HUD statusline |
 | `/oh-my-claudecode:release` | Automated release workflow |
 | `/oh-my-claudecode:mcp-setup` | Configure MCP servers |
@@ -325,7 +325,7 @@ Oh-my-claudecode includes 31 lifecycle hooks that enhance Claude Code's behavior
 | `ultrapilot` | Parallel autopilot with file ownership |
 | `ultraqa` | QA cycling until goal met |
 | `swarm` | Coordinated multi-agent with SQLite task claiming |
-| `mode-registry` | Tracks active execution mode (incl. ecomode) |
+| `mode-registry` | Tracks active execution mode (incl. ) |
 | `persistent-mode` | Maintains mode state across sessions |
 
 ### Core Hooks
@@ -380,7 +380,7 @@ Just include these words anywhere in your prompt to activate enhanced modes:
 | Keyword | Effect |
 |---------|--------|
 | `ultrawork`, `ulw`, `uw` | Activates parallel agent orchestration |
-| `ecomode`, `eco`, `efficient`, `save-tokens`, `budget` | Token-efficient parallel execution |
+| ``, `eco`, `efficient`, `save-tokens`, `budget` | Token-efficient parallel execution |
 | `autopilot`, `build me`, `I want a` | Full autonomous execution |
 | `ultrapilot`, `parallel build`, `swarm build` | Parallel autopilot (3-5x faster) |
 | `ralph`, `don't stop`, `must complete` | Persistence until verified complete |
@@ -388,7 +388,7 @@ Just include these words anywhere in your prompt to activate enhanced modes:
 | `ralplan` | Iterative planning consensus |
 | `search`, `find`, `locate` | Enhanced search mode |
 | `analyze`, `investigate`, `debug` | Deep analysis mode |
-| `research`, `analyze data`, `statistics` | Parallel research orchestration |
+| `sciomc` | Parallel research orchestration |
 | `tdd`, `test first`, `red green` | TDD workflow enforcement |
 | `swarm N agents` | Coordinated agent swarm |
 | `pipeline`, `chain agents` | Sequential agent chaining |
@@ -635,7 +635,7 @@ Enable detailed cost tracking in your status line:
 ### Diagnose Installation Issues
 
 ```bash
-/oh-my-claudecode:doctor
+/oh-my-claudecode:omc-doctor
 ```
 
 Checks for:
@@ -692,7 +692,7 @@ Available presets: `minimal`, `focused`, `full`, `dense`, `analytics`, `opencode
 | Hooks not executing | Check hook permissions: `chmod +x ~/.claude/hooks/**/*.sh` |
 | Agents not delegating | Verify CLAUDE.md is loaded: check `./.claude/CLAUDE.md` or `~/.claude/CLAUDE.md` |
 | LSP tools not working | Install language servers: `npm install -g typescript-language-server` |
-| Token limit errors | Use `/oh-my-claudecode:ecomode` for token-efficient execution |
+| Token limit errors | Use `/oh-my-claudecode:` for token-efficient execution |
 
 ### Auto-Update
 
@@ -714,7 +714,7 @@ curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claudecode/main/s
 Or manually:
 
 ```bash
-rm ~/.claude/agents/{architect,researcher,explore,designer,writer,vision,critic,analyst,executor,qa-tester}.md
+rm ~/.claude/agents/{architect,document-specialist,explore,designer,writer,vision,critic,analyst,executor,qa-tester}.md
 rm ~/.claude/commands/{analyze,autopilot,deepsearch,plan,review,ultrawork}.md
 ```
 

@@ -102,7 +102,7 @@ Each pipeline stage uses **specialized agents** -- not just executors. The lead 
 
 1. **The lead picks agents per stage, not the user.** The user's `N:agent-type` parameter only overrides the `team-exec` stage worker type. All other stages use stage-appropriate specialists.
 2. **MCP providers complement Claude agents.** Route analysis/review to Codex (`ask_codex`) and UI/large-context work to Gemini (`ask_gemini`) when available. MCP workers are one-shot and don't participate in team communication.
-3. **Cost mode affects model tier.** In ecomode, downgrade: `opus` agents to `sonnet`, `sonnet` to `haiku` where quality permits. `team-verify` always uses at least `sonnet`.
+3. **Cost mode affects model tier.** In downgrade: `opus` agents to `sonnet`, `sonnet` to `haiku` where quality permits. `team-verify` always uses at least `sonnet`.
 4. **Risk level escalates review.** Security-sensitive or >20 file changes must include `security-reviewer` + `code-reviewer` (opus) in `team-verify`.
 
 ### Stage Entry/Exit Criteria

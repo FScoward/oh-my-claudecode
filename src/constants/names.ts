@@ -12,7 +12,6 @@ export const MODES = {
   ULTRAWORK: 'ultrawork',
   ULTRAPILOT: 'ultrapilot',
   ULTRAQA: 'ultraqa',
-  ECOMODE: 'ecomode',
   TEAM: 'team',
   PIPELINE: 'pipeline',
 } as const;

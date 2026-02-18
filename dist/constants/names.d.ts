@@ -10,7 +10,6 @@ export declare const MODES: {
     readonly ULTRAWORK: "ultrawork";
     readonly ULTRAPILOT: "ultrapilot";
     readonly ULTRAQA: "ultraqa";
-    readonly ECOMODE: "ecomode";
     readonly TEAM: "team";
     readonly PIPELINE: "pipeline";
 };

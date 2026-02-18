@@ -1,6 +1,6 @@
 ---
 name: cancel
-description: Cancel any active OMC mode (autopilot, ralph, ultrawork, ecomode, ultraqa, swarm, ultrapilot, pipeline, team)
+description: Cancel any active OMC mode (autopilot, ralph, ultrawork, ultraqa, swarm, ultrapilot, pipeline, team)
 ---
 
 # Cancel Skill
@@ -44,8 +44,8 @@ Or say: "cancelomc", "stopomc"
 - The default cleanup flow calls `state_clear` with the session id to remove only the matching session files; modes stay bound to their originating session.
 
 Active modes are still cancelled in dependency order:
-1. Autopilot (includes linked ralph/ultraqa/ecomode cleanup)
-2. Ralph (cleans its linked ultrawork or ecomode)
+1. Autopilot (includes linked ralph/ultraqa/ cleanup)
+2. Ralph (cleans its linked ultrawork or )
 3. Ultrawork (standalone)
 4. Ecomode (standalone)
 5. UltraQA (standalone)
@@ -81,7 +81,7 @@ Legacy compatibility list (removed only under `--force`/`--all`):
 - `.omc/state/ralph-plan-state.json`
 - `.omc/state/ralph-verification.json`
 - `.omc/state/ultrawork-state.json`
-- `.omc/state/ecomode-state.json`
+- `.omc/state/-state.json`
 - `.omc/state/ultraqa-state.json`
 - `.omc/state/swarm.db`
 - `.omc/state/swarm.db-wal`

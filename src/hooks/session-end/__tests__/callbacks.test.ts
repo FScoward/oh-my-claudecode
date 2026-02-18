@@ -37,7 +37,7 @@ function createTestMetrics(overrides?: Partial<SessionMetrics>): SessionMetrics 
     duration_ms: 3600000, // 1 hour
     agents_spawned: 5,
     agents_completed: 4,
-    modes_used: ['ultrawork', 'ecomode'],
+    modes_used: ['ultrawork'],
     ...overrides,
   };
 }
@@ -52,7 +52,6 @@ describe('formatSessionSummary', () => {
     expect(summary).toContain('clear');
     expect(summary).toContain('5');
     expect(summary).toContain('4');
-    expect(summary).toContain('ultrawork, ecomode');
   });
 
   it('handles unknown duration', () => {

@@ -8,7 +8,7 @@
 | Parallel autonomous (3-5x faster) | `ultrapilot` | "ultrapilot", "parallel build" |
 | Persistence until verified done | `ralph` | "ralph", "don't stop" |
 | Parallel execution, manual oversight | `ultrawork` | "ulw", "ultrawork" |
-| Cost-efficient execution | `ecomode` (modifier) | "eco", "budget" |
+| Cost-efficient execution | `` (modifier) | "eco", "budget" |
 | Many similar independent tasks | `swarm` | "swarm N agents" |
 
 ## If You're Confused
@@ -24,7 +24,7 @@ Want autonomous execution?
 │   └── NO: autopilot (sequential with ralph phases)
 └── NO: Want parallel execution with manual oversight?
     ├── YES: Do you want cost optimization?
-    │   ├── YES: ecomode + ultrawork
+    │   ├── YES:  + ultrawork
     │   └── NO: ultrawork alone
     └── NO: Want persistence until verified done?
         ├── YES: ralph (persistence + ultrawork + verification)
@@ -43,7 +43,7 @@ Have many similar independent tasks (e.g., "fix 47 errors")?
 | "Fix all 47 TypeScript errors" | swarm | Many independent similar tasks |
 | "Refactor auth module thoroughly" | ralph | Need persistence + verification |
 | "Quick parallel execution" | ultrawork | Manual oversight preferred |
-| "Save tokens while fixing errors" | ecomode + ultrawork | Cost-conscious parallel |
+| "Save tokens while fixing errors" |  + ultrawork | Cost-conscious parallel |
 | "Don't stop until done" | ralph | Persistence keyword detected |
 
 ## Mode Types
@@ -64,7 +64,7 @@ These are used by other modes:
 
 ### Modifier Modes
 These modify how other modes work:
-- **ecomode**: Changes model routing to prefer cheaper tiers
+- ****: Changes model routing to prefer cheaper tiers
 
 ## Valid Combinations
 
@@ -79,4 +79,4 @@ These modify how other modes work:
 | Combination | Why Invalid |
 |-------------|-------------|
 | `autopilot ultrapilot` | Both are standalone - use one |
-| `ecomode` alone | Needs an execution mode to modify |
+| `` alone | Needs an execution mode to modify |

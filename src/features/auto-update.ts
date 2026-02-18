@@ -125,13 +125,6 @@ export interface OMCConfig {
     /** Inject usage instructions at session start (default: true) */
     injectInstructions?: boolean;
   };
-  /** Preferred execution mode for parallel work (set by omc-setup Step 3.7) */
-  defaultExecutionMode?: 'ultrawork' | 'ecomode';
-  /** Ecomode-specific configuration */
-  ecomode?: {
-    /** Whether ecomode is enabled (default: true). Set to false to disable ecomode completely. */
-    enabled?: boolean;
-  };
   /** Whether initial setup has been completed (ISO timestamp) */
   setupCompleted?: string;
   /** Version of setup wizard that was completed */
@@ -140,6 +133,8 @@ export interface OMCConfig {
   stopHookCallbacks?: StopHookCallbacksConfig;
   /** Multi-platform lifecycle notification configuration */
   notifications?: NotificationConfig;
+  /** Named notification profiles (keyed by profile name) */
+  notificationProfiles?: Record<string, NotificationConfig>;
   /** Whether HUD statusline is enabled (default: true). Set to false to skip HUD installation. */
   hudEnabled?: boolean;
   /** Whether to prompt for upgrade at session start when a new version is available (default: true).
@@ -165,12 +160,11 @@ export function getOMCConfig(): OMCConfig {
       configVersion: config.configVersion,
       taskTool: config.taskTool,
       taskToolConfig: config.taskToolConfig,
-      defaultExecutionMode: config.defaultExecutionMode,
-      ecomode: config.ecomode,
       setupCompleted: config.setupCompleted,
       setupVersion: config.setupVersion,
       stopHookCallbacks: config.stopHookCallbacks,
       notifications: config.notifications,
+      notificationProfiles: config.notificationProfiles,
       hudEnabled: config.hudEnabled,
       autoUpgradePrompt: config.autoUpgradePrompt,
     };
@@ -193,16 +187,6 @@ export function isSilentAutoUpdateEnabled(): boolean {
  */
 export function isAutoUpgradePromptEnabled(): boolean {
   return getOMCConfig().autoUpgradePrompt !== false;
-}
-
-/**
- * Check if ecomode is enabled
- * Returns true by default if not explicitly disabled
- */
-export function isEcomodeEnabled(): boolean {
-  const config = getOMCConfig();
-  // Default to true if not configured
-  return config.ecomode?.enabled !== false;
 }
 
 /**

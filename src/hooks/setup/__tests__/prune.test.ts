@@ -29,13 +29,11 @@ describe('pruneOldStateFiles', () => {
   }
 
   it('should prune old non-mode state files', () => {
-    writeStateFile('ecomode-state.json', { active: false }, 10);
     writeStateFile('some-other-state.json', { data: true }, 10);
 
     const deleted = pruneOldStateFiles(testDir, 7);
 
-    expect(deleted).toBe(2);
-    expect(existsSync(join(stateDir, 'ecomode-state.json'))).toBe(false);
+    expect(deleted).toBe(1);
     expect(existsSync(join(stateDir, 'some-other-state.json'))).toBe(false);
   });
 

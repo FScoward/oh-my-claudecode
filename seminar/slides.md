@@ -606,7 +606,7 @@ Note: Ecomode tries the cheapest option first and only escalates if that fails.
 
 **Trigger:**
 ```
-eco, ecomode, efficient, save-tokens, budget
+eco, efficient, save-tokens, budget
 ```
 
 Note: The key insight is that 80% of tasks can be done by Haiku - you only need Opus for truly complex reasoning.
@@ -1050,7 +1050,7 @@ By Model:
 By Mode:
   autopilot:  45% of cost
   ultrawork:  30% of cost
-  ecomode:    10% of cost
+  :    10% of cost
   other:      15% of cost
 
 Top 5 Expensive Sessions:
@@ -1135,7 +1135,7 @@ Note: Zero learning curve means you can start using OMC immediately after instal
 // ~/.claude/settings.json
 {
   "omc": {
-    "defaultExecutionMode": "ultrawork",  // or "ecomode"
+    "defaultExecutionMode": "ultrawork",  // or ""
     "autopilot": {
       "maxIterations": 10,
       "maxQaCycles": 5,
@@ -1174,7 +1174,7 @@ Note: Most users never need to configure anything - defaults work well for typic
 | **Documentation generation** | swarm:writer | Parallel doc writing |
 | **Bug triage & fixing** | swarm:executor | Many independent fixes |
 | **Security audit** | pipeline:security | Structured review process |
-| **Exploratory prototyping** | ecomode | Budget-conscious iteration |
+| **Exploratory prototyping** |  | Budget-conscious iteration |
 
 Note: Matching the right mode to the task type is key to getting the most out of OMC.
 
@@ -1206,8 +1206,8 @@ npm install -g oh-my-claude-sisyphus
 
 **Getting Help**
 ```
-/oh-my-claudecode:help    - Usage guide
-/oh-my-claudecode:doctor  - Diagnose issues
+/oh-my-claudecode:omc-help    - Usage guide
+/oh-my-claudecode:omc-doctor  - Diagnose issues
 ```
 
 Note: The GitHub repo has all documentation, examples, and issue tracking.
@@ -1225,7 +1225,7 @@ Note: The GitHub repo has all documentation, examples, and issue tracking.
 | How do I stop a runaway autopilot? | Say "stop", "cancel", or `/oh-my-claudecode:cancel` |
 | Why is my HUD not showing? | Run `/oh-my-claudecode:hud setup` |
 | Can I create custom agents? | Yes, add `.md` files to `agents/` directory |
-| Is there a cost limit? | No built-in limit, but ecomode helps control costs |
+| Is there a cost limit? | No built-in limit, but  helps control costs |
 
 **Questions?**
 
@@ -1307,7 +1307,7 @@ autopilot: build something amazing
 | ultrapilot | Parallel autopilot | "ultrapilot", "parallel build" |
 | ralph | Persistence mode | "ralph", "don't stop" |
 | ultrawork | Maximum parallelism | "ulw", "ultrawork" |
-| ecomode | Token-efficient mode | "eco", "budget" |
+|  | Token-efficient mode | "eco", "budget" |
 | swarm | Coordinated agents | `/swarm N:agent` |
 | pipeline | Sequential chaining | `/pipeline preset` |
 | plan | Planning interview | "plan the" |
@@ -1355,7 +1355,7 @@ autopilot: build something amazing
 | `autopilot:` | `/oh-my-claudecode:autopilot` | Full autonomous mode |
 | `ralph:` | `/oh-my-claudecode:ralph` | Persistence mode |
 | `ulw` | `/oh-my-claudecode:ultrawork` | Parallel execution |
-| `eco:` | `/oh-my-claudecode:ecomode` | Token-efficient mode |
+| `eco:` | `/oh-my-claudecode:` | Token-efficient mode |
 | `plan` | `/oh-my-claudecode:plan` | Planning interview |
 
 **Combinations:**

@@ -275,10 +275,10 @@
 **When to Use** (Slide 23)
 - "Perfect for: Budget-conscious work, large batch operations, CI/CD integration"
 - "Not ideal for: Time-critical work, complex reasoning tasks, when quality matters more than cost"
-- "If you're working on open-source with limited API budget, ecomode is your mode."
+- "If you're working on open-source with limited API budget is your mode."
 
 **Cost Comparison**
-- "Real numbers: Fixing 50 TypeScript errors with ultrawork: ~200K tokens ($2.40). Same task with ecomode: ~85K tokens ($1.02)."
+- "Real numbers: Fixing 50 TypeScript errors with ultrawork: ~200K tokens ($2.40). Same task with : ~85K tokens ($1.02)."
 - "You're trading some speed and sophistication for cost. Sometimes that's exactly the right tradeoff."
 
 ### Mode Comparison Table (Quick Reference)
@@ -296,7 +296,7 @@
 
 ### Audience Engagement
 - "Quick question: Which mode sounds most useful for YOUR daily work?" (Take 2-3 responses)
-- "The beauty is you don't have to memorize this. Say 'fast parallel fixes' and OMC activates ultrawork. Say 'efficient batch fixes' and it activates ecomode."
+- "The beauty is you don't have to memorize this. Say 'fast parallel fixes' and OMC activates ultrawork. Say 'efficient batch fixes' and it activates ."
 - Watch for confused faces during technical explanations - offer to elaborate if needed
 
 ---
@@ -549,10 +549,10 @@ Narrate:
 - "Say 'build me a dashboard' → autopilot activates"
 - "Say 'don't stop until done' → ralph activates"
 - "Say 'fix all errors fast' → ultrawork activates"
-- "Say 'efficient batch fixes' → ecomode activates"
+- "Say 'efficient batch fixes' →  activates"
 - ""
 - "Power users have shortcuts:"
-- "`ulw` = ultrawork, `eco` = ecomode, `ralplan` = ralph + planning"
+- "`ulw` = ultrawork, `eco` = `ralplan` = ralph + planning"
 - "But shortcuts are optional. Natural language is first-class."
 
 **The HUD** (Slide 35)
@@ -580,7 +580,7 @@ Narrate:
 **Cost Analytics** (Slide 37)
 - "OMC tracks token usage per session:"
 - "See exactly how much each mode costs"
-- "Compare ultrawork vs ecomode for your workload"
+- "Compare ultrawork vs  for your workload"
 - "Audit logs at `.omc/logs/delegation-audit.jsonl`"
 - "Know your costs before they surprise you."
 
@@ -625,7 +625,7 @@ claude-code "autopilot: build me a todo app"
 
 **What Setup Does** (Slide 40)
 - "The setup wizard configures:"
-- "  Default execution mode (ultrawork or ecomode)"
+- "  Default execution mode (ultrawork or )"
 - "  HUD installation (optional)"
 - "  Analytics preferences (optional)"
 - "  Agent customizations (optional)"
@@ -658,7 +658,7 @@ claude-code "autopilot: build me a todo app"
 **The Big Picture** (Slide 41)
 - "OMC transforms Claude Code from a single assistant into a coordinated team."
 - "You go from micromanaging every step to stating goals and getting results."
-- "The five execution modes cover everything: greenfield (autopilot), parallel (ultrawork/ultrapilot), batch (swarm), sequential (pipeline), budget (ecomode)."
+- "The five execution modes cover everything: greenfield (autopilot), parallel (ultrawork/ultrapilot), batch (swarm), sequential (pipeline), budget ()."
 - "28 agents with 3-tier model routing save you 30-50% on costs while getting work done faster."
 
 **Resources** (Slide 42)
@@ -772,7 +772,7 @@ The codebase exploration works universally since it uses grep, glob, and LSP und
 
 But if you want to be explicit:
 - NEW FEATURE, GREENFIELD: autopilot or ultrapilot
-- PARALLEL FIXES: ultrawork (speed) or ecomode (cost)
+- PARALLEL FIXES: ultrawork (speed) or  (cost)
 - BATCH HOMOGENEOUS TASKS: swarm
 - SEQUENTIAL WORKFLOW: pipeline
 - MUST COMPLETE: ralph
@@ -780,7 +780,7 @@ But if you want to be explicit:
 The magic keywords make it easy:
 - 'build me a...' → autopilot
 - 'fast parallel' → ultrawork
-- 'efficient batch' → ecomode
+- 'efficient batch' → 
 - 'don't stop' → ralph
 
 After a week of use, you'll develop intuition. But day one? Just describe the goal naturally."

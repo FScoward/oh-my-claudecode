@@ -214,7 +214,7 @@ describe('getSessionStartTime', () => {
     });
 
     // Valid legacy timestamp
-    writeState('ecomode-state.json', {
+    writeState('ralph-state-valid.json', {
       active: true,
       started_at: '2026-02-11T14:00:00.000Z',
     });

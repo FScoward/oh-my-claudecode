@@ -15,7 +15,7 @@ This guide documents all screenshots needed for the seminar presentation, with d
 | `planning-interview.png` | 32 | MEDIUM | Live capture |
 | `swarm-agents.png` | 16 | MEDIUM | Live capture |
 | `agent-tiers.png` | 25 | LOW | Create diagram |
-| `ecomode-savings.png` | 22 | LOW | Mock data viz |
+| `-savings.png` | 22 | LOW | Mock data viz |
 
 ---
 
@@ -927,9 +927,9 @@ Selection Algorithm:
 
 ---
 
-### 10. `ecomode-savings.png` (Slide 22)
+### 10. `-savings.png` (Slide 22)
 
-**Description:** Visual comparison of token usage between standard execution and ecomode.
+**Description:** Visual comparison of token usage between standard execution and .
 
 **Creation Method:** Create as data visualization (not live capture).
 
@@ -1108,6 +1108,6 @@ Before seminar day:
 - ASCII mockups can serve as standalone visuals if needed
 - Consider creating animated GIFs for autopilot and pipeline flows
 - Test readability on projector before seminar
-- Have backup static diagrams for agent-tiers and ecomode-savings
+- Have backup static diagrams for agent-tiers and -savings
 
 For questions or issues capturing screenshots, refer to the ASCII mockups as reference or create diagrams using the layout shown.

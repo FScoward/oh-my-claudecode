@@ -79,13 +79,6 @@ export interface OMCConfig {
         /** Inject usage instructions at session start (default: true) */
         injectInstructions?: boolean;
     };
-    /** Preferred execution mode for parallel work (set by omc-setup Step 3.7) */
-    defaultExecutionMode?: 'ultrawork' | 'ecomode';
-    /** Ecomode-specific configuration */
-    ecomode?: {
-        /** Whether ecomode is enabled (default: true). Set to false to disable ecomode completely. */
-        enabled?: boolean;
-    };
     /** Whether initial setup has been completed (ISO timestamp) */
     setupCompleted?: string;
     /** Version of setup wizard that was completed */
@@ -94,6 +87,8 @@ export interface OMCConfig {
     stopHookCallbacks?: StopHookCallbacksConfig;
     /** Multi-platform lifecycle notification configuration */
     notifications?: NotificationConfig;
+    /** Named notification profiles (keyed by profile name) */
+    notificationProfiles?: Record<string, NotificationConfig>;
     /** Whether HUD statusline is enabled (default: true). Set to false to skip HUD installation. */
     hudEnabled?: boolean;
     /** Whether to prompt for upgrade at session start when a new version is available (default: true).
@@ -113,11 +108,6 @@ export declare function isSilentAutoUpdateEnabled(): boolean;
  * Returns true by default - users must explicitly opt out
  */
 export declare function isAutoUpgradePromptEnabled(): boolean;
-/**
- * Check if ecomode is enabled
- * Returns true by default if not explicitly disabled
- */
-export declare function isEcomodeEnabled(): boolean;
 /**
  * Check if team feature is enabled
  * Returns false by default - requires explicit opt-in

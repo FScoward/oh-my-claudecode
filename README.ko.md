@@ -51,7 +51,7 @@ autopilot: build a REST API for managing tasks
 업데이트 후 문제가 발생하면, 이전 플러그인 캐시를 정리하세요:
 
 ```bash
-/oh-my-claudecode:doctor
+/oh-my-claudecode:omc-doctor
 ```
 
 <h1 align="center">당신의 Claude가 스테로이드를 맞았습니다.</h1>

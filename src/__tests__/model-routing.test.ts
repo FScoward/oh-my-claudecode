@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   extractLexicalSignals,
   extractStructuralSignals,
@@ -636,6 +636,7 @@ describe('Routing Rules', () => {
 // ============ Router Tests ============
 
 describe('Router', () => {
+
   describe('routeTask', () => {
     it('should route simple task to LOW tier', () => {
       const context: RoutingContext = {
@@ -712,6 +713,18 @@ describe('Router', () => {
       expect(decision.confidence).toBeGreaterThan(0);
       expect(decision.confidence).toBeLessThanOrEqual(1);
     });
+
+    it('should clamp LOW tier to MEDIUM when minTier=MEDIUM', () => {
+      const context: RoutingContext = {
+        taskPrompt: 'Find the config file',
+      };
+      const decision = routeTask(context, { minTier: 'MEDIUM' });
+
+      expect(decision.tier).toBe('MEDIUM');
+      expect(decision.modelType).toBe('sonnet');
+      expect(decision.reasons.join(' ')).toContain('Min tier enforced');
+    });
+
   });
 
   describe('escalateModel', () => {

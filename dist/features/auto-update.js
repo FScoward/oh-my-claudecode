@@ -72,12 +72,11 @@ export function getOMCConfig() {
             configVersion: config.configVersion,
             taskTool: config.taskTool,
             taskToolConfig: config.taskToolConfig,
-            defaultExecutionMode: config.defaultExecutionMode,
-            ecomode: config.ecomode,
             setupCompleted: config.setupCompleted,
             setupVersion: config.setupVersion,
             stopHookCallbacks: config.stopHookCallbacks,
             notifications: config.notifications,
+            notificationProfiles: config.notificationProfiles,
             hudEnabled: config.hudEnabled,
             autoUpgradePrompt: config.autoUpgradePrompt,
         };
@@ -99,15 +98,6 @@ export function isSilentAutoUpdateEnabled() {
  */
 export function isAutoUpgradePromptEnabled() {
     return getOMCConfig().autoUpgradePrompt !== false;
-}
-/**
- * Check if ecomode is enabled
- * Returns true by default if not explicitly disabled
- */
-export function isEcomodeEnabled() {
-    const config = getOMCConfig();
-    // Default to true if not configured
-    return config.ecomode?.enabled !== false;
 }
 /**
  * Check if team feature is enabled

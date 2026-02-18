@@ -122,7 +122,7 @@ autopilot (autonomous execution)
  \-- includes: ralph
      \-- includes: ultrawork (this skill)
 
-ecomode (token efficiency)
+ (token efficiency)
  \-- modifies: ultrawork's model selection
 ```
 

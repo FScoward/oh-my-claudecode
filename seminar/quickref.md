@@ -61,8 +61,8 @@
 |---------|---------|
 | `/oh-my-claudecode:omc-setup` | Initial setup wizard |
 | `/oh-my-claudecode:hud setup` | Enable HUD statusline |
-| `/oh-my-claudecode:doctor` | Diagnose issues |
-| `/oh-my-claudecode:help` | Show usage guide |
+| `/oh-my-claudecode:omc-doctor` | Diagnose issues |
+| `/oh-my-claudecode:omc-help` | Show usage guide |
 | `/oh-my-claudecode:cancel` | Stop current operation |
 | `/oh-my-claudecode:note` | Save compaction-resilient note |
 | `/oh-my-claudecode:learner` | Extract reusable skill |
@@ -104,7 +104,7 @@
 **File:** `~/.claude/.omc-config.json`
 ```json
 {
-  "defaultExecutionMode": "ultrawork",  // or "ecomode"
+  "defaultExecutionMode": "ultrawork",  // or ""
   "maxParallelAgents": 5,
   "verificationEnabled": true
 }

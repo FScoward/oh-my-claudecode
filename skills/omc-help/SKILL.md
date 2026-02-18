@@ -1,5 +1,5 @@
 ---
-name: help
+name: omc-help
 description: Guide on using oh-my-claudecode plugin
 ---
 
@@ -124,8 +124,8 @@ fi
 
 Based on patterns found, output recommendations:
 
-**If high Opus usage (>40%) and no ecomode:**
-- "Consider using ecomode for routine tasks to save tokens"
+**If high Opus usage (>40%) and no :**
+- "Consider using  for routine tasks to save tokens"
 
 **If no pipeline usage:**
 - "Try /pipeline for code review workflows"
@@ -159,11 +159,11 @@ TOP AGENTS:
 3. explore (67 uses)
 
 UNDERUTILIZED FEATURES:
-- ecomode: 0 uses (could save ~30% on routine tasks)
+- : 0 uses (could save ~30% on routine tasks)
 - pipeline: 0 uses (great for review workflows)
 
 RECOMMENDATIONS:
-1. Set defaultExecutionMode: "ecomode" to save tokens
+1. Set defaultExecutionMode: "" to save tokens
 2. Try /pipeline review for PR reviews
 3. Use explore agent before architect to save context
 ```

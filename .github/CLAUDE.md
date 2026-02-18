@@ -35,7 +35,7 @@ tests/                   # Test files
 ## When Responding to Issues
 
 ### Installation Issues
-- Recommend running `/oh-my-claudecode:doctor` to diagnose problems
+- Recommend running `/oh-my-claudecode:omc-doctor` to diagnose problems
 - Check if user installed via correct method: `/plugin marketplace add Yeachan-Heo/oh-my-claudecode`
 - Common issues: outdated Claude Code version, missing dependencies
 

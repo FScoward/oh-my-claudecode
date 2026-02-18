@@ -6,6 +6,10 @@
  * and respects the OMC_SKIP_HOOKS env kill-switch.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { execFileSync } from 'child_process';
 import { processHook, resetSkipHooksCache, requiredKeysForHook, } from '../bridge.js';
 // ============================================================================
 // Hook Routing Tests
@@ -19,6 +23,7 @@ describe('processHook - Routing Matrix', () => {
         resetSkipHooksCache();
     });
     afterEach(() => {
+        vi.restoreAllMocks();
         process.env = originalEnv;
         resetSkipHooksCache();
     });
@@ -106,6 +111,34 @@ describe('processHook - Routing Matrix', () => {
             };
             const result = await processHook('post-tool-use', input);
             expect(result.continue).toBe(true);
+        });
+        it('should activate ralph and linked ultrawork when Skill tool invokes ralph', async () => {
+            const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-ralph-'));
+            try {
+                execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+                const sessionId = 'test-session';
+                const input = {
+                    sessionId,
+                    toolName: 'Skill',
+                    toolInput: { skill: 'oh-my-claudecode:ralph' },
+                    directory: tempDir,
+                };
+                const result = await processHook('post-tool-use', input);
+                expect(result.continue).toBe(true);
+                const ralphPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ralph-state.json');
+                const ultraworkPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ultrawork-state.json');
+                expect(existsSync(ralphPath)).toBe(true);
+                expect(existsSync(ultraworkPath)).toBe(true);
+                const ralphState = JSON.parse(readFileSync(ralphPath, 'utf-8'));
+                const ultraworkState = JSON.parse(readFileSync(ultraworkPath, 'utf-8'));
+                expect(ralphState.active).toBe(true);
+                expect(ralphState.linked_ultrawork).toBe(true);
+                expect(ultraworkState.active).toBe(true);
+                expect(ultraworkState.linked_to_ralph).toBe(true);
+            }
+            finally {
+                rmSync(tempDir, { recursive: true, force: true });
+            }
         });
         it('should handle session-start and return continue:true', async () => {
             const input = {

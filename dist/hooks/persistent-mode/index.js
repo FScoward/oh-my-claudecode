@@ -12,9 +12,9 @@
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { getClaudeConfigDir } from '../../utils/paths.js';
-import { readUltraworkState, incrementReinforcement, deactivateUltrawork, getUltraworkPersistenceMessage } from '../ultrawork/index.js';
+import { readUltraworkState, writeUltraworkState, incrementReinforcement, deactivateUltrawork, getUltraworkPersistenceMessage } from '../ultrawork/index.js';
 import { resolveToWorktreeRoot } from '../../lib/worktree-paths.js';
-import { readRalphState, incrementRalphIteration, clearRalphState, getPrdCompletionStatus, getRalphContext, readVerificationState, recordArchitectFeedback, getArchitectVerificationPrompt, getArchitectRejectionContinuationPrompt, detectArchitectApproval, detectArchitectRejection, clearVerificationState } from '../ralph/index.js';
+import { readRalphState, writeRalphState, incrementRalphIteration, clearRalphState, getPrdCompletionStatus, getRalphContext, readVerificationState, recordArchitectFeedback, getArchitectVerificationPrompt, getArchitectRejectionContinuationPrompt, detectArchitectApproval, detectArchitectRejection, clearVerificationState } from '../ralph/index.js';
 import { checkIncompleteTodos, getNextPendingTodo, isUserAbort, isContextLimitStop } from '../todo-continuation/index.js';
 import { TODO_CONTINUATION_PROMPT } from '../../installer/hooks.js';
 import { isAutopilotActive } from '../autopilot/index.js';
@@ -188,6 +188,25 @@ async function checkRalphLoop(sessionId, directory) {
     if (state.session_id !== sessionId) {
         return null;
     }
+    // Self-heal linked ultrawork: if ralph is active and marked linked but ultrawork
+    // state is missing, recreate it so stop reinforcement cannot silently disappear.
+    if (state.linked_ultrawork) {
+        const ultraworkState = readUltraworkState(workingDir, sessionId);
+        if (!ultraworkState?.active) {
+            const now = new Date().toISOString();
+            const restoredState = {
+                active: true,
+                started_at: state.started_at || now,
+                original_prompt: state.prompt || 'Ralph loop task',
+                session_id: sessionId,
+                project_path: workingDir,
+                reinforcement_count: 0,
+                last_checked_at: now,
+                linked_to_ralph: true
+            };
+            writeUltraworkState(restoredState, workingDir, sessionId);
+        }
+    }
     // Check team pipeline state coordination
     // When team mode is active alongside ralph, respect team phase transitions
     const teamState = readTeamPipelineState(workingDir, sessionId);
@@ -290,15 +309,11 @@ async function checkRalphLoop(sessionId, directory) {
     }
     // Check max iterations
     if (state.iteration >= state.max_iterations) {
-        // Also deactivate ultrawork if it was active alongside ralph
-        clearRalphState(workingDir, sessionId);
-        clearVerificationState(workingDir, sessionId);
-        deactivateUltrawork(workingDir, sessionId);
-        return {
-            shouldBlock: false,
-            message: `[RALPH LOOP STOPPED] Max iterations (${state.max_iterations}) reached without completion. Consider reviewing the task requirements.`,
-            mode: 'none'
-        };
+        // Do not silently stop Ralph with unfinished work.
+        // Extend the limit and continue enforcement so user-visible cancellation
+        // remains the only explicit termination path.
+        state.max_iterations += 10;
+        writeRalphState(workingDir, state, sessionId);
     }
     // Read tool error before generating message
     const toolError = readLastToolError(workingDir);
@@ -461,7 +476,7 @@ export async function checkPersistentModes(sessionId, directory, stopContext // 
     const hasIncompleteTodos = todoResult.count > 0;
     // Priority 1: Ralph (explicit loop mode)
     const ralphResult = await checkRalphLoop(sessionId, workingDir);
-    if (ralphResult?.shouldBlock) {
+    if (ralphResult) {
         return ralphResult;
     }
     // Priority 1.5: Autopilot (full orchestration mode - higher than ultrawork, lower than ralph)
