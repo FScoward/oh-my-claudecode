@@ -4,7 +4,7 @@ import { DEFAULT_HUD_CONFIG } from '../../hud/types.js';
 function createMinimalContext(overrides = {}) {
     return {
         contextPercent: 30,
-        modelName: 'claude-sonnet-4.5',
+        modelName: 'claude-sonnet-4.6',
         ralph: null,
         ultrawork: null,
         prd: null,

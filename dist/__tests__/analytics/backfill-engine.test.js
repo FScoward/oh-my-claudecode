@@ -107,7 +107,7 @@ describe('BackfillEngine Integration', () => {
                     sessionId: 'session-1',
                     timestamp: '2026-01-24T01:00:00.000Z',
                     message: {
-                        model: 'claude-sonnet-4-5-20250929',
+                        model: 'claude-sonnet-4-6-20260217',
                         role: 'assistant',
                         usage: {
                             input_tokens: 100,
@@ -139,7 +139,7 @@ describe('BackfillEngine Integration', () => {
                     sessionId: session.id,
                     timestamp: '2026-01-24T01:00:00.000Z',
                     message: {
-                        model: 'claude-sonnet-4-5-20250929',
+                        model: 'claude-sonnet-4-6-20260217',
                         role: 'assistant',
                         usage: {
                             input_tokens: session.tokens,

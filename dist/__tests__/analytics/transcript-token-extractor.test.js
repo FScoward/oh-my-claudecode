@@ -7,7 +7,7 @@ describe('extractTokenUsage', () => {
             timestamp: '2026-01-24T05:07:46.325Z',
             sessionId: 'test-session-123',
             message: {
-                model: 'claude-sonnet-4-5-20250929',
+                model: 'claude-sonnet-4-6-20260217',
                 usage: {
                     input_tokens: 1000,
                     output_tokens: 500,
@@ -18,7 +18,7 @@ describe('extractTokenUsage', () => {
         };
         const result = extractTokenUsage(entry, 'test-session-123', 'test.jsonl');
         expect(result).not.toBeNull();
-        expect(result?.usage.modelName).toBe('claude-sonnet-4.5');
+        expect(result?.usage.modelName).toBe('claude-sonnet-4.6');
         expect(result?.usage.inputTokens).toBe(1000);
         expect(result?.usage.outputTokens).toBe(500);
         expect(result?.usage.cacheCreationTokens).toBe(200);
@@ -43,7 +43,7 @@ describe('extractTokenUsage', () => {
             timestamp: '2026-01-24T05:07:46.325Z',
             sessionId: 'test-session-123',
             message: {
-                model: 'claude-sonnet-4-5-20250929'
+                model: 'claude-sonnet-4-6-20260217'
             }
         };
         const result = extractTokenUsage(entry, 'test-session-123', 'test.jsonl');
@@ -72,7 +72,7 @@ describe('extractTokenUsage', () => {
     it('should normalize model names correctly', () => {
         const testCases = [
             { model: 'claude-opus-4-6-20260205', expected: 'claude-opus-4.6' },
-            { model: 'claude-sonnet-4-5-20250929', expected: 'claude-sonnet-4.5' },
+            { model: 'claude-sonnet-4-6-20260217', expected: 'claude-sonnet-4.6' },
             { model: 'claude-haiku-4-5-20251001', expected: 'claude-haiku-4' }
         ];
         testCases.forEach(({ model, expected }) => {
@@ -98,7 +98,7 @@ describe('extractTokenUsage', () => {
             timestamp: '2026-01-24T05:07:46.325Z',
             sessionId: 'test-session-123',
             message: {
-                model: 'claude-sonnet-4-5-20250929',
+                model: 'claude-sonnet-4-6-20260217',
                 usage: {
                     input_tokens: 100,
                     output_tokens: 50
@@ -126,7 +126,7 @@ describe('extractTokenUsage', () => {
             timestamp: '2026-01-24T05:07:46.325Z',
             sessionId: 'test-session-123',
             message: {
-                model: 'claude-sonnet-4-5-20250929',
+                model: 'claude-sonnet-4-6-20260217',
                 usage: {
                     input_tokens: 1000,
                     output_tokens: 1234 // ACTUAL value, not estimate
@@ -143,7 +143,7 @@ describe('extractTokenUsage', () => {
             timestamp: '2026-01-24T05:07:46.325Z',
             sessionId: 'test-session-123',
             message: {
-                model: 'claude-sonnet-4-5-20250929',
+                model: 'claude-sonnet-4-6-20260217',
                 usage: {
                     input_tokens: 100,
                     output_tokens: 50
@@ -160,7 +160,7 @@ describe('extractTokenUsage', () => {
             timestamp: '2026-01-24T05:07:46.325Z',
             sessionId: 'test-session-123',
             message: {
-                model: 'claude-sonnet-4-5-20250929',
+                model: 'claude-sonnet-4-6-20260217',
                 usage: {
                     input_tokens: 100,
                     output_tokens: 50

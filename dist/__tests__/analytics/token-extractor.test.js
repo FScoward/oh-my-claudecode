@@ -7,7 +7,7 @@ describe('TokenExtractor', () => {
             transcript_path: '/path/to/transcript.jsonl',
             cwd: '/home/user',
             model: {
-                id: 'claude-sonnet-4-5-20250929',
+                id: 'claude-sonnet-4-6-20260217',
                 display_name: 'Claude Sonnet 4.5'
             },
             context_window: {
@@ -23,11 +23,11 @@ describe('TokenExtractor', () => {
     });
     describe('extractTokens', () => {
         it('should extract tokens from StatuslineStdin without previous snapshot', () => {
-            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-6-20260217');
             expect(result.inputTokens).toBe(1000);
             expect(result.cacheCreationTokens).toBe(500);
             expect(result.cacheReadTokens).toBe(2000);
-            expect(result.modelName).toBe('claude-sonnet-4-5-20250929');
+            expect(result.modelName).toBe('claude-sonnet-4-6-20260217');
             expect(result.isEstimated).toBe(true);
             expect(result.timestamp).toBeDefined();
             expect(result.agentName).toBeUndefined();
@@ -39,7 +39,7 @@ describe('TokenExtractor', () => {
                 cacheReadTokens: 1000,
                 timestamp: '2026-01-24T00:00:00.000Z'
             };
-            const result = extractTokens(mockStdin, previousSnapshot, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(mockStdin, previousSnapshot, 'claude-sonnet-4-6-20260217');
             // Deltas: current - previous
             expect(result.inputTokens).toBe(400); // 1000 - 600
             expect(result.cacheCreationTokens).toBe(300); // 500 - 200
@@ -51,7 +51,7 @@ describe('TokenExtractor', () => {
             expect(result.outputTokens).toBe(300);
         });
         it('should estimate output tokens for Sonnet (40% ratio)', () => {
-            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-6-20260217');
             // 1000 input tokens * 40% = 400
             expect(result.outputTokens).toBe(400);
         });
@@ -66,17 +66,17 @@ describe('TokenExtractor', () => {
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0
             };
-            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-6-20260217');
             expect(result.outputTokens).toBe(0);
             expect(result.inputTokens).toBe(0);
         });
         it('should include agentName when provided', () => {
-            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-5-20250929', 'test-agent');
+            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-6-20260217', 'test-agent');
             expect(result.agentName).toBe('test-agent');
         });
         it('should handle missing usage data gracefully', () => {
             mockStdin.context_window.current_usage = undefined;
-            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(mockStdin, null, 'claude-sonnet-4-6-20260217');
             expect(result.inputTokens).toBe(0);
             expect(result.outputTokens).toBe(0);
             expect(result.cacheCreationTokens).toBe(0);
@@ -88,7 +88,7 @@ describe('TokenExtractor', () => {
                 ...mockStdin,
                 context_window: undefined
             };
-            const result = extractTokens(stdinWithoutContext, null, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(stdinWithoutContext, null, 'claude-sonnet-4-6-20260217');
             expect(result.inputTokens).toBe(0);
             expect(result.outputTokens).toBe(0);
             expect(result.cacheCreationTokens).toBe(0);
@@ -103,7 +103,7 @@ describe('TokenExtractor', () => {
                     current_usage: undefined
                 }
             };
-            const result = extractTokens(stdinWithoutUsage, null, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(stdinWithoutUsage, null, 'claude-sonnet-4-6-20260217');
             expect(result.inputTokens).toBe(0);
             expect(result.outputTokens).toBe(0);
             expect(result.cacheCreationTokens).toBe(0);
@@ -116,7 +116,7 @@ describe('TokenExtractor', () => {
                 cacheReadTokens: 3000,
                 timestamp: '2026-01-24T00:00:00.000Z'
             };
-            const result = extractTokens(mockStdin, previousSnapshot, 'claude-sonnet-4-5-20250929');
+            const result = extractTokens(mockStdin, previousSnapshot, 'claude-sonnet-4-6-20260217');
             // Should clamp to 0 if delta is negative
             expect(result.inputTokens).toBe(0); // max(0, 1000 - 2000)
         });
@@ -149,7 +149,7 @@ describe('TokenExtractor', () => {
                 transcript_path: '/path/to/transcript.jsonl',
                 cwd: '/home/user',
                 model: {
-                    id: 'claude-sonnet-4-5-20250929',
+                    id: 'claude-sonnet-4-6-20260217',
                     display_name: 'Claude Sonnet 4.5'
                 },
                 context_window: undefined

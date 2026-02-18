@@ -52,9 +52,9 @@ describe('transcript-parser', () => {
         it('handles malformed JSON lines gracefully with default warning', async () => {
             const tempPath = join(fixturesDir, 'malformed-test.jsonl');
             const content = [
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
                 'INVALID JSON LINE',
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
             ].join('\n');
             fs.writeFileSync(tempPath, content);
             const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
@@ -74,9 +74,9 @@ describe('transcript-parser', () => {
         it('handles malformed JSON lines gracefully with custom error handler', async () => {
             const tempPath = join(fixturesDir, 'malformed-custom-test.jsonl');
             const content = [
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
                 'INVALID JSON LINE',
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
             ].join('\n');
             fs.writeFileSync(tempPath, content);
             const errors = [];
@@ -153,10 +153,10 @@ describe('transcript-parser', () => {
         it('handles files with whitespace lines', async () => {
             const tempPath = join(fixturesDir, 'whitespace-test.jsonl');
             const content = [
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
                 '   ',
                 '\t\t',
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
             ].join('\n');
             fs.writeFileSync(tempPath, content);
             try {
@@ -178,7 +178,7 @@ describe('transcript-parser', () => {
                 sessionId: 'large-test',
                 timestamp: '2026-01-24T00:00:00.000Z',
                 message: {
-                    model: 'claude-sonnet-4-5-20250929',
+                    model: 'claude-sonnet-4-6-20260217',
                     role: 'assistant',
                     usage: {
                         input_tokens: 100,
@@ -250,9 +250,9 @@ describe('transcript-parser', () => {
         it('handles custom error handler', async () => {
             const tempPath = join(fixturesDir, 'malformed-load-test.jsonl');
             const content = [
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:00:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
                 'INVALID',
-                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-5-20250929","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+                '{"type":"assistant","sessionId":"test","timestamp":"2026-01-24T00:01:00.000Z","message":{"model":"claude-sonnet-4-6-20260217","role":"assistant","usage":{"input_tokens":20,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
             ].join('\n');
             fs.writeFileSync(tempPath, content);
             const errors = [];
