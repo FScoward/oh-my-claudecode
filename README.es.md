@@ -85,7 +85,6 @@ Múltiples estrategias para diferentes casos de uso - desde construcciones compl
 | **Ultrawork** | Paralelo | Máximo paralelismo para cualquier tarea |
 | **Ralph** | Persistente | Tareas que deben completarse totalmente |
 | **Ultrapilot** | 3-5x más rápido | Sistemas multi-componente |
-| **Ecomode** | Rápido + 30-50% más barato | Proyectos conscientes del presupuesto |
 | **Swarm** | Coordinado | Tareas independientes en paralelo |
 | **Pipeline** | Secuencial | Procesamiento multi-etapa |
 
@@ -97,7 +96,7 @@ Múltiples estrategias para diferentes casos de uso - desde construcciones compl
 
 ### Experiencia de Desarrollo
 
-- **Palabras clave mágicas** - `ralph`, `ulw`, `eco`, `plan` para control explícito
+- **Palabras clave mágicas** - `ralph`, `ulw`, `plan` para control explícito
 - **Barra de estado HUD** - Métricas de orquestación en tiempo real en tu barra de estado
 - **Aprendizaje de habilidades** - Extrae patrones reutilizables de tus sesiones
 - **Análisis y seguimiento de costos** - Comprende el uso de tokens en todas las sesiones
@@ -115,7 +114,6 @@ Atajos opcionales para usuarios avanzados. El lenguaje natural funciona bien sin
 | `autopilot` | Ejecución completamente autónoma | `autopilot: build a todo app` |
 | `ralph` | Modo persistencia | `ralph: refactor auth` |
 | `ulw` | Máximo paralelismo | `ulw fix all errors` |
-| `eco` | Ejecución eficiente en tokens | `eco: migrate database` |
 | `plan` | Entrevista de planificación | `plan the API` |
 | `ralplan` | Consenso de planificación iterativa | `ralplan this feature` |
 

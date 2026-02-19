@@ -60,7 +60,6 @@ The following skills have been **completely removed** in v3.5.3:
 | `cancel-ralph` | `/oh-my-claudecode:cancel` |
 | `cancel-ultrawork` | `/oh-my-claudecode:cancel` |
 | `cancel-ultraqa` | `/oh-my-claudecode:cancel` |
-| `cancel-` | `/oh-my-claudecode:cancel` |
 | `omc-default` | `/oh-my-claudecode:omc-setup --local` |
 | `omc-default-global` | `/oh-my-claudecode:omc-setup --global` |
 | `planner` | `/oh-my-claudecode:plan` |
@@ -618,20 +617,7 @@ Chain agents with data passing between stages:
 - `refactor` - explore → architect-medium → executor-high → qa-tester
 - `security` - explore → security-reviewer → executor → security-reviewer-low
 
-#### 4. Ecomode: Token-Efficient Execution
-
-Maximum parallelism with 30-50% token savings:
-
-```bash
-/oh-my-claudecode: "refactor the authentication system"
-```
-
-**Smart model routing:**
-- Simple tasks → Haiku (ultra-cheap)
-- Standard work → Sonnet (balanced)
-- Complex reasoning → Opus (when needed)
-
-#### 5. Unified Cancel Command
+#### 4. Unified Cancel Command
 
 Smart cancellation that auto-detects active mode:
 
@@ -647,7 +633,6 @@ Individual cancel commands are deprecated but still work:
 - `/oh-my-claudecode:cancel-ralph` (deprecated)
 - `/oh-my-claudecode:cancel-ultraqa` (deprecated)
 - `/oh-my-claudecode:cancel-ultrawork` (deprecated)
-- `/oh-my-claudecode:cancel-` (deprecated)
 - `/oh-my-claudecode:cancel-autopilot` (deprecated)
 
 Use `/oh-my-claudecode:cancel` instead.
@@ -681,12 +666,11 @@ When multiple execution mode keywords are present:
 **Conflict Resolution Priority:**
 | Priority | Condition | Result |
 |----------|-----------|--------|
-| 1 (highest) | Both explicit keywords present (e.g., "ulw eco fix errors") | `` wins (more token-restrictive) |
-| 2 | Single explicit keyword | That mode wins |
-| 3 | Generic "fast"/"parallel" only | Read from config (`defaultExecutionMode`) |
-| 4 (lowest) | No config file | Default to `ultrawork` |
+| 1 (highest) | Single explicit keyword | That mode wins |
+| 2 | Generic "fast"/"parallel" only | Read from config (`defaultExecutionMode`) |
+| 3 (lowest) | No config file | Default to `ultrawork` |
 
-**Explicit mode keywords:** `ulw`, `ultrawork`, `eco`, ``
+**Explicit mode keywords:** `ulw`, `ultrawork`
 **Generic keywords:** `fast`, `parallel`
 
 Users set their default mode preference via `/oh-my-claudecode:omc-setup`.
@@ -709,28 +693,11 @@ Set your preferred execution mode in `~/.claude/.omc-config.json`:
 
 ```json
 {
-  "defaultExecutionMode": "ultrawork"  // or ""
+  "defaultExecutionMode": "ultrawork"
 }
 ```
 
 When you use generic keywords like "fast" or "parallel" without explicit mode keywords, this setting determines which mode activates.
-
-#### Disable Ecomode / Low Tier Agents
-
-If you want to fully disable  keywords and LOW-tier (`haiku` / `*-low`) delegation:
-
-```json
-{
-  "": { "enabled": false },
-}
-```
-
-Equivalent CLI commands:
-
-```bash
-omc config- --disable
-omc config-agent-tiers --disable-low
-```
 
 ### Breaking Changes
 
@@ -742,7 +709,6 @@ Once upgraded, you automatically gain access to:
 - Ultrapilot (parallel autopilot)
 - Swarm coordination
 - Pipeline workflows
-- Ecomode execution
 - Unified cancel command
 - Explore-high agent
 
@@ -755,7 +721,6 @@ Once upgraded, you automatically gain access to:
 | Multi-component systems | `ultrapilot` | Parallel workers handle independent components |
 | Many small fixes | `swarm` | Atomic task claiming prevents duplicate work |
 | Sequential dependencies | `pipeline` | Data passes between stages |
-| Budget-conscious | `` | 30-50% token savings with smart routing |
 | Single complex task | `autopilot` | Full autonomous execution |
 | Must complete | `ralph` | Persistence guarantee |
 
@@ -764,8 +729,6 @@ Once upgraded, you automatically gain access to:
 **Explicit mode control (v3.4.0):**
 ```bash
 "ulw: fix all errors"           # ultrawork (explicit)
-"eco: refactor auth system"     #  (explicit)
-"ulw eco: migrate database"     #  wins (conflict resolution)
 "fast: implement feature"       # reads defaultExecutionMode config
 ```
 

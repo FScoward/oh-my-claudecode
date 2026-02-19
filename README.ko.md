@@ -85,7 +85,6 @@ autopilot: build a REST API for managing tasks
 | **Ultrawork** | 병렬 | 모든 작업에 최대 병렬화 |
 | **Ralph** | 지속적 | 반드시 완료해야 하는 작업 |
 | **Ultrapilot** | 3-5배 빠름 | 다중 컴포넌트 시스템 |
-| **Ecomode** | 빠름 + 30-50% 저렴 | 예산을 고려한 프로젝트 |
 | **Swarm** | 협조적 | 병렬 독립 작업 |
 | **Pipeline** | 순차적 | 다단계 처리 |
 
@@ -97,7 +96,7 @@ autopilot: build a REST API for managing tasks
 
 ### 개발자 경험
 
-- **매직 키워드** - 명시적 제어를 위한 `ralph`, `ulw`, `eco`, `plan`
+- **매직 키워드** - 명시적 제어를 위한 `ralph`, `ulw`, `plan`
 - **HUD 상태바** - 상태바에서 실시간 오케스트레이션 메트릭 확인
 - **스킬 학습** - 세션에서 재사용 가능한 패턴 추출
 - **분석 및 비용 추적** - 모든 세션의 토큰 사용량 이해
@@ -115,7 +114,6 @@ autopilot: build a REST API for managing tasks
 | `autopilot` | 완전 자율 실행 | `autopilot: build a todo app` |
 | `ralph` | 지속 모드 | `ralph: refactor auth` |
 | `ulw` | 최대 병렬화 | `ulw fix all errors` |
-| `eco` | 토큰 효율적 실행 | `eco: migrate database` |
 | `plan` | 계획 인터뷰 | `plan the API` |
 | `ralplan` | 반복적 계획 합의 | `ralplan this feature` |
 

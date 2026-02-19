@@ -110,7 +110,6 @@ Multiple strategies for different use cases — from Team-backed orchestration t
 | **Autopilot** | Autonomous execution (single lead agent) | End-to-end feature work with minimal ceremony |
 | **Ultrawork** | Maximum parallelism (non-team) | Burst parallel fixes/refactors where Team isn't needed |
 | **Ralph** | Persistent mode with verify/fix loops | Tasks that must complete fully (no silent partials) |
-| **Ecomode** | Token-efficient routing | Budget-conscious iteration |
 | **Pipeline** | Sequential, staged processing | Multi-step transformations with strict ordering |
 | **Swarm / Ultrapilot (legacy)** | Compatibility facades that route to **Team** | Existing workflows and older docs |
 
@@ -122,7 +121,7 @@ Multiple strategies for different use cases — from Team-backed orchestration t
 
 ### Developer Experience
 
-- **Magic keywords** - `ralph`, `ulw`, `eco`, `plan` for explicit control
+- **Magic keywords** - `ralph`, `ulw`, `plan` for explicit control
 - **HUD statusline** - Real-time orchestration metrics in your status bar
 - **Skill learning** - Extract reusable patterns from your sessions
 - **Analytics & cost tracking** - Understand token usage across all sessions
@@ -141,7 +140,6 @@ Optional shortcuts for power users. Natural language works fine without them.
 | `autopilot` | Full autonomous execution | `autopilot: build a todo app` |
 | `ralph` | Persistence mode | `ralph: refactor auth` |
 | `ulw` | Maximum parallelism | `ulw fix all errors` |
-| `eco` | Token-efficient execution | `eco: migrate database` |
 | `plan` | Planning interview | `plan the API` |
 | `ralplan` | Iterative planning consensus | `ralplan this feature` |
 | `swarm` | Legacy keyword (routes to Team) | `swarm 5 agents: fix lint errors` |

@@ -110,7 +110,6 @@ Nhiều chiến lược cho nhiều tình huống — từ điều phối dựa 
 | **Autopilot** | Thực thi tự động (một tác tử dẫn dắt) | Làm tính năng end-to-end với ít thao tác phụ |
 | **Ultrawork** | Song song tối đa (không dùng team) | Sửa lỗi/refactor kiểu burst song song khi không cần Team |
 | **Ralph** | Chế độ bền bỉ với vòng lặp verify/fix | Tác vụ bắt buộc hoàn tất đầy đủ (không có hoàn thành một phần âm thầm) |
-| **Ecomode** | Định tuyến tiết kiệm token | Lặp phát triển có cân nhắc ngân sách |
 | **Pipeline** | Xử lý tuần tự theo giai đoạn | Biến đổi nhiều bước cần thứ tự nghiêm ngặt |
 | **Swarm / Ultrapilot (cũ)** | Lớp tương thích chuyển sang **Team** | Quy trình hiện có và tài liệu cũ |
 
@@ -122,7 +121,7 @@ Nhiều chiến lược cho nhiều tình huống — từ điều phối dựa 
 
 ### Trải nghiệm nhà phát triển
 
-- **Magic keywords** - `ralph`, `ulw`, `eco`, `plan` để kiểm soát rõ ràng
+- **Magic keywords** - `ralph`, `ulw`, `plan` để kiểm soát rõ ràng
 - **HUD statusline** - Chỉ số điều phối theo thời gian thực trong status bar
 - **Học kỹ năng** - Trích xuất các mẫu tái sử dụng từ các phiên làm việc
 - **Phân tích & theo dõi chi phí** - Hiểu mức sử dụng token trên mọi phiên
@@ -141,7 +140,6 @@ Các phím tắt tùy chọn cho người dùng nâng cao. Không dùng chúng t
 | `autopilot` | Thực thi tự động toàn phần | `autopilot: build a todo app` |
 | `ralph` | Chế độ bền bỉ | `ralph: refactor auth` |
 | `ulw` | Song song tối đa | `ulw fix all errors` |
-| `eco` | Thực thi tiết kiệm token | `eco: migrate database` |
 | `plan` | Phỏng vấn lập kế hoạch | `plan the API` |
 | `ralplan` | Đồng thuận lập kế hoạch lặp | `ralplan this feature` |
 | `swarm` | Từ khóa cũ (chuyển sang Team) | `swarm 5 agents: fix lint errors` |

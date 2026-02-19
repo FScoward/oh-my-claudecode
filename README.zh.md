@@ -85,7 +85,6 @@ autopilot: build a REST API for managing tasks
 | **Ultrawork** | 并行 | 任何任务的最大并行化 |
 | **Ralph** | 持久 | 必须完整完成的任务 |
 | **Ultrapilot** | 3-5倍速 | 多组件系统 |
-| **Ecomode** | 快速 + 省30-50%成本 | 预算有限的项目 |
 | **Swarm** | 协同 | 并行独立任务 |
 | **Pipeline** | 顺序 | 多阶段处理 |
 
@@ -97,7 +96,7 @@ autopilot: build a REST API for managing tasks
 
 ### 开发者体验
 
-- **魔法关键词** - `ralph`、`ulw`、`eco`、`plan` 提供显式控制
+- **魔法关键词** - `ralph`、`ulw`、`plan` 提供显式控制
 - **HUD 状态栏** - 状态栏实时显示编排指标
 - **技能学习** - 从会话中提取可复用模式
 - **分析与成本追踪** - 了解所有会话的 token 使用情况
@@ -115,7 +114,6 @@ autopilot: build a REST API for managing tasks
 | `autopilot` | 全自动执行 | `autopilot: build a todo app` |
 | `ralph` | 持久模式 | `ralph: refactor auth` |
 | `ulw` | 最大并行化 | `ulw fix all errors` |
-| `eco` | token 高效执行 | `eco: migrate database` |
 | `plan` | 规划访谈 | `plan the API` |
 | `ralplan` | 迭代规划共识 | `ralplan this feature` |
 

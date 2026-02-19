@@ -20,6 +20,8 @@ import { renderAutopilot } from './elements/autopilot.js';
 import { renderCwd } from './elements/cwd.js';
 import { renderGitRepo, renderGitBranch } from './elements/git.js';
 import { renderModel } from './elements/model.js';
+import { renderCallCounts } from './elements/call-counts.js';
+import { renderContextLimitWarning } from './elements/context-warning.js';
 import { getAnalyticsDisplay, renderAnalyticsLineWithConfig, getSessionInfo, getSessionHealthAnalyticsData, renderBudgetWarning, renderCacheEfficiency } from './analytics-display.js';
 /**
  * Limit output lines to prevent input field shrinkage (Issue #222).
@@ -264,6 +266,18 @@ export async function render(context, config) {
         if (bg)
             elements.push(bg);
     }
+    // Call counts on the right side of the status line (Issue #710)
+    // Controlled by showCallCounts config option (default: true)
+    const showCounts = enabledElements.showCallCounts ?? true;
+    if (showCounts) {
+        const counts = renderCallCounts(context.toolCallCount, context.agentCallCount, context.skillCallCount);
+        if (counts)
+            elements.push(counts);
+    }
+    // Context limit warning banner (shown when ctx% >= threshold)
+    const ctxWarning = renderContextLimitWarning(context.contextPercent, config.contextLimitWarning.threshold, config.contextLimitWarning.autoCompact);
+    if (ctxWarning)
+        detailLines.push(ctxWarning);
     // Compose output
     const outputLines = [];
     // Git info line (separate line above HUD header)

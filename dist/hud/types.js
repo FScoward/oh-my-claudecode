@@ -33,6 +33,7 @@ export const DEFAULT_HUD_CONFIG = {
         useBars: false, // Disabled by default for backwards compatibility
         showCache: true,
         showCost: true,
+        showCallCounts: true, // Show tool/agent/skill call counts by default (Issue #710)
         maxOutputLines: 4,
         safeMode: true, // Enabled by default to prevent terminal rendering corruption (Issue #346)
     },
@@ -45,6 +46,10 @@ export const DEFAULT_HUD_CONFIG = {
         budgetCritical: 5.0,
     },
     staleTaskThresholdMinutes: 30,
+    contextLimitWarning: {
+        threshold: 80,
+        autoCompact: false,
+    },
 };
 export const PRESET_CONFIGS = {
     minimal: {
@@ -74,6 +79,7 @@ export const PRESET_CONFIGS = {
         useBars: false,
         showCache: false,
         showCost: false,
+        showCallCounts: false,
         maxOutputLines: 2,
         safeMode: true,
     },
@@ -104,6 +110,7 @@ export const PRESET_CONFIGS = {
         useBars: false,
         showCache: true,
         showCost: true,
+        showCallCounts: true,
         maxOutputLines: 4,
         safeMode: true,
     },
@@ -134,6 +141,7 @@ export const PRESET_CONFIGS = {
         useBars: true,
         showCache: true,
         showCost: true,
+        showCallCounts: true,
         maxOutputLines: 4,
         safeMode: true,
     },
@@ -164,6 +172,7 @@ export const PRESET_CONFIGS = {
         useBars: true,
         showCache: true,
         showCost: true,
+        showCallCounts: true,
         maxOutputLines: 12,
         safeMode: true,
     },
@@ -194,6 +203,7 @@ export const PRESET_CONFIGS = {
         useBars: false,
         showCache: true,
         showCost: true,
+        showCallCounts: true,
         maxOutputLines: 4,
         safeMode: true,
     },
@@ -224,6 +234,7 @@ export const PRESET_CONFIGS = {
         useBars: true,
         showCache: true,
         showCost: true,
+        showCallCounts: true,
         maxOutputLines: 6,
         safeMode: true,
     },

@@ -563,7 +563,6 @@ Use the AskUserQuestion tool to prompt the user:
 
 **Options:**
 1. **ultrawork (maximum capability)** - Uses all agent tiers including Opus for complex tasks. Best for challenging work where quality matters most. (Recommended)
-2. ** (token efficient)** - Prefers Haiku/Sonnet agents, avoids Opus. Best for pro-plan users who want cost efficiency.
 
 Store the preference in `~/.claude/.omc-config.json`:
 
@@ -583,16 +582,8 @@ echo "$EXISTING" | jq --arg mode "USER_CHOICE" '. + {defaultExecutionMode: $mode
 echo "Default execution mode set to: USER_CHOICE"
 ```
 
-**Note**: This preference ONLY affects generic keywords ("fast", "parallel"). Explicit keywords ("ulw", "eco") always override this preference.
+**Note**: This preference ONLY affects generic keywords ("fast", "parallel"). Explicit keywords ("ulw") always override this preference.
 
-### Optional: Disable Ecomode Entirely
-
-If the user wants to disable  completely (so  keywords are ignored), add to the config:
-
-```bash
-echo "$EXISTING" | jq '. + {: {enabled: false}}' > "$CONFIG_FILE"
-echo "Ecomode disabled completely"
-```
 
 ## Step 3.8: Install CLI Analytics Tools (Optional)
 
@@ -923,7 +914,6 @@ Just include these words naturally in your request:
 | ralph | Persistence mode | "ralph: fix the auth bug" |
 | ralplan | Iterative planning | "ralplan this feature" |
 | ulw | Max parallelism | "ulw refactor the API" |
-| eco | Token-efficient mode | "eco refactor the API" |
 | plan | Planning interview | "plan the new endpoints" |
 | team | Coordinated agents | "/team 3:executor fix errors" |
 
@@ -971,7 +961,6 @@ MAGIC KEYWORDS (power-user shortcuts):
 | ralph | /ralph | "ralph: fix the bug" |
 | ralplan | /ralplan | "ralplan this feature" |
 | ulw | /ultrawork | "ulw refactor API" |
-| eco | (new!) | "eco fix all errors" |
 | plan | /plan | "plan the endpoints" |
 | team | (new!) | "/team 3:executor fix errors" |
 

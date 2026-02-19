@@ -55,6 +55,9 @@ export async function parseTranscript(transcriptPath, options) {
         agents: [],
         todos: [],
         lastActivatedSkill: undefined,
+        toolCallCount: 0,
+        agentCallCount: 0,
+        skillCallCount: 0,
     };
     if (!transcriptPath || !existsSync(transcriptPath)) {
         return result;
@@ -237,7 +240,9 @@ function processEntry(entry, agentMap, latestTodos, result, maxAgentMapSize = 50
         }
         // Track tool_use for Task (agents) and TodoWrite
         if (block.type === "tool_use" && block.id && block.name) {
+            result.toolCallCount++;
             if (block.name === "Task" || block.name === "proxy_Task") {
+                result.agentCallCount++;
                 const input = block.input;
                 const agentEntry = {
                     id: block.id,
@@ -280,6 +285,7 @@ function processEntry(entry, agentMap, latestTodos, result, maxAgentMapSize = 50
                 }
             }
             else if (block.name === "Skill" || block.name === "proxy_Skill") {
+                result.skillCallCount++;
                 // Track last activated skill
                 const input = block.input;
                 if (input?.skill) {
