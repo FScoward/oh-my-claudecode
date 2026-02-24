@@ -12,6 +12,15 @@ import { listMcpWorkers } from './team-registration.js';
 import { readHeartbeat, isWorkerAlive } from './heartbeat.js';
 import { listTaskIds, readTask } from './task-file-ops.js';
 import { sanitizeName } from './tmux-session.js';
+import { generateUsageReport } from './usage-tracker.js';
+function emptyUsageReport(teamName) {
+    return {
+        teamName,
+        totalWallClockMs: 0,
+        taskCount: 0,
+        workers: [],
+    };
+}
 /**
  * Read the last N messages from a worker's outbox file without advancing any cursor.
  * This is a side-effect-free alternative to readNewOutboxMessages for status queries.
@@ -39,10 +48,12 @@ function peekRecentOutboxMessages(teamName, workerName, maxMessages = 10) {
         return [];
     }
 }
-export function getTeamStatus(teamName, workingDirectory, heartbeatMaxAgeMs = 30000) {
+export function getTeamStatus(teamName, workingDirectory, heartbeatMaxAgeMs = 30000, options) {
+    const startedAt = Date.now();
     // Get all workers
     const mcpWorkers = listMcpWorkers(teamName, workingDirectory);
     // Get all tasks for the team
+    const taskScanStartedAt = Date.now();
     const taskIds = listTaskIds(teamName);
     const tasks = [];
     for (const id of taskIds) {
@@ -50,7 +61,9 @@ export function getTeamStatus(teamName, workingDirectory, heartbeatMaxAgeMs = 30
         if (task)
             tasks.push(task);
     }
+    const taskScanMs = Date.now() - taskScanStartedAt;
     // Build per-worker status
+    const workerScanStartedAt = Date.now();
     const workers = mcpWorkers.map(w => {
         const heartbeat = readHeartbeat(workingDirectory, teamName, w.name);
         const alive = isWorkerAlive(workingDirectory, teamName, w.name, heartbeatMaxAgeMs);
@@ -76,6 +89,15 @@ export function getTeamStatus(teamName, workingDirectory, heartbeatMaxAgeMs = 30
             taskStats,
         };
     });
+    const workerScanMs = Date.now() - workerScanStartedAt;
+    const includeUsage = options?.includeUsage ?? true;
+    let usage = emptyUsageReport(teamName);
+    let usageReadMs = 0;
+    if (includeUsage) {
+        const usageReadStartedAt = Date.now();
+        usage = generateUsageReport(workingDirectory, teamName);
+        usageReadMs = Date.now() - usageReadStartedAt;
+    }
     // Build team summary
     const totalFailed = tasks.filter(t => t.status === 'completed' && t.metadata?.permanentlyFailed === true).length;
     const taskSummary = {
@@ -89,6 +111,13 @@ export function getTeamStatus(teamName, workingDirectory, heartbeatMaxAgeMs = 30
         teamName,
         workers,
         taskSummary,
+        usage,
+        performance: {
+            taskScanMs,
+            workerScanMs,
+            usageReadMs,
+            totalMs: Date.now() - startedAt,
+        },
         lastUpdated: new Date().toISOString(),
     };
 }

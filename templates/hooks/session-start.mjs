@@ -200,7 +200,7 @@ async function main() {
     for (let i = 1; i <= 4; i++) {
       const candidate = join(__dirname, ...Array(i).fill('..'), 'package.json');
       const pkg = readJsonFile(candidate);
-      if (pkg?.name === 'oh-my-claude-sisyphus' && pkg?.version) {
+      if (pkg?.name === 'oh-my-claudecode' && pkg?.version) {
         currentVersion = pkg.version;
         break;
       }
@@ -346,20 +346,6 @@ ${agentsContent}${truncationNotice}
         // Skip if file can't be read
       }
     }
-
-    // MCP tool discovery reminder (deferred tools need ToolSearch before use)
-    messages.push(`<session-restore>
-
-[MCP TOOL DISCOVERY REQUIRED]
-
-MCP tools (ask_codex, ask_gemini) are deferred and NOT in your tool list yet.
-Before first use, call ToolSearch("mcp") to discover all available MCP tools.
-If ToolSearch returns no results, MCP servers are not configured -- use Claude agent fallbacks instead.
-
-</session-restore>
-
----
-`);
 
     if (messages.length > 0) {
       console.log(JSON.stringify({

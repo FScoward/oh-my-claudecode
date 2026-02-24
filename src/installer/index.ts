@@ -14,13 +14,12 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
 import {
-  getHookScripts,
-  getHooksSettingsConfig,
   isWindows,
   MIN_NODE_VERSION
 } from './hooks.js';
 import { getRuntimePackageVersion } from '../lib/version.js';
 import { getConfigDir } from '../utils/config-dir.js';
+import { resolveNodeBinary } from '../utils/resolve-node.js';
 
 /** Claude Code configuration directory */
 export const CLAUDE_CONFIG_DIR = getConfigDir();
@@ -263,7 +262,6 @@ function getPackageDir(): string {
     // import.meta.url unavailable — fall through to CJS path
   }
   // CJS bundle path: from bridge/ go up 1 level to package root
-  // eslint-disable-next-line no-undef
   if (typeof __dirname !== 'undefined') {
     return join(__dirname, '..');
   }
@@ -551,50 +549,10 @@ export function install(options: InstallOptions = {}): InstallResult {
         log('CLAUDE.md exists in home directory, skipping');
       }
 
-      // Install hook scripts
-      const hookScripts = getHookScripts();
-      log('Installing hook scripts...');
-
-      for (const [filename, content] of Object.entries(hookScripts)) {
-        const filepath = join(HOOKS_DIR, filename);
-        // Create subdirectory if needed (e.g., lib/)
-        const dir = dirname(filepath);
-        if (!existsSync(dir)) {
-          mkdirSync(dir, { recursive: true });
-        }
-        if (existsSync(filepath) && !options.force) {
-          log(`  Skipping ${filename} (already exists)`);
-        } else {
-          writeFileSync(filepath, content);
-          // Make script executable (skip on Windows - not needed)
-          if (!isWindows()) {
-            chmodSync(filepath, 0o755);
-          }
-          log(`  Installed ${filename}`);
-        }
-      }
-
-      // Note: hooks configuration is deferred to consolidated settings.json write below
-      result.hooksConfigured = true; // Will be set properly after consolidated write
-    } else if (allowPluginHookRefresh) {
-      // Refresh hooks in plugin context when explicitly requested (global plugin only)
-      log('Refreshing hook scripts for plugin reconciliation...');
-      if (!existsSync(HOOKS_DIR)) {
-        mkdirSync(HOOKS_DIR, { recursive: true });
-      }
-      const hookScripts = getHookScripts();
-      for (const [filename, content] of Object.entries(hookScripts)) {
-        const filepath = join(HOOKS_DIR, filename);
-        const dir = dirname(filepath);
-        if (!existsSync(dir)) {
-          mkdirSync(dir, { recursive: true });
-        }
-        writeFileSync(filepath, content);
-        if (!isWindows()) {
-          chmodSync(filepath, 0o755);
-        }
-      }
-      result.hooksConfigured = true;
+      // Note: hook scripts are no longer installed to ~/.claude/hooks/.
+      // All hooks are delivered via the plugin's hooks/hooks.json + scripts/.
+      // Legacy hook entries are cleaned up from settings.json below.
+      result.hooksConfigured = true; // Will be set properly after consolidated settings.json write
     } else {
       log('Skipping agent/command/hook files (managed by plugin system)');
     }
@@ -620,7 +578,7 @@ export function install(options: InstallOptions = {}): InstallResult {
 
       // Build the HUD script content (compiled from src/hud/index.ts)
       // Create a wrapper that checks multiple locations for the HUD module
-      hudScriptPath = join(HUD_DIR, 'omc-hud.mjs');
+      hudScriptPath = join(HUD_DIR, 'omc-hud.mjs').replace(/\\/g, '/');
       const hudScriptLines = [
         '#!/usr/bin/env node',
         '/**',
@@ -657,7 +615,9 @@ export function install(options: InstallOptions = {}): InstallResult {
         '  }',
         '  ',
         '  // 2. Plugin cache (for production installs)',
-        '  const pluginCacheBase = join(home, ".claude/plugins/cache/omc/oh-my-claudecode");',
+        '  // Respect CLAUDE_CONFIG_DIR so installs under a custom config dir are found',
+        '  const configDir = process.env.CLAUDE_CONFIG_DIR || join(home, ".claude");',
+        '  const pluginCacheBase = join(configDir, "plugins", "cache", "omc", "oh-my-claudecode");',
         '  if (existsSync(pluginCacheBase)) {',
         '    try {',
         '      const versions = readdirSync(pluginCacheBase);',
@@ -683,7 +643,7 @@ export function install(options: InstallOptions = {}): InstallResult {
         '  ',
         '  // 3. npm package (global or local install)',
         '  try {',
-        '    await import("oh-my-claude-sisyphus/dist/hud/index.js");',
+        '    await import("oh-my-claudecode/dist/hud/index.js");',
         '    return;',
         '  } catch { /* continue */ }',
         '  ',
@@ -733,66 +693,54 @@ export function install(options: InstallOptions = {}): InstallResult {
         existingSettings = JSON.parse(settingsContent);
       }
 
-      // 1. Configure hooks (only if not running as plugin unless refresh requested)
-      if (!runningAsPlugin || allowPluginHookRefresh) {
+      // 1. Remove legacy ~/.claude/hooks/ entries from settings.json
+      // These were written by the old installer; hooks are now delivered via the plugin's hooks.json.
+      {
+        type HookEntry = { type: string; command: string };
+        type HookGroup = { hooks: HookEntry[] };
         const existingHooks = (existingSettings.hooks || {}) as Record<string, unknown>;
-        const hooksConfig = getHooksSettingsConfig();
-        const newHooks = hooksConfig.hooks;
+        let legacyRemoved = 0;
 
-        // Deep merge: add our hooks, check for conflicts, or update if --force/--forceHooks is used
-        for (const [eventType, eventHooks] of Object.entries(newHooks)) {
-          if (!existingHooks[eventType]) {
-            existingHooks[eventType] = eventHooks;
-            log(`  Added ${eventType} hook`);
+        for (const [eventType, groups] of Object.entries(existingHooks)) {
+          const groupList = groups as HookGroup[];
+          const filtered = groupList.filter(group => {
+            const isLegacy = group.hooks.every(h =>
+              h.type === 'command' && h.command.includes('/.claude/hooks/')
+            );
+            if (isLegacy) legacyRemoved++;
+            return !isLegacy;
+          });
+          if (filtered.length === 0) {
+            delete existingHooks[eventType];
           } else {
-            // Check if existing hook is owned by another plugin
-            const existingEventHooks = existingHooks[eventType] as Array<{ hooks: Array<{ type: string; command: string }> }>;
-            let hasNonOmcHook = false;
-            let nonOmcCommand = '';
-
-            for (const hookGroup of existingEventHooks) {
-              for (const hook of hookGroup.hooks) {
-                if (hook.type === 'command' && !isOmcHook(hook.command)) {
-                  hasNonOmcHook = true;
-                  nonOmcCommand = hook.command;
-                  break;
-                }
-              }
-              if (hasNonOmcHook) break;
-            }
-
-            const canOverrideNonOmc = options.forceHooks && !allowPluginHookRefresh;
-
-            if (hasNonOmcHook && !canOverrideNonOmc) {
-              // Conflict detected - don't overwrite
-              log(`  [OMC] Warning: ${eventType} hook owned by another plugin. Skipping. Use --force-hooks to override.`);
-              result.hookConflicts.push({ eventType, existingCommand: nonOmcCommand });
-            } else if (options.force || options.forceHooks) {
-              existingHooks[eventType] = eventHooks;
-              log(`  Updated ${eventType} hook (${options.forceHooks ? '--force-hooks' : '--force'})`);
-            } else {
-              log(`  ${eventType} hook already configured, skipping`);
-            }
+            existingHooks[eventType] = filtered;
           }
         }
 
-        existingSettings.hooks = existingHooks;
-        log('  Hooks configured');
+        if (legacyRemoved > 0) {
+          log(`  Cleaned up ${legacyRemoved} legacy hook entries from settings.json`);
+        }
+
+        existingSettings.hooks = Object.keys(existingHooks).length > 0 ? existingHooks : undefined;
         result.hooksConfigured = true;
       }
 
       // 2. Configure statusLine (always, even in plugin mode)
       if (hudScriptPath) {
+        // Use absolute node path so nvm/fnm users don't get "node not found"
+        // errors when Claude Code invokes the statusLine in a non-interactive shell.
+        const nodeBin = resolveNodeBinary();
+        const statusLineCommand = nodeBin + ' ' + hudScriptPath.replace(/\\/g, '/');
         if (!existingSettings.statusLine) {
           existingSettings.statusLine = {
             type: 'command',
-            command: 'node ' + hudScriptPath
+            command: statusLineCommand
           };
           log('  Configured statusLine');
         } else if (options.force && isOmcStatusLine(existingSettings.statusLine)) {
           existingSettings.statusLine = {
             type: 'command',
-            command: 'node ' + hudScriptPath
+            command: statusLineCommand
           };
           log('  Updated statusLine (--force)');
         } else if (options.force) {
@@ -802,7 +750,26 @@ export function install(options: InstallOptions = {}): InstallResult {
         }
       }
 
-      // 3. Single atomic write
+      // 3. Persist the detected node binary path into .omc-config.json so that
+      //    find-node.sh (used in hooks/hooks.json) can locate it at hook runtime
+      //    even when node is not on PATH (nvm/fnm users, issue #892).
+      try {
+        const configPath = join(CLAUDE_CONFIG_DIR, '.omc-config.json');
+        let omcConfig: Record<string, unknown> = {};
+        if (existsSync(configPath)) {
+          omcConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
+        }
+        const detectedNode = resolveNodeBinary();
+        if (detectedNode !== 'node') {
+          omcConfig.nodeBinary = detectedNode;
+          writeFileSync(configPath, JSON.stringify(omcConfig, null, 2));
+          log(`  Saved node binary path to .omc-config.json: ${detectedNode}`);
+        }
+      } catch {
+        log('  Warning: Could not save node binary path (non-fatal)');
+      }
+
+      // 4. Single atomic write
       writeFileSync(SETTINGS_FILE, JSON.stringify(existingSettings, null, 2));
       log('  settings.json updated');
     } catch (_e) {
@@ -825,8 +792,7 @@ export function install(options: InstallOptions = {}): InstallResult {
     }
 
     result.success = true;
-    const hookCount = Object.keys(getHookScripts()).length;
-    result.message = `Successfully installed ${result.installedAgents.length} agents, ${result.installedCommands.length} commands, ${result.installedSkills.length} skills, and ${hookCount} hooks`;
+    result.message = `Successfully installed ${result.installedAgents.length} agents, ${result.installedCommands.length} commands, ${result.installedSkills.length} skills (hooks delivered via plugin)`;
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

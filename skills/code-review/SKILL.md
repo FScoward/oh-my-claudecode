@@ -69,15 +69,15 @@ Output: Code review report with:
 )
 ```
 
-## External Model Consultation (Preferred)
+## External Consultation (Optional)
 
-The code-reviewer agent SHOULD consult Codex for cross-validation.
+The code-reviewer agent MAY consult a Claude Task agent for cross-validation.
 
 ### Protocol
 1. **Form your OWN review FIRST** - Complete the review independently
-2. **Consult for validation** - Cross-check findings with Codex
+2. **Consult for validation** - Cross-check findings via a Claude Task agent
 3. **Critically evaluate** - Never blindly adopt external findings
-4. **Graceful fallback** - Never block if tools unavailable
+4. **Graceful fallback** - Never block if delegation is unavailable
 
 ### When to Consult
 - Security-sensitive code changes
@@ -92,11 +92,7 @@ The code-reviewer agent SHOULD consult Codex for cross-validation.
 - Small, isolated changes
 
 ### Tool Usage
-Before first MCP tool use, call `ToolSearch("mcp")` to discover deferred MCP tools.
-Use `mcp__x__ask_codex` with `agent_role: "code-reviewer"`.
-If ToolSearch finds no MCP tools, fall back to the `code-reviewer` Claude agent.
-
-**Note:** Codex calls can take up to 1 hour. Consider the review timeline before consulting.
+Use `Task(subagent_type="oh-my-claudecode:code-reviewer", ...)` for cross-validation.
 
 ## Output Format
 

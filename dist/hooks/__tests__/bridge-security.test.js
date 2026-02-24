@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { buildPromptWithSystemContext, resolveSystemPrompt, } from '../../mcp/prompt-injection.js';
+import { buildPromptWithSystemContext, resolveSystemPrompt, } from '../../agents/prompt-helpers.js';
 import { isSafeCommand, processPermissionRequest, } from '../permission-handler/index.js';
 import { validatePath } from '../../lib/worktree-paths.js';
 import { normalizeHookInput, SENSITIVE_HOOKS, isAlreadyCamelCase, HookInputSchema } from '../bridge-normalize.js';
@@ -328,8 +328,8 @@ describe('Sensitive Hook Field Filtering', () => {
         expect(normalized.agent_id).toBe('agent-1');
         expect(normalized.permission_mode).toBe('default');
     });
-    it('should pass through unknown fields for non-sensitive hooks with debug warning', () => {
-        const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => { });
+    it('should pass through unknown fields for non-sensitive hooks with stderr warning', () => {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
         const raw = {
             session_id: 'test',
             cwd: '/tmp',
@@ -337,11 +337,11 @@ describe('Sensitive Hook Field Filtering', () => {
         };
         const normalized = normalizeHookInput(raw, 'pre-tool-use');
         expect(normalized.totally_custom).toBe('some-value');
-        expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown field "totally_custom"'));
-        debugSpy.mockRestore();
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown field "totally_custom"'));
+        errorSpy.mockRestore();
     });
     it('should not warn for known fields on non-sensitive hooks', () => {
-        const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => { });
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
         const raw = {
             session_id: 'test',
             cwd: '/tmp',
@@ -349,8 +349,21 @@ describe('Sensitive Hook Field Filtering', () => {
         };
         normalizeHookInput(raw, 'post-tool-use');
         // Should not have warned about agent_id since it's known
-        const calls = debugSpy.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].includes('agent_id'));
+        const calls = errorSpy.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].includes('agent_id'));
         expect(calls).toHaveLength(0);
+        errorSpy.mockRestore();
+    });
+    it('should never write unknown-field warnings to stdout (console.debug)', () => {
+        // console.debug in Node.js writes to stdout, which would corrupt the JSON
+        // protocol. Ensure it is never called for unknown field warnings.
+        const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => { });
+        const raw = {
+            session_id: 'test',
+            cwd: '/tmp',
+            totally_unknown_field: 'payload',
+        };
+        normalizeHookInput(raw, 'pre-tool-use');
+        expect(debugSpy).not.toHaveBeenCalled();
         debugSpy.mockRestore();
     });
 });

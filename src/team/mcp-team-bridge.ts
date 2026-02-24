@@ -1,18 +1,22 @@
 // src/team/mcp-team-bridge.ts
 
 /**
+ * @deprecated The MCP x/g servers have been removed. This bridge now runs
+ * against tmux-based CLI workers (Codex CLI, Gemini CLI) directly.
+ * This file is retained for the tmux bridge daemon functionality.
+ *
  * MCP Team Bridge Daemon
  *
  * Core bridge process that runs in a tmux session alongside a Codex/Gemini CLI.
  * Polls task files, builds prompts, spawns CLI processes, reports results.
  */
 
-import { spawn, ChildProcess } from 'child_process';
-import { existsSync, readFileSync, openSync, readSync, closeSync } from 'fs';
+import { spawn, execSync, ChildProcess } from 'child_process';
+import { existsSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 import { writeFileWithMode, ensureDirWithMode } from './fs-utils.js';
-import type { BridgeConfig, TaskFile, OutboxMessage, HeartbeatData, InboxMessage } from './types.js';
-import { findNextTask, updateTask, readTask, writeTaskFailure, readTaskFailure, isTaskRetryExhausted } from './task-file-ops.js';
+import type { BridgeConfig, TaskFile, HeartbeatData, InboxMessage } from './types.js';
+import { findNextTask, updateTask, writeTaskFailure, readTaskFailure, isTaskRetryExhausted } from './task-file-ops.js';
 import {
   readNewInboxMessages, appendOutbox, rotateOutboxIfNeeded, rotateInboxIfNeeded,
   checkShutdownSignal, deleteShutdownSignal, checkDrainSignal, deleteDrainSignal
@@ -22,8 +26,10 @@ import { writeHeartbeat, deleteHeartbeat } from './heartbeat.js';
 import { killSession } from './tmux-session.js';
 import { logAuditEvent } from './audit-log.js';
 import type { AuditEvent } from './audit-log.js';
-import { getEffectivePermissions, findPermissionViolations, getDefaultPermissions } from './permissions.js';
+import { getEffectivePermissions, findPermissionViolations } from './permissions.js';
 import type { WorkerPermissions, PermissionViolation } from './permissions.js';
+import { getTeamStatus } from './team-status.js';
+import { measureCharCounts, recordTaskUsage } from './usage-tracker.js';
 
 /** Simple logger */
 function log(message: string): void {
@@ -55,8 +61,7 @@ function sleep(ms: number): Promise<void> {
  * Uses `git status --porcelain` + `git ls-files --others --exclude-standard`.
  * Returns a Set of relative file paths that currently exist or are modified.
  */
-function captureFileSnapshot(cwd: string): Set<string> {
-  const { execSync } = require('child_process') as typeof import('child_process');
+export function captureFileSnapshot(cwd: string): Set<string> {
   const files = new Set<string>();
   try {
     // Get all tracked files that are modified, added, or staged
@@ -283,6 +288,31 @@ function readOutputSummary(outputFile: string): string {
   }
 }
 
+export function recordTaskCompletionUsage(args: {
+  config: BridgeConfig;
+  taskId: string;
+  promptFile: string;
+  outputFile: string;
+  provider: 'codex' | 'gemini';
+  startedAt: number;
+  startedAtIso: string;
+}): void {
+  const completedAt = new Date().toISOString();
+  const wallClockMs = Math.max(0, Date.now() - args.startedAt);
+  const { promptChars, responseChars } = measureCharCounts(args.promptFile, args.outputFile);
+  recordTaskUsage(args.config.workingDirectory, args.config.teamName, {
+    taskId: args.taskId,
+    workerName: args.config.workerName,
+    provider: args.provider,
+    model: args.config.model ?? 'default',
+    startedAt: args.startedAtIso,
+    completedAt,
+    wallClockMs,
+    promptChars,
+    responseChars,
+  });
+}
+
 /** Maximum accumulated size for parseCodexOutput (1MB) */
 const MAX_CODEX_OUTPUT_SIZE = 1024 * 1024;
 
@@ -342,7 +372,7 @@ function spawnCliProcess(
 
   if (provider === 'codex') {
     cmd = 'codex';
-    args = ['exec', '-m', model || 'gpt-5.3-codex', '--json', '--full-auto'];
+    args = ['exec', '-m', model || 'gpt-5.3-codex', '--json', '--full-auto', '--skip-git-repo-check'];
   } else {
     cmd = 'gemini';
     args = ['--yolo'];
@@ -586,6 +616,8 @@ export async function runBridge(config: BridgeConfig): Promise<void> {
         }
 
         // --- 7. Build prompt ---
+        const taskStartedAt = Date.now();
+        const taskStartedAtIso = new Date(taskStartedAt).toISOString();
         const prompt = buildTaskPrompt(task, messages, config);
         const promptFile = writePromptFile(config, task.id, prompt);
         const outputFile = getOutputPath(config, task.id);
@@ -656,6 +688,19 @@ export async function runBridge(config: BridgeConfig): Promise<void> {
               });
 
               log(`[bridge] Task ${task.id} failed: permission violations (enforce mode)`);
+              try {
+                recordTaskCompletionUsage({
+                  config,
+                  taskId: task.id,
+                  promptFile,
+                  outputFile,
+                  provider,
+                  startedAt: taskStartedAt,
+                  startedAtIso: taskStartedAtIso,
+                });
+              } catch (usageErr) {
+                log(`[bridge] usage tracking failed for task ${task.id}: ${(usageErr as Error).message}`);
+              }
               consecutiveErrors = 0; // Not a CLI error, don't count toward quarantine
               // Skip normal completion flow
             } else {
@@ -680,6 +725,20 @@ export async function runBridge(config: BridgeConfig): Promise<void> {
                 timestamp: new Date().toISOString(),
               });
 
+              try {
+                recordTaskCompletionUsage({
+                  config,
+                  taskId: task.id,
+                  promptFile,
+                  outputFile,
+                  provider,
+                  startedAt: taskStartedAt,
+                  startedAtIso: taskStartedAtIso,
+                });
+              } catch (usageErr) {
+                log(`[bridge] usage tracking failed for task ${task.id}: ${(usageErr as Error).message}`);
+              }
+
               log(`[bridge] Task ${task.id} completed (with ${violations.length} audit warning(s))`);
             }
           } else {
@@ -696,6 +755,20 @@ export async function runBridge(config: BridgeConfig): Promise<void> {
               summary,
               timestamp: new Date().toISOString()
             });
+
+            try {
+              recordTaskCompletionUsage({
+                config,
+                taskId: task.id,
+                promptFile,
+                outputFile,
+                provider,
+                startedAt: taskStartedAt,
+                startedAtIso: taskStartedAtIso,
+              });
+            } catch (usageErr) {
+              log(`[bridge] usage tracking failed for task ${task.id}: ${(usageErr as Error).message}`);
+            }
 
             log(`[bridge] Task ${task.id} completed`);
           }
@@ -740,6 +813,20 @@ export async function runBridge(config: BridgeConfig): Promise<void> {
               timestamp: new Date().toISOString()
             });
 
+            try {
+              recordTaskCompletionUsage({
+                config,
+                taskId: task.id,
+                promptFile,
+                outputFile,
+                provider,
+                startedAt: taskStartedAt,
+                startedAtIso: taskStartedAtIso,
+              });
+            } catch (usageErr) {
+              log(`[bridge] usage tracking failed for task ${task.id}: ${(usageErr as Error).message}`);
+            }
+
             log(`[bridge] Task ${task.id} permanently failed after ${attempt} attempts`);
           } else {
             // Retry: set back to pending
@@ -767,6 +854,27 @@ export async function runBridge(config: BridgeConfig): Promise<void> {
           });
           audit(config, 'worker_idle');
           idleNotified = true;
+        }
+
+        // --- Auto-cleanup: self-terminate when all team tasks are done ---
+        // Only check when we have no pending task and already notified idle.
+        // Guard: if inProgress > 0, other workers are still running — don't shutdown yet.
+        try {
+          const teamStatus = getTeamStatus(teamName, workingDirectory, 30000, { includeUsage: false });
+          if (teamStatus.taskSummary.total > 0 && teamStatus.taskSummary.pending === 0 && teamStatus.taskSummary.inProgress === 0) {
+            log(`[bridge] All team tasks complete. Auto-terminating worker.`);
+            appendOutbox(teamName, workerName, {
+              type: 'all_tasks_complete',
+              message: 'All team tasks reached terminal state. Worker self-terminating.',
+              timestamp: new Date().toISOString()
+            });
+            audit(config, 'bridge_shutdown', undefined, { reason: 'auto_cleanup_all_tasks_complete' });
+            await handleShutdown(config, { requestId: 'auto-cleanup', reason: 'all_tasks_complete' }, activeChild);
+            break;
+          }
+        } catch (err) {
+          // Non-fatal: if status check fails, keep polling
+          log(`[bridge] Auto-cleanup status check failed: ${(err as Error).message}`);
         }
       }
 

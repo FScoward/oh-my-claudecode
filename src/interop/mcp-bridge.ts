@@ -10,12 +10,10 @@ import { ToolDefinition } from '../tools/types.js';
 import {
   addSharedTask,
   readSharedTasks,
-  updateSharedTask,
   addSharedMessage,
   readSharedMessages,
   markMessageAsRead,
   SharedTask,
-  SharedMessage,
 } from './shared-state.js';
 import {
   listOmxTeams,
@@ -25,6 +23,23 @@ import {
   broadcastOmxMessage,
   listOmxTasks,
 } from './omx-team-state.js';
+
+export type InteropMode = 'off' | 'observe' | 'active';
+
+export function getInteropMode(env: NodeJS.ProcessEnv = process.env): InteropMode {
+  const raw = (env.OMX_OMC_INTEROP_MODE || 'off').toLowerCase();
+  if (raw === 'observe' || raw === 'active') {
+    return raw;
+  }
+  return 'off';
+}
+
+export function canUseOmxDirectWriteBridge(env: NodeJS.ProcessEnv = process.env): boolean {
+  const interopEnabled = env.OMX_OMC_INTEROP_ENABLED === '1';
+  const toolsEnabled = env.OMC_INTEROP_TOOLS_ENABLED === '1';
+  const mode = getInteropMode(env);
+  return interopEnabled && toolsEnabled && mode === 'active';
+}
 
 // ============================================================================
 // interop_send_task - Send a task to the other tool
@@ -415,6 +430,16 @@ export const interopSendOmxMessageTool: ToolDefinition<{
   },
   handler: async (args) => {
     try {
+      if (!canUseOmxDirectWriteBridge()) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: 'Direct OMX mailbox writes are disabled. Use broker-mediated team_* MCP path or enable active interop flags explicitly.'
+          }],
+          isError: true
+        };
+      }
+
       const cwd = args.workingDirectory || process.cwd();
 
       if (args.broadcast) {

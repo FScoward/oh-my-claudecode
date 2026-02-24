@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Oh-My-Claude-Sisyphus CLI
+ * Oh-My-ClaudeCode CLI
  *
- * Command-line interface for the Sisyphus multi-agent system.
+ * Command-line interface for the OMC multi-agent system.
  *
  * Commands:
  * - run: Start an interactive session
@@ -14,7 +14,7 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import * as fs from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -24,7 +24,7 @@ import {
   getConfigPaths,
   generateConfigSchema
 } from '../config/loader.js';
-import { createSisyphusSession } from '../index.js';
+import { createOmcSession } from '../index.js';
 import {
   checkForUpdates,
   performUpdate,
@@ -36,7 +36,7 @@ import {
   type OMCConfig,
 } from '../features/auto-update.js';
 import {
-  install as installSisyphus,
+  install as installOmc,
   isInstalled,
   getInstallInfo
 } from '../installer/index.js';
@@ -74,6 +74,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const version = getRuntimePackageVersion();
 
 const program = new Command();
+
+// Win32 platform warning - OMC requires tmux which is not available on native Windows
+if (process.platform === 'win32') {
+  console.warn(chalk.yellow.bold('\n⚠  WARNING: Native Windows (win32) detected'));
+  console.warn(chalk.yellow('   OMC requires tmux, which is not available on native Windows.'));
+  console.warn(chalk.yellow('   Please use WSL2 instead: https://learn.microsoft.com/en-us/windows/wsl/install'));
+  console.warn(chalk.red('   Native win32 support issues will not be accepted. Figure it out yourself.'));
+  console.warn('');
+}
 
 // Helper functions for auto-backfill
 async function checkIfBackfillNeeded(): Promise<boolean> {
@@ -118,7 +127,7 @@ async function displayAnalyticsBanner() {
     ].join('\n'));
     console.log(banner);
     console.log('');
-  } catch (error) {
+  } catch (_error) {
     // Fallback if gradient-string not installed
     console.log('╔═══════════════════════════════════════╗');
     console.log('║   Oh-My-ClaudeCode - Analytics Dashboard   ║');
@@ -127,16 +136,17 @@ async function displayAnalyticsBanner() {
   }
 }
 
-// Default action when running 'omc' with no args
-// Check env var to decide between dashboard and launch
+// Default action when running 'omc' with no subcommand
+// Forwards all args to launchCommand so 'omc --notify false --madmax' etc. work directly
 async function defaultAction() {
   const defaultActionMode = process.env.OMC_DEFAULT_ACTION || 'launch';
 
   if (defaultActionMode === 'dashboard') {
     await displayAnalyticsDashboard();
   } else {
-    // Launch Claude Code by default
-    await launchCommand([]);
+    // Pass all CLI args through to launch (strip node + script path)
+    const args = process.argv.slice(2);
+    await launchCommand(args);
   }
 }
 
@@ -186,6 +196,7 @@ program
   .name('omc')
   .description('Multi-agent orchestration system for Claude Agent SDK with analytics')
   .version(version)
+  .allowUnknownOption()
   .action(defaultAction);
 
 /**
@@ -197,12 +208,21 @@ program
   .allowUnknownOption()
   .addHelpText('after', `
 Examples:
-  $ omc launch                   Launch Claude Code
-  $ omc launch --madmax          Launch with permissions bypass
-  $ omc launch --yolo            Launch with permissions bypass (alias)
+  $ omc                                Launch Claude Code
+  $ omc --madmax                       Launch with permissions bypass
+  $ omc --yolo                         Launch with permissions bypass (alias)
+  $ omc --notify false                 Launch without CCNotifier events
+  $ omc launch                         Explicit launch subcommand (same as bare omc)
+  $ omc launch --madmax                Explicit launch with flags
+
+Options:
+  --notify <bool>   Enable/disable CCNotifier events. false sets OMC_NOTIFY=0
+                    and suppresses all stop/session-start/session-idle notifications.
+                    Default: true
 
 Environment:
-  Set OMC_DEFAULT_ACTION=dashboard to show analytics dashboard when running 'omc' with no args`)
+  OMC_NOTIFY=0              Suppress all notifications (set by --notify false)
+  OMC_DEFAULT_ACTION=dashboard  Show analytics dashboard when running 'omc' with no args`)
   .action(async (args: string[]) => {
     await launchCommand(args);
   });
@@ -411,7 +431,7 @@ Examples:
  */
 program
   .command('init')
-  .description('Initialize Sisyphus configuration in the current directory')
+  .description('Initialize OMC configuration in the current directory')
   .option('-g, --global', 'Initialize global user configuration')
   .option('-f, --force', 'Overwrite existing configuration')
   .addHelpText('after', `
@@ -446,11 +466,11 @@ Examples:
     const configContent = `// Oh-My-ClaudeCode Configuration
 // See: https://github.com/Yeachan-Heo/oh-my-claudecode for documentation
 {
-  "$schema": "./sisyphus-schema.json",
+  "$schema": "./omc-schema.json",
 
   // Agent model configurations
   "agents": {
-    "sisyphus": {
+    "omc": {
       // Main orchestrator - uses the most capable model
       "model": "claude-opus-4-6-20260205"
     },
@@ -522,7 +542,7 @@ Examples:
     console.log(chalk.green(`Created configuration: ${targetPath}`));
 
     // Also create the JSON schema for editor support
-    const schemaPath = join(targetDir, 'sisyphus-schema.json');
+    const schemaPath = join(targetDir, 'omc-schema.json');
     writeFileSync(schemaPath, JSON.stringify(generateConfigSchema(), null, 2));
     console.log(chalk.green(`Created JSON schema: ${schemaPath}`));
 
@@ -630,9 +650,9 @@ Examples:
 /**
  * Config stop-callback subcommand - Configure stop hook callbacks
  */
-const configStopCallback = program
+const _configStopCallback = program
   .command('config-stop-callback <type>')
-  .description('Configure stop hook callbacks (file/telegram/discord)')
+  .description('Configure stop hook callbacks (file/telegram/discord/slack)')
   .option('--enable', 'Enable callback')
   .option('--disable', 'Disable callback')
   .option('--path <path>', 'File path (supports {session_id}, {date}, {time})')
@@ -652,6 +672,7 @@ Types:
   file       File system callback (saves session summary to disk)
   telegram   Telegram bot notification
   discord    Discord webhook notification
+  slack      Slack incoming webhook notification
 
 Profile types (use with --profile):
   discord-bot  Discord Bot API (token + channel ID)
@@ -805,7 +826,7 @@ Examples:
     }
 
     // Legacy (non-profile) path
-    const validTypes = ['file', 'telegram', 'discord'];
+    const validTypes = ['file', 'telegram', 'discord', 'slack'];
     if (!validTypes.includes(type)) {
       console.error(chalk.red(`Invalid callback type: ${type}`));
       console.error(chalk.gray(`Valid types: ${validTypes.join(', ')}`));
@@ -910,6 +931,21 @@ Examples:
           process.exit(1);
         }
         config.stopHookCallbacks.discord = {
+          ...current,
+          enabled: enabled ?? current?.enabled ?? false,
+          webhookUrl: options.webhook ?? current?.webhookUrl,
+          tagList: hasTagListChanges ? resolveTagList(current?.tagList) : current?.tagList,
+        };
+        break;
+      }
+
+      case 'slack': {
+        const current = config.stopHookCallbacks.slack;
+        if (enabled === true && (!options.webhook && !current?.webhookUrl)) {
+          console.error(chalk.red('Slack requires --webhook <webhook_url>'));
+          process.exit(1);
+        }
+        config.stopHookCallbacks.slack = {
           ...current,
           enabled: enabled ?? current?.enabled ?? false,
           webhookUrl: options.webhook ?? current?.webhookUrl,
@@ -1028,7 +1064,7 @@ program
 Examples:
   $ omc info                     Show agents, features, and MCP servers`)
   .action(async () => {
-    const session = createSisyphusSession();
+    const session = createOmcSession();
 
     console.log(chalk.blue.bold('\nOh-My-ClaudeCode System Information\n'));
     console.log(chalk.gray('━'.repeat(50)));
@@ -1076,7 +1112,7 @@ Examples:
   $ omc test-prompt "ultrawork fix bugs"    See how magic keywords are detected
   $ omc test-prompt "analyze this code"     Test prompt enhancement`)
   .action(async (prompt: string) => {
-    const session = createSisyphusSession();
+    const session = createOmcSession();
 
     console.log(chalk.blue('Original prompt:'));
     console.log(chalk.gray(prompt));
@@ -1243,7 +1279,7 @@ Examples:
  */
 program
   .command('install')
-  .description('Install Sisyphus agents and commands to Claude Code config (~/.claude/)')
+  .description('Install OMC agents and commands to Claude Code config (~/.claude/)')
   .option('-f, --force', 'Overwrite existing files')
   .option('-q, --quiet', 'Suppress output except for errors')
   .option('--skip-claude-check', 'Skip checking if Claude Code is installed')
@@ -1265,7 +1301,7 @@ Examples:
     if (isInstalled() && !options.force) {
       const info = getInstallInfo();
       if (!options.quiet) {
-        console.log(chalk.yellow('Sisyphus is already installed.'));
+        console.log(chalk.yellow('OMC is already installed.'));
         if (info) {
           console.log(chalk.gray(`  Version: ${info.version}`));
           console.log(chalk.gray(`  Installed: ${info.installedAt}`));
@@ -1276,7 +1312,7 @@ Examples:
     }
 
     // Run installation
-    const result = installSisyphus({
+    const result = installOmc({
       force: options.force,
       verbose: !options.quiet,
       skipClaudeCheck: options.skipClaudeCheck
@@ -1295,9 +1331,9 @@ Examples:
         console.log('  claude                        # Start Claude Code normally');
         console.log('');
         console.log(chalk.yellow('Slash Commands:'));
-        console.log('  /sisyphus <task>              # Activate Sisyphus orchestration mode');
-        console.log('  /sisyphus-default             # Configure for current project');
-        console.log('  /sisyphus-default-global      # Configure globally');
+        console.log('  /omc <task>              # Activate OMC orchestration mode');
+        console.log('  /omc-default             # Configure for current project');
+        console.log('  /omc-default-global      # Configure globally');
         console.log('  /ultrawork <task>             # Maximum performance mode');
         console.log('  /deepsearch <query>           # Thorough codebase search');
         console.log('  /analyze <target>             # Deep analysis mode');
@@ -1314,7 +1350,7 @@ Examples:
         console.log('    vision              - Visual analysis (Sonnet)');
         console.log('    critic               - Plan review (Opus)');
         console.log('    analyst               - Pre-planning analysis (Opus)');
-        console.log('    orchestrator-sisyphus - Todo coordination (Opus)');
+        console.log('    debugger            - Root-cause diagnosis (Sonnet)');
         console.log('    executor            - Focused execution (Sonnet)');
         console.log('    planner          - Strategic planning (Opus)');
         console.log('    qa-tester           - Interactive CLI testing (Sonnet)');
@@ -1327,14 +1363,14 @@ Examples:
         console.log('    designer-low        - Simple styling (Haiku)');
         console.log('');
         console.log(chalk.yellow('After Updates:'));
-        console.log('  Run \'/sisyphus-default\' (project) or \'/sisyphus-default-global\' (global)');
+        console.log('  Run \'/omc-default\' (project) or \'/omc-default-global\' (global)');
         console.log('  to download the latest CLAUDE.md configuration.');
         console.log('  This ensures you get the newest features and agent behaviors.');
         console.log('');
         console.log(chalk.blue('Quick Start:'));
         console.log('  1. Run \'claude\' to start Claude Code');
-        console.log('  2. Type \'/sisyphus-default\' for project or \'/sisyphus-default-global\' for global');
-        console.log('  3. Or use \'/sisyphus <task>\' for one-time activation');
+        console.log('  2. Type \'/omc-default\' for project or \'/omc-default-global\' for global');
+        console.log('  3. Or use \'/omc <task>\' for one-time activation');
       }
     } else {
       console.error(chalk.red(`Installation failed: ${result.message}`));
@@ -1542,7 +1578,7 @@ Examples:
       console.log(chalk.gray('Syncing OMC components...'));
     }
 
-    const result = installSisyphus({
+    const result = installOmc({
       force: !!options.force,
       verbose: !options.quiet,
       skipClaudeCheck: true,
@@ -1597,7 +1633,7 @@ program
   .description('Run post-install setup (called automatically by npm)')
   .action(async () => {
     // Silent install - only show errors
-    const result = installSisyphus({
+    const result = installOmc({
       force: false,
       verbose: false,
       skipClaudeCheck: true
@@ -1606,11 +1642,33 @@ program
     if (result.success) {
       console.log(chalk.green('✓ Oh-My-ClaudeCode installed successfully!'));
       console.log(chalk.gray('  Run "oh-my-claudecode info" to see available agents.'));
-      console.log(chalk.yellow('  Run "/sisyphus-default" (project) or "/sisyphus-default-global" (global) in Claude Code.'));
+      console.log(chalk.yellow('  Run "/omc-default" (project) or "/omc-default-global" (global) in Claude Code.'));
     } else {
       // Don't fail the npm install, just warn
-      console.warn(chalk.yellow('⚠ Could not complete Sisyphus setup:'), result.message);
+      console.warn(chalk.yellow('⚠ Could not complete OMC setup:'), result.message);
       console.warn(chalk.gray('  Run "oh-my-claudecode install" manually to complete setup.'));
+    }
+  });
+
+/**
+ * HUD command - Run the OMC HUD statusline renderer
+ * In --watch mode, loops continuously for use in a tmux pane.
+ */
+program
+  .command('hud')
+  .description('Run the OMC HUD statusline renderer')
+  .option('--watch', 'Run in watch mode (continuous polling for tmux pane)')
+  .option('--interval <ms>', 'Poll interval in milliseconds', '1000')
+  .action(async (options) => {
+    const { main: hudMain } = await import('../hud/index.js');
+    if (options.watch) {
+      const intervalMs = parseInt(options.interval, 10);
+      while (true) {
+        await hudMain(true);
+        await new Promise<void>(resolve => setTimeout(resolve, intervalMs));
+      }
+    } else {
+      await hudMain();
     }
   });
 

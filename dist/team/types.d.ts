@@ -50,7 +50,7 @@ export interface InboxMessage {
 }
 /** JSONL message from worker -> lead (outbox) */
 export interface OutboxMessage {
-    type: 'ready' | 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'drain_ack' | 'heartbeat' | 'error';
+    type: 'ready' | 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'drain_ack' | 'heartbeat' | 'error' | 'all_tasks_complete';
     taskId?: string;
     summary?: string;
     message?: string;
@@ -86,7 +86,7 @@ export interface McpWorkerMember {
 export interface HeartbeatData {
     workerName: string;
     teamName: string;
-    provider: 'codex' | 'gemini';
+    provider: 'codex' | 'gemini' | 'claude';
     pid: number;
     lastPollAt: string;
     currentTaskId?: string;
@@ -116,7 +116,14 @@ export interface TaskFailureSidecar {
     lastFailedAt: string;
 }
 /** Worker backend type */
-export type WorkerBackend = 'claude-native' | 'mcp-codex' | 'mcp-gemini';
+export type WorkerBackend = 'claude-native' | 'mcp-codex' | 'mcp-gemini' | 'tmux-claude' | 'tmux-codex' | 'tmux-gemini';
+/** Signal file written by CLI workers when their task completes */
+export interface DoneSignal {
+    taskId: string;
+    status: 'completed' | 'failed';
+    summary: string;
+    completedAt: string;
+}
 /** Worker capability tag */
 export type WorkerCapability = 'code-edit' | 'code-review' | 'security-review' | 'architecture' | 'testing' | 'documentation' | 'ui-design' | 'refactoring' | 'research' | 'general';
 //# sourceMappingURL=types.d.ts.map

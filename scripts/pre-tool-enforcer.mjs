@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PreToolUse Hook: Sisyphus Reminder Enforcer (Node.js)
+ * PreToolUse Hook: OMC Reminder Enforcer (Node.js)
  * Injects contextual reminders before every tool execution
  * Cross-platform: Windows, macOS, Linux
  */
@@ -126,6 +126,13 @@ async function recordToolInvocation(data, directory) {
 }
 
 async function main() {
+  // Skip guard: check OMC_SKIP_HOOKS env var (see issue #838)
+  const _skipHooks = (process.env.OMC_SKIP_HOOKS || '').split(',').map(s => s.trim());
+  if (process.env.DISABLE_OMC === '1' || _skipHooks.includes('pre-tool-use')) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
+
   try {
     const input = await readStdin();
 

@@ -8,13 +8,13 @@
  * This module is SDK-agnostic and contains no dependencies on @anthropic-ai/claude-agent-sdk.
  */
 import { spawn } from 'child_process';
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'fs';
 import { resolve, relative, sep, isAbsolute, join } from 'path';
 import { createStdoutCollector, safeWriteOutputFile } from './shared-exec.js';
 import { detectCodexCli } from './cli-detection.js';
 import { getWorktreeRoot } from '../lib/worktree-paths.js';
 import { isExternalPromptAllowed } from './mcp-config.js';
-import { resolveSystemPrompt, buildPromptWithSystemContext, wrapUntrustedFileContent, wrapUntrustedCliResponse, isValidAgentRoleName, VALID_AGENT_ROLES, singleErrorBlock, inlineSuccessBlocks } from './prompt-injection.js';
+import { resolveSystemPrompt, buildPromptWithSystemContext, wrapUntrustedCliResponse, isValidAgentRoleName, VALID_AGENT_ROLES, singleErrorBlock, inlineSuccessBlocks, validateContextFilePaths } from './prompt-injection.js';
 import { persistPrompt, persistResponse, getExpectedResponsePath, getPromptsDir, slugify, generatePromptId } from './prompt-persistence.js';
 import { writeJobStatus, getStatusFilePath, readJobStatus } from './prompt-persistence.js';
 import { resolveExternalModel, buildFallbackChain, CODEX_MODEL_FALLBACKS, } from '../features/model-routing/external-model-policy.js';
@@ -44,7 +44,7 @@ export const RATE_LIMIT_MAX_DELAY = Math.max(5000, parseInt(process.env.OMC_CODE
 // Re-export CODEX_MODEL_FALLBACKS for backward compatibility
 export { CODEX_MODEL_FALLBACKS };
 // Codex is best for analytical/planning tasks (recommended, not enforced)
-export const CODEX_RECOMMENDED_ROLES = ['architect', 'planner', 'critic', 'analyst', 'code-reviewer', 'security-reviewer', 'tdd-guide'];
+export const CODEX_RECOMMENDED_ROLES = ['architect', 'planner', 'critic', 'analyst', 'code-reviewer', 'security-reviewer', 'test-engineer'];
 // Valid reasoning effort levels for Codex CLI (via -c model_reasoning_effort=<value>)
 // Default (when omitted): inherits from ~/.codex/config.toml (Codex CLI default is "medium")
 export const VALID_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -184,7 +184,7 @@ export function executeCodex(prompt, model, cwd, reasoningEffort) {
     return new Promise((resolve, reject) => {
         validateModelName(model);
         let settled = false;
-        const args = ['exec', '-m', model, '--json', '--full-auto'];
+        const args = ['exec', '-m', model, '--json', '--full-auto', '--skip-git-repo-check'];
         // Per-call reasoning effort override via Codex CLI -c flag
         if (reasoningEffort && VALID_REASONING_EFFORTS.includes(reasoningEffort)) {
             args.push('-c', `model_reasoning_effort="${reasoningEffort}"`);
@@ -341,7 +341,7 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
         // Helper to try spawning with a specific model
         const trySpawnWithModel = (tryModel, remainingModels, rateLimitAttempt = 0) => {
             validateModelName(tryModel);
-            const args = ['exec', '-m', tryModel, '--json', '--full-auto'];
+            const args = ['exec', '-m', tryModel, '--json', '--full-auto', '--skip-git-repo-check'];
             // Per-call reasoning effort override for background execution
             if (reasoningEffort && VALID_REASONING_EFFORTS.includes(reasoningEffort)) {
                 args.push('-c', `model_reasoning_effort="${reasoningEffort}"`);
@@ -375,8 +375,16 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
             };
             writeJobStatus(initialStatus, workingDirectory);
             const collector = createStdoutCollector(MAX_STDOUT_BYTES);
+            const partialFile = jobMeta.responseFile + '.partial';
             let stderr = '';
             let settled = false;
+            const cleanupPartial = () => {
+                try {
+                    if (existsSync(partialFile))
+                        unlinkSync(partialFile);
+                }
+                catch { /* ignore */ }
+            };
             const timeoutHandle = setTimeout(() => {
                 if (!settled) {
                     settled = true;
@@ -391,6 +399,7 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
                     catch {
                         // ignore
                     }
+                    cleanupPartial();
                     writeJobStatus({
                         ...initialStatus,
                         status: 'timeout',
@@ -401,6 +410,10 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
             }, CODEX_TIMEOUT);
             child.stdout?.on('data', (data) => {
                 collector.append(data.toString());
+                try {
+                    appendFileSync(partialFile, data);
+                }
+                catch { /* ignore */ }
             });
             child.stderr?.on('data', (data) => { stderr += data.toString(); });
             // Update to running after stdin write
@@ -409,6 +422,7 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
                     return;
                 settled = true;
                 clearTimeout(timeoutHandle);
+                cleanupPartial();
                 writeJobStatus({
                     ...initialStatus,
                     status: 'failed',
@@ -425,6 +439,7 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
                 settled = true;
                 clearTimeout(timeoutHandle);
                 spawnedPids.delete(pid);
+                cleanupPartial();
                 const stdout = collector.toString();
                 // Check if user killed this job - if so, don't overwrite the killed status
                 const currentStatus = readJobStatus('codex', jobMeta.slug, jobMeta.jobId, workingDirectory);
@@ -580,6 +595,7 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
                     return;
                 settled = true;
                 clearTimeout(timeoutHandle);
+                cleanupPartial();
                 writeJobStatus({
                     ...initialStatus,
                     status: 'failed',
@@ -594,41 +610,6 @@ export function executeCodexBackground(fullPrompt, modelInput, jobMeta, workingD
     }
     catch (err) {
         return { error: `Failed to start background execution: ${err.message}` };
-    }
-}
-/**
- * Validate and read a file for context inclusion
- */
-export function validateAndReadFile(filePath, baseDir) {
-    if (typeof filePath !== 'string') {
-        return `--- File: ${filePath} --- (Invalid path type)`;
-    }
-    try {
-        const workingDir = baseDir || process.cwd();
-        const resolvedAbs = resolve(workingDir, filePath);
-        // Security: ensure file is within working directory (worktree boundary)
-        const cwdReal = realpathSync(workingDir);
-        const relAbs = relative(cwdReal, resolvedAbs);
-        if (relAbs === '..' || relAbs.startsWith('..' + sep) || isAbsolute(relAbs)) {
-            return `[BLOCKED] File '${filePath}' is outside the working directory. Only files within the project are allowed.`;
-        }
-        // Symlink-safe check: ensure the real path also stays inside the boundary.
-        const resolvedReal = realpathSync(resolvedAbs);
-        const relReal = relative(cwdReal, resolvedReal);
-        if (relReal === '..' || relReal.startsWith('..' + sep) || isAbsolute(relReal)) {
-            return `[BLOCKED] File '${filePath}' is outside the working directory. Only files within the project are allowed.`;
-        }
-        const stats = statSync(resolvedReal);
-        if (!stats.isFile()) {
-            return `--- File: ${filePath} --- (Not a regular file)`;
-        }
-        if (stats.size > MAX_FILE_SIZE) {
-            return `--- File: ${filePath} --- (File too large: ${(stats.size / 1024 / 1024).toFixed(1)}MB, max 5MB)`;
-        }
-        return wrapUntrustedFileContent(filePath, readFileSync(resolvedReal, 'utf-8'));
-    }
-    catch {
-        return `--- File: ${filePath} --- (Error reading file)`;
     }
 }
 /**
@@ -833,10 +814,16 @@ ${resolvedPrompt}`;
     }
     // Resolve system prompt from agent role
     const resolvedSystemPrompt = resolveSystemPrompt(undefined, agent_role, 'codex');
-    // Build file context
+    // Build file context — validate paths first to prevent path traversal and prompt injection
     let fileContext;
     if (context_files && context_files.length > 0) {
-        fileContext = context_files.map(f => validateAndReadFile(f, baseDir)).join('\n\n');
+        const { validPaths, errors } = validateContextFilePaths(context_files, baseDirReal, isExternalPromptAllowed());
+        if (errors.length > 0) {
+            console.warn('[codex-core] context_files validation rejected paths:', errors.join('; '));
+        }
+        if (validPaths.length > 0) {
+            fileContext = `The following files are available for reference. Use your file tools to read them as needed:\n${validPaths.map(f => `- ${f}`).join('\n')}`;
+        }
     }
     // Combine: system prompt > file context > user prompt
     const fullPrompt = buildPromptWithSystemContext(userPrompt, fileContext, resolvedSystemPrompt);
@@ -883,6 +870,7 @@ ${resolvedPrompt}`;
                         `**PID:** ${result.pid}`,
                         `**Prompt File:** ${promptResult.filePath}`,
                         `**Response File:** ${expectedResponsePath}`,
+                        `**Partial Output:** ${expectedResponsePath}.partial  (tail -f to stream live)`,
                         `**Status File:** ${statusFilePath}`,
                         ``,
                         `Job dispatched. Check response file existence or read status file for completion.`,

@@ -26,7 +26,7 @@
 
 **ステップ 2: セットアップ**
 ```bash
-/oh-my-claudecode:omc-setup
+/omc-setup
 ```
 
 **ステップ 3: 何か作ってみる**
@@ -36,22 +36,73 @@ autopilot: build a REST API for managing tasks
 
 以上です。あとは自動で進みます。
 
-> **注意: パッケージ名について** — プロジェクトのブランド名は **oh-my-claudecode**（リポジトリ、プラグイン、コマンド）ですが、npmパッケージは [`oh-my-claude-sisyphus`](https://www.npmjs.com/package/oh-my-claude-sisyphus) として公開されています。npm/bunでCLIツールをインストールする場合は `npm install -g oh-my-claude-sisyphus` を使用してください。
+## Team モード（推奨）
+
+**v4.1.7** から **Team** が OMC の標準オーケストレーション方式です。**swarm** や **ultrapilot** などのレガシーエントリポイントは引き続きサポートされていますが、**内部的に Team にルーティング**されます。
+
+```bash
+/team 3:executor "fix all TypeScript errors"
+```
+
+Team はステージ型パイプラインで実行されます:
+
+`team-plan → team-prd → team-exec → team-verify → team-fix (loop)`
+
+`~/.claude/settings.json` で Claude Code ネイティブチームを有効化:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+> チームが無効の場合、OMC は警告を表示し、可能な場合は Team なしの実行にフォールバックします。
+
+### tmux CLI ワーカー — Codex & Gemini (v4.4.0+)
+
+**v4.4.0 で Codex/Gemini MCP サーバー**（`x`、`g` プロバイダー）が**削除されます**。代わりに `/omc-teams` を使って tmux 分割ペインで実際の CLI プロセスを起動してください:
+
+```bash
+/omc-teams 2:codex   "review auth module for security issues"
+/omc-teams 2:gemini  "redesign UI components for accessibility"
+/omc-teams 1:claude  "implement the payment flow"
+```
+
+Codex + Gemini を一つのコマンドで使うには **`/ccg`** スキルを使います:
+
+```bash
+/ccg Review this PR — architecture (Codex) and UI components (Gemini)
+```
+
+| スキル | ワーカー | 最適用途 |
+|-------|---------|----------|
+| `/omc-teams N:codex` | N 個の Codex CLI ペイン | コードレビュー、セキュリティ解析、アーキテクチャ |
+| `/omc-teams N:gemini` | N 個の Gemini CLI ペイン | UI/UX デザイン、ドキュメント、大規模コンテキスト |
+| `/omc-teams N:claude` | N 個の Claude CLI ペイン | tmux で Claude CLI を使う汎用タスク |
+| `/ccg` | Codex 1 個 + Gemini 1 個 | 並列トライモデルオーケストレーション |
+
+ワーカーはオンデマンドで起動し、タスク完了後に終了します — アイドルリソースの無駄なし。`codex` / `gemini` CLI のインストールとアクティブな tmux セッションが必要です。
+
+> **注意: パッケージ名について** — プロジェクトのブランド名は **oh-my-claudecode**（リポジトリ、プラグイン、コマンド）ですが、npmパッケージは [`oh-my-claudecode`](https://www.npmjs.com/package/oh-my-claude-sisyphus) として公開されています。npm/bunでCLIツールをインストールする場合は `npm install -g oh-my-claude-sisyphus` を使用してください。
 
 ### アップデート
 
 ```bash
-# 1. プラグインを更新
-/plugin install oh-my-claudecode
+# 1. マーケットプレイスクローンを更新
+/plugin marketplace update omc
 
 # 2. セットアップを再実行して設定を更新
-/oh-my-claudecode:omc-setup
+/omc-setup
 ```
+
+> **注意:** マーケットプレイスの自動更新が有効になっていない場合は、セットアップ実行前に `/plugin marketplace update omc` を手動で実行して最新バージョンを同期する必要があります。
 
 更新後に問題が発生した場合は、古いプラグインキャッシュをクリアしてください：
 
 ```bash
-/oh-my-claudecode:omc-doctor
+/omc-doctor
 ```
 
 <h1 align="center">あなたの Claude がステロイド級にパワーアップ。</h1>
@@ -79,14 +130,16 @@ autopilot: build a REST API for managing tasks
 ### 実行モード
 用途に応じた複数の戦略 - 完全自律ビルドからトークン効率の良いリファクタリングまで。[詳しくはこちら →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
 
-| モード | スピード | 用途 |
-|------|-------|------|
-| **Autopilot** | 高速 | 完全自律ワークフロー |
-| **Ultrawork** | 並列 | あらゆるタスクの最大並列化 |
-| **Ralph** | 粘り強い | 必ず完遂すべきタスク |
-| **Ultrapilot** | 3〜5倍速 | 複数コンポーネントシステム |
-| **Swarm** | 協調 | 並列独立タスク |
-| **Pipeline** | 逐次 | 多段階処理 |
+| モード | 特徴 | 用途 |
+|------|---------|------|
+| **Team（推奨）** | ステージ型パイプライン | 共有タスクリストで協力する Claude エージェント |
+| **omc-teams** | tmux CLI ワーカー | Codex/Gemini CLI タスク; オンデマンド起動、完了後終了 |
+| **ccg** | トライモデル並列 | Codex（分析）+ Gemini（デザイン）、Claude が統合 |
+| **Autopilot** | 自律実行 | 最小限のセレモニーで end-to-end 機能開発 |
+| **Ultrawork** | 最大並列 | Team 不要な並列修正/リファクタリング |
+| **Ralph** | 粘り強いモード | 完全に完了させるべきタスク |
+| **Pipeline** | 逐次処理 | 厳密な順序が必要な多段階変換 |
+| **Swarm / Ultrapilot（レガシー）** | Team へルーティング | 既存ワークフローと古いドキュメント |
 
 ### インテリジェント・オーケストレーション
 
@@ -111,11 +164,16 @@ autopilot: build a REST API for managing tasks
 
 | キーワード | 効果 | 例 |
 |---------|-----|-----|
+| `team` | 標準 Team オーケストレーション | `/team 3:executor "fix all TypeScript errors"` |
+| `omc-teams` | tmux CLI ワーカー (codex/gemini/claude) | `/omc-teams 2:codex "security review"` |
+| `ccg` | トライモデル Codex+Gemini オーケストレーション | `/ccg review this PR` |
 | `autopilot` | 完全自律実行 | `autopilot: build a todo app` |
 | `ralph` | 粘り強いモード | `ralph: refactor auth` |
 | `ulw` | 最大並列化 | `ulw fix all errors` |
 | `plan` | 計画インタビュー | `plan the API` |
 | `ralplan` | 反復的計画合意形成 | `ralplan this feature` |
+| `swarm` | レガシーキーワード（Team にルーティング） | `swarm 5 agents: fix lint errors` |
+| `ultrapilot` | レガシーキーワード（Team にルーティング） | `ultrapilot: build a fullstack app` |
 
 **ralph は ultrawork を含む:** ralph モードを有効にすると、ultrawork の並列実行が自動的に含まれます。キーワードを組み合わせる必要はありません。
 
@@ -135,7 +193,7 @@ omc wait --stop   # デーモンを無効化
 
 **必要なもの:** tmux (セッション検出用)
 
-### 通知タグ設定 (Telegram/Discord)
+### 通知タグ設定 (Telegram/Discord/Slack)
 
 stop コールバックがセッション要約を送るときに、誰をタグ付けするか設定できます。
 
@@ -143,6 +201,7 @@ stop コールバックがセッション要約を送るときに、誰をタグ
 # タグ一覧を設定/置換
 omc config-stop-callback telegram --enable --token <bot_token> --chat <chat_id> --tag-list "@alice,bob"
 omc config-stop-callback discord --enable --webhook <url> --tag-list "@here,123456789012345678,role:987654321098765432"
+omc config-stop-callback slack --enable --webhook <url> --tag-list "<!here>,<@U1234567890>"
 
 # 追加・削除・クリア
 omc config-stop-callback telegram --add-tag charlie
@@ -153,6 +212,7 @@ omc config-stop-callback discord --clear-tags
 タグの挙動:
 - Telegram: `alice` は `@alice` に正規化
 - Discord: `@here`、`@everyone`、数値ユーザーID、`role:<id>` をサポート
+- Slack: `<@MEMBER_ID>`、`<!channel>`、`<!here>`、`<!everyone>`、`<!subteam^GROUP_ID>` をサポート
 - `file` コールバックはタグオプションを無視
 
 ---
@@ -179,9 +239,12 @@ export OMC_DISCORD_NOTIFIER_CHANNEL="your_channel_id"
 export OMC_TELEGRAM_BOT_TOKEN="your_bot_token"
 export OMC_TELEGRAM_CHAT_ID="your_chat_id"
 
+# Slack
+export OMC_SLACK_WEBHOOK_URL="your_webhook_url"
+export OMC_SLACK_MENTION="<@U1234567890>"  # optional
+
 # Optional webhooks
 export OMC_DISCORD_WEBHOOK_URL="your_webhook_url"
-export OMC_SLACK_WEBHOOK_URL="your_webhook_url"
 ```
 
 > 注意: `claude` を実行する同じシェルで環境変数が読み込まれている必要があります。

@@ -95,7 +95,7 @@ const AGENT_TYPE_CODES = {
     // ============================================================
     // BACKWARD COMPATIBILITY (Deprecated)
     // ============================================================
-    // Researcher - 'R' for Researcher (deprecated, points to dependency-expert)
+    // Researcher - 'r' for Researcher (deprecated, points to document-specialist)
     researcher: 'r', // sonnet
 };
 /**
@@ -308,7 +308,7 @@ function truncateDescription(desc, maxWidth = 20) {
  */
 function getShortAgentName(agentType) {
     const parts = agentType.split(':');
-    let name = parts[parts.length - 1] || agentType;
+    const name = parts[parts.length - 1] || agentType;
     // Abbreviate common names
     const abbrevs = {
         // Build/Analysis Lane

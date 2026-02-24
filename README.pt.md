@@ -26,7 +26,7 @@
 
 **Passo 2: Configure**
 ```bash
-/oh-my-claudecode:omc-setup
+/omc-setup
 ```
 
 **Passo 3: Crie algo**
@@ -41,7 +41,7 @@ autopilot: build a REST API for managing tasks
 A partir da **v4.1.7**, o **Team** é a superfície canônica de orquestração no OMC. Entrypoints legados como **swarm** e **ultrapilot** continuam com suporte, mas agora **roteiam para Team por baixo dos panos**.
 
 ```bash
-/oh-my-claudecode:team 3:executor "fix all TypeScript errors"
+/team 3:executor "fix all TypeScript errors"
 ```
 
 O Team roda como um pipeline em estágios:
@@ -60,22 +60,49 @@ Ative os times nativos do Claude Code em `~/.claude/settings.json`:
 
 > Se os times estiverem desativados, o OMC vai avisar você e fazer fallback para execução sem Team quando possível.
 
-> **Observação: Nome do pacote** — O projeto usa a marca **oh-my-claudecode** (repo, plugin, comandos), mas o pacote npm é publicado como [`oh-my-claude-sisyphus`](https://www.npmjs.com/package/oh-my-claude-sisyphus). Se você instalar as ferramentas de CLI via npm/bun, use `npm install -g oh-my-claude-sisyphus`.
+### Trabalhadores CLI tmux — Codex & Gemini (v4.4.0+)
+
+**v4.4.0 remove os servidores MCP de Codex/Gemini** (provedores `x`, `g`). Use `/omc-teams` para lançar processos CLI reais em painéis divididos do tmux:
+
+```bash
+/omc-teams 2:codex   "review auth module for security issues"
+/omc-teams 2:gemini  "redesign UI components for accessibility"
+/omc-teams 1:claude  "implement the payment flow"
+```
+
+Para trabalho misto de Codex + Gemini em um único comando, use a skill **`/ccg`**:
+
+```bash
+/ccg Review this PR — architecture (Codex) and UI components (Gemini)
+```
+
+| Skill | Trabalhadores | Melhor Para |
+|-------|---------|----------|
+| `/omc-teams N:codex` | N painéis Codex CLI | Revisão de código, análise de segurança, arquitetura |
+| `/omc-teams N:gemini` | N painéis Gemini CLI | Design UI/UX, docs, tarefas de grande contexto |
+| `/omc-teams N:claude` | N painéis Claude CLI | Tarefas gerais via Claude CLI no tmux |
+| `/ccg` | 1 Codex + 1 Gemini | Orquestração tri-modelo em paralelo |
+
+Trabalhadores são iniciados sob demanda e encerrados quando a tarefa é concluída — sem uso ocioso de recursos. Requer as CLIs `codex` / `gemini` instaladas e uma sessão tmux ativa.
+
+> **Observação: Nome do pacote** — O projeto usa a marca **oh-my-claudecode** (repo, plugin, comandos), mas o pacote npm é publicado como [`oh-my-claudecode`](https://www.npmjs.com/package/oh-my-claude-sisyphus). Se você instalar as ferramentas de CLI via npm/bun, use `npm install -g oh-my-claude-sisyphus`.
 
 ### Atualizando
 
 ```bash
-# 1. Atualize o plugin
-/plugin install oh-my-claudecode
+# 1. Atualize o clone do marketplace
+/plugin marketplace update omc
 
 # 2. Execute o setup novamente para atualizar a configuração
-/oh-my-claudecode:omc-setup
+/omc-setup
 ```
+
+> **Observação:** Se a atualização automática do marketplace não estiver habilitada, você precisa executar manualmente `/plugin marketplace update omc` para sincronizar a versão mais recente antes de executar o setup.
 
 Se você tiver problemas depois de atualizar, limpe o cache antigo do plugin:
 
 ```bash
-/oh-my-claudecode:omc-doctor
+/omc-doctor
 ```
 
 <h1 align="center">Seu Claude acabou de tomar esteroides.</h1>
@@ -107,6 +134,8 @@ Múltiplas estratégias para diferentes casos de uso — da orquestração com T
 | Modo | O que é | Usar para |
 |------|---------|-----------|
 | **Team (recommended)** | Pipeline canônico em estágios (`team-plan → team-prd → team-exec → team-verify → team-fix`) | Agentes coordenados trabalhando em uma lista de tarefas compartilhada |
+| **omc-teams** | Trabalhadores CLI tmux — processos reais `claude`/`codex`/`gemini` em painéis divididos | Tarefas Codex/Gemini CLI; criados sob demanda, encerrados ao terminar |
+| **ccg** | Tri-modelo: Codex (analítico) + Gemini (design) em paralelo, Claude sintetiza | Trabalho misto de backend+UI que precisa de Codex e Gemini |
 | **Autopilot** | Execução autônoma (um único agente líder) | Trabalho de feature ponta a ponta com cerimônia mínima |
 | **Ultrawork** | Paralelismo máximo (sem Team) | Rajadas de correções/refatorações paralelas quando Team não é necessário |
 | **Ralph** | Modo persistente com loops de verify/fix | Tarefas que precisam ser concluídas por completo (sem parciais silenciosos) |
@@ -136,7 +165,9 @@ Atalhos opcionais para usuários avançados. Linguagem natural funciona bem sem 
 
 | Palavra-chave | Efeito | Exemplo |
 |---------------|--------|---------|
-| `team` | Orquestração canônica com Team | `/oh-my-claudecode:team 3:executor "fix all TypeScript errors"` |
+| `team` | Orquestração canônica com Team | `/team 3:executor "fix all TypeScript errors"` |
+| `omc-teams` | Trabalhadores CLI tmux (codex/gemini/claude) | `/omc-teams 2:codex "security review"` |
+| `ccg` | Orquestação tri-modelo Codex+Gemini | `/ccg review this PR` |
 | `autopilot` | Execução autônoma completa | `autopilot: build a todo app` |
 | `ralph` | Modo persistente | `ralph: refactor auth` |
 | `ulw` | Paralelismo máximo | `ulw fix all errors` |
@@ -163,7 +194,7 @@ omc wait --stop   # Disable daemon
 
 **Requer:** tmux (para detecção de sessão)
 
-### Tags de Notificação (Telegram/Discord)
+### Tags de Notificação (Telegram/Discord/Slack)
 
 Você pode configurar quem recebe tag quando callbacks de parada enviam resumos de sessão.
 
@@ -171,6 +202,7 @@ Você pode configurar quem recebe tag quando callbacks de parada enviam resumos 
 # Set/replace tag list
 omc config-stop-callback telegram --enable --token <bot_token> --chat <chat_id> --tag-list "@alice,bob"
 omc config-stop-callback discord --enable --webhook <url> --tag-list "@here,123456789012345678,role:987654321098765432"
+omc config-stop-callback slack --enable --webhook <url> --tag-list "<!here>,<@U1234567890>"
 
 # Incremental updates
 omc config-stop-callback telegram --add-tag charlie
@@ -181,6 +213,7 @@ omc config-stop-callback discord --clear-tags
 Comportamento das tags:
 - Telegram: `alice` vira `@alice`
 - Discord: suporta `@here`, `@everyone`, IDs numéricos de usuário e `role:<id>`
+- Slack: suporta `<@MEMBER_ID>`, `<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^GROUP_ID>`
 - callbacks de `file` ignoram opções de tag
 
 ---

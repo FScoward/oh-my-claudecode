@@ -4,6 +4,49 @@
  * Parse stdin JSON from Claude Code statusline interface.
  * Based on claude-hud reference implementation.
  */
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+// ============================================================================
+// Stdin Cache (for --watch mode)
+// ============================================================================
+function getStdinCachePath() {
+    return join(process.cwd(), '.omc', 'state', 'hud-stdin-cache.json');
+}
+/**
+ * Persist the last successful stdin read to disk.
+ * Used by --watch mode to recover data when stdin is a TTY.
+ */
+export function writeStdinCache(stdin) {
+    try {
+        const cacheDir = join(process.cwd(), '.omc', 'state');
+        if (!existsSync(cacheDir)) {
+            mkdirSync(cacheDir, { recursive: true });
+        }
+        writeFileSync(getStdinCachePath(), JSON.stringify(stdin));
+    }
+    catch {
+        // Best-effort; ignore failures
+    }
+}
+/**
+ * Read the last cached stdin JSON.
+ * Returns null if no cache exists or it is unreadable.
+ */
+export function readStdinCache() {
+    try {
+        const cachePath = getStdinCachePath();
+        if (!existsSync(cachePath)) {
+            return null;
+        }
+        return JSON.parse(readFileSync(cachePath, 'utf-8'));
+    }
+    catch {
+        return null;
+    }
+}
+// ============================================================================
+// Stdin Reader
+// ============================================================================
 /**
  * Read and parse stdin JSON from Claude Code.
  * Returns null if stdin is not available or invalid.

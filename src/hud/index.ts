@@ -6,7 +6,7 @@
  * Receives stdin JSON from Claude Code and outputs formatted statusline.
  */
 
-import { readStdin, getContextPercent, getModelName } from "./stdin.js";
+import { readStdin, writeStdinCache, readStdinCache, getContextPercent, getModelName } from "./stdin.js";
 import { parseTranscript } from "./transcript.js";
 import {
   readHudState,
@@ -22,6 +22,7 @@ import {
   readAutopilotStateForHud,
 } from "./omc-state.js";
 import { getUsage } from "./usage-api.js";
+import { executeCustomProvider } from "./custom-rate-provider.js";
 import { render } from "./render.js";
 import { sanitizeOutput } from "./sanitize.js";
 import type {
@@ -152,7 +153,7 @@ async function recordTokenUsage(
  *
  * @returns Analytics fields or null if no token data available
  */
-async function getTokenTrackerFallback(
+async function _getTokenTrackerFallback(
   sessionId: string,
   durationMs: number,
 ): Promise<{
@@ -313,17 +314,29 @@ async function calculateSessionHealth(
 
 /**
  * Main HUD entry point
+ * @param watchMode - true when called from the --watch polling loop (stdin is TTY)
  */
-async function main(): Promise<void> {
+async function main(watchMode = false): Promise<void> {
   try {
     // Initialize HUD state (cleanup stale/orphaned tasks)
     await initializeHUDState();
 
     // Read stdin from Claude Code
-    const stdin = await readStdin();
+    let stdin = await readStdin();
 
-    if (!stdin) {
-      // No stdin - suggest setup
+    if (stdin) {
+      // Persist for --watch mode so it can read data when stdin is a TTY
+      writeStdinCache(stdin);
+    } else if (watchMode) {
+      // In watch mode stdin is always a TTY; fall back to last cached value
+      stdin = readStdinCache();
+      if (!stdin) {
+        // Cache not yet populated (first poll before statusline fires)
+        console.log("[OMC] Starting...");
+        return;
+      }
+    } else {
+      // Non-watch invocation with no stdin - suggest setup
       console.log("[OMC] run /omc-setup to install properly");
       return;
     }
@@ -349,7 +362,7 @@ async function main(): Promise<void> {
 
     // Read HUD state for background tasks
     const hudState = readHudState(cwd);
-    const backgroundTasks = hudState?.backgroundTasks || [];
+    const _backgroundTasks = hudState?.backgroundTasks || [];
 
     // Persist session start time to survive tail-parsing resets (#528)
     // When tail parsing kicks in for large transcripts, sessionStart comes from
@@ -378,6 +391,12 @@ async function main(): Promise<void> {
     // Fetch rate limits from OAuth API (if available)
     const rateLimits =
       config.elements.rateLimits !== false ? await getUsage() : null;
+
+    // Fetch custom rate limit buckets (if configured)
+    const customBuckets =
+      config.rateLimitsProvider?.type === 'custom'
+        ? await executeCustomProvider(config.rateLimitsProvider)
+        : null;
 
     // Read OMC version and update check cache
     let omcVersion: string | null = null;
@@ -414,6 +433,7 @@ async function main(): Promise<void> {
       cwd,
       lastSkill: transcriptData.lastActivatedSkill || null,
       rateLimits,
+      customBuckets,
       pendingPermission: transcriptData.pendingPermission || null,
       thinkingState: transcriptData.thinkingState || null,
       sessionHealth: await calculateSessionHealth(
@@ -472,7 +492,11 @@ async function main(): Promise<void> {
     // Apply safe mode sanitization if enabled (Issue #346)
     // This strips ANSI codes and uses ASCII-only output to prevent
     // terminal rendering corruption during concurrent updates
-    if (config.elements.safeMode) {
+    // On Windows, always use safe mode to prevent terminal rendering issues
+    // with non-breaking spaces and ANSI escape sequences
+    const useSafeMode = config.elements.safeMode || process.platform === 'win32';
+
+    if (useSafeMode) {
       output = sanitizeOutput(output);
       // In safe mode, use regular spaces (don't convert to non-breaking)
       console.log(output);
@@ -503,5 +527,8 @@ async function main(): Promise<void> {
   }
 }
 
-// Run main
+// Export for programmatic use (e.g., omc hud --watch loop)
+export { main };
+
+// Auto-run (unconditional so dynamic import() via omc-hud.mjs wrapper works correctly)
 main();

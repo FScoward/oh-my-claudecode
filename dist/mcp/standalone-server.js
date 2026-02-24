@@ -22,6 +22,8 @@ import { memoryTools } from '../tools/memory-tools.js';
 import { traceTools } from '../tools/trace-tools.js';
 import { z } from 'zod';
 // Aggregate all tools - AST tools gracefully degrade if @ast-grep/napi is unavailable
+// Team runtime tools (omc_run_team_start, omc_run_team_status) live in the
+// separate "team" MCP server (bridge/team-mcp.cjs) registered in .mcp.json.
 const allTools = [
     ...lspTools,
     ...astTools,
@@ -152,6 +154,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
     }
 });
+// Graceful shutdown: disconnect LSP servers on process termination (#768).
+// Without this, LSP child processes (e.g. jdtls) survive the MCP server exit
+// and become orphaned, consuming memory indefinitely.
+// The MCP server process owns the LSP child processes (spawned via
+// child_process.spawn in LspClient.connect), so cleanup must happen here.
+import { disconnectAll as disconnectAllLsp } from '../tools/lsp/index.js';
+async function gracefulShutdown(signal) {
+    // Hard deadline: exit even if cleanup hangs (e.g. unresponsive LSP server)
+    const forceExitTimer = setTimeout(() => process.exit(1), 5_000);
+    forceExitTimer.unref();
+    console.error(`OMC MCP Server: received ${signal}, disconnecting LSP servers...`);
+    try {
+        await disconnectAllLsp();
+    }
+    catch {
+        // Best-effort — do not block exit
+    }
+    try {
+        await server.close();
+    }
+    catch {
+        // Best-effort — MCP transport cleanup
+    }
+    process.exit(0);
+}
+process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', () => { gracefulShutdown('SIGINT'); });
 // Start the server
 async function main() {
     const transport = new StdioServerTransport();

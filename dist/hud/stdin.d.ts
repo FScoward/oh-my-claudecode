@@ -6,6 +6,16 @@
  */
 import type { StatuslineStdin } from './types.js';
 /**
+ * Persist the last successful stdin read to disk.
+ * Used by --watch mode to recover data when stdin is a TTY.
+ */
+export declare function writeStdinCache(stdin: StatuslineStdin): void;
+/**
+ * Read the last cached stdin JSON.
+ * Returns null if no cache exists or it is unreadable.
+ */
+export declare function readStdinCache(): StatuslineStdin | null;
+/**
  * Read and parse stdin JSON from Claude Code.
  * Returns null if stdin is not available or invalid.
  */

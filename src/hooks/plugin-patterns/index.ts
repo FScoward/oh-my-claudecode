@@ -10,7 +10,7 @@
  */
 
 import { existsSync, readFileSync } from 'fs';
-import { join, extname, normalize, isAbsolute } from 'path';
+import { join, extname, normalize } from 'path';
 import { execSync } from 'child_process';
 
 // =============================================================================
@@ -22,12 +22,16 @@ import { execSync } from 'child_process';
  * Blocks shell metacharacters and path traversal attempts
  */
 export function isValidFilePath(filePath: string): boolean {
-  // Block shell metacharacters (sync with DANGEROUS_SHELL_CHARS but add \t)
-  if (/[;&|`$()<>{}[\]*?~!#\n\r\t\0\\]/.test(filePath)) return false;
+  // Normalize Windows path separators to forward slashes before checking.
+  // Backslashes are valid path separators on Windows (e.g. src\file.ts,
+  // C:\repo\file.ts) and must not be treated as shell metacharacters.
+  const normalized = filePath.replace(/\\/g, '/');
+
+  // Block shell metacharacters
+  if (/[;&|`$()<>{}[\]*?~!#\n\r\t\0]/.test(normalized)) return false;
 
   // Block path traversal
-  const normalized = normalize(filePath);
-  if (normalized.includes('..') || isAbsolute(normalized)) return false;
+  if (normalize(normalized).includes('..')) return false;
 
   return true;
 }
@@ -218,12 +222,18 @@ export function validateCommitMessage(
     return { valid: false, errors };
   }
 
+  // Determine effective types: prefer config.types when non-empty
+  const effectiveTypes = config?.types?.length ? config.types : DEFAULT_COMMIT_TYPES;
+  const commitRegex = effectiveTypes === DEFAULT_COMMIT_TYPES
+    ? CONVENTIONAL_COMMIT_REGEX
+    : new RegExp(`^(${effectiveTypes.join('|')})(\\([a-z0-9-]+\\))?(!)?:\\s.+$`);
+
   // Check conventional commit format
-  if (!CONVENTIONAL_COMMIT_REGEX.test(subject)) {
+  if (!commitRegex.test(subject)) {
     errors.push(
       'Subject must follow conventional commit format: type(scope?): description'
     );
-    errors.push(`Allowed types: ${DEFAULT_COMMIT_TYPES.join(', ')}`);
+    errors.push(`Allowed types: ${effectiveTypes.join(', ')}`);
   }
 
   // Check subject length
@@ -315,6 +325,35 @@ export function runTests(directory: string): { success: boolean; message: string
 }
 
 // =============================================================================
+// PROJECT-LEVEL LINT RUNNER PATTERN
+// =============================================================================
+
+/**
+ * Run project-level lint checks
+ */
+export function runLint(directory: string): { success: boolean; message: string } {
+  const packageJsonPath = join(directory, 'package.json');
+
+  if (existsSync(packageJsonPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+      if (pkg.scripts?.lint) {
+        try {
+          execSync('npm run lint', { cwd: directory, encoding: 'utf-8', stdio: 'pipe' });
+          return { success: true, message: 'Lint passed' };
+        } catch (_error) {
+          return { success: false, message: 'Lint errors found' };
+        }
+      }
+    } catch {
+      // Could not read package.json
+    }
+  }
+
+  return { success: true, message: 'No lint script found' };
+}
+
+// =============================================================================
 // PRE-COMMIT VALIDATION HOOK
 // =============================================================================
 
@@ -342,6 +381,22 @@ export function runPreCommitChecks(
     name: 'Type Check',
     passed: typeCheck.success,
     message: typeCheck.message
+  });
+
+  // Test runner
+  const testCheck = runTests(directory);
+  checks.push({
+    name: 'Tests',
+    passed: testCheck.success,
+    message: testCheck.message
+  });
+
+  // Lint
+  const lintCheck = runLint(directory);
+  checks.push({
+    name: 'Lint',
+    passed: lintCheck.success,
+    message: lintCheck.message
   });
 
   // Commit message validation

@@ -10,6 +10,38 @@ import { randomUUID } from 'crypto';
 import { isTmuxAvailable, isClaudeAvailable } from './tmux-utils.js';
 import { initInteropSession } from '../interop/shared-state.js';
 
+export type InteropMode = 'off' | 'observe' | 'active';
+
+export interface InteropRuntimeFlags {
+  enabled: boolean;
+  mode: InteropMode;
+  omcInteropToolsEnabled: boolean;
+  failClosed: boolean;
+}
+
+export function readInteropRuntimeFlags(env: NodeJS.ProcessEnv = process.env): InteropRuntimeFlags {
+  const rawMode = (env.OMX_OMC_INTEROP_MODE || 'off').toLowerCase();
+  const mode: InteropMode = rawMode === 'observe' || rawMode === 'active' ? rawMode : 'off';
+  return {
+    enabled: env.OMX_OMC_INTEROP_ENABLED === '1',
+    mode,
+    omcInteropToolsEnabled: env.OMC_INTEROP_TOOLS_ENABLED === '1',
+    failClosed: env.OMX_OMC_INTEROP_FAIL_CLOSED !== '0',
+  };
+}
+
+export function validateInteropRuntimeFlags(flags: InteropRuntimeFlags): { ok: boolean; reason?: string } {
+  if (!flags.enabled && flags.mode !== 'off') {
+    return { ok: false, reason: 'OMX_OMC_INTEROP_MODE must be "off" when OMX_OMC_INTEROP_ENABLED=0.' };
+  }
+
+  if (flags.mode === 'active' && !flags.omcInteropToolsEnabled) {
+    return { ok: false, reason: 'Active mode requires OMC_INTEROP_TOOLS_ENABLED=1.' };
+  }
+
+  return { ok: true };
+}
+
 /**
  * Check if codex CLI is available
  */
@@ -26,6 +58,16 @@ function isCodexAvailable(): boolean {
  * Launch interop session with split tmux panes
  */
 export function launchInteropSession(cwd: string = process.cwd()): void {
+  const flags = readInteropRuntimeFlags();
+  const flagCheck = validateInteropRuntimeFlags(flags);
+
+  console.log(`[interop] mode=${flags.mode}, enabled=${flags.enabled ? '1' : '0'}, tools=${flags.omcInteropToolsEnabled ? '1' : '0'}, failClosed=${flags.failClosed ? '1' : '0'}`);
+  if (!flagCheck.ok) {
+    console.error(`Error: ${flagCheck.reason}`);
+    console.error('Refusing to start interop in invalid flag configuration.');
+    process.exit(1);
+  }
+
   // Check prerequisites
   if (!isTmuxAvailable()) {
     console.error('Error: tmux is not available. Install tmux to use interop mode.');
@@ -58,7 +100,7 @@ export function launchInteropSession(cwd: string = process.cwd()): void {
   const sessionId = `interop-${randomUUID().split('-')[0]}`;
 
   // Initialize interop session
-  const config = initInteropSession(sessionId, cwd, hasCodex ? cwd : undefined);
+  const _config = initInteropSession(sessionId, cwd, hasCodex ? cwd : undefined);
 
   console.log(`Initializing interop session: ${sessionId}`);
   console.log(`Working directory: ${cwd}`);
@@ -71,7 +113,7 @@ export function launchInteropSession(cwd: string = process.cwd()): void {
       encoding: 'utf-8',
     });
     currentPaneId = output.trim();
-  } catch (error) {
+  } catch (_error) {
     console.error('Error: Failed to get current tmux pane ID');
     process.exit(1);
   }

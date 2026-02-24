@@ -7,12 +7,13 @@
  * Ported from oh-my-opencode's keyword-detector hook.
  */
 import { isTeamEnabled } from '../../features/auto-update.js';
+import { classifyTaskSize, isHeavyMode, } from '../task-size-detector/index.js';
 /**
  * Keyword patterns for each mode
  */
 const KEYWORD_PATTERNS = {
     cancel: /\b(cancelomc|stopomc)\b/i,
-    ralph: /\b(ralph)\b/i,
+    ralph: /\b(ralph)\b(?!-)/i,
     autopilot: /\b(autopilot|auto[\s-]?pilot|fullsend|full\s+auto)\b/i,
     ultrapilot: /\b(ultrapilot|ultra-pilot)\b|\bparallel\s+build\b|\bswarm\s+build\b/i,
     ultrawork: /\b(ultrawork|ulw)\b/i,
@@ -20,11 +21,11 @@ const KEYWORD_PATTERNS = {
     team: /(?<!\b(?:my|the|our|a|his|her|their|its)\s)\bteam\b|\bcoordinated\s+team\b/i,
     pipeline: /\bagent\s+pipeline\b|\bchain\s+agents\b/i,
     ralplan: /\b(ralplan)\b/i,
-    plan: /\bplan\s+(this|the)\b/i,
     tdd: /\b(tdd)\b|\btest\s+first\b/i,
     ultrathink: /\b(ultrathink)\b/i,
     deepsearch: /\b(deepsearch)\b|\bsearch\s+the\s+codebase\b|\bfind\s+in\s+(the\s+)?codebase\b/i,
     analyze: /\b(deep[\s-]?analyze|deepanalyze)\b/i,
+    ccg: /\b(ccg|claude-codex-gemini)\b/i,
     codex: /\b(ask|use|delegate\s+to)\s+(codex|gpt)\b/i,
     gemini: /\b(ask|use|delegate\s+to)\s+gemini\b/i
 };
@@ -33,7 +34,7 @@ const KEYWORD_PATTERNS = {
  */
 const KEYWORD_PRIORITY = [
     'cancel', 'ralph', 'autopilot', 'ultrapilot', 'team', 'ultrawork',
-    'swarm', 'pipeline', 'ralplan', 'plan', 'tdd',
+    'swarm', 'pipeline', 'ccg', 'ralplan', 'tdd',
     'ultrathink', 'deepsearch', 'analyze', 'codex', 'gemini'
 ];
 /**
@@ -49,7 +50,7 @@ export function removeCodeBlocks(text) {
     return result;
 }
 /**
- * Sanitize text for keyword detection by removing structural noise.
+* Sanitize text for keyword detection by removing structural noise.
  * Strips XML tags, URLs, file paths, and code blocks.
  */
 export function sanitizeForKeywordDetection(text) {
@@ -129,6 +130,39 @@ export function getAllKeywords(text) {
     }
     // Sort by priority order
     return KEYWORD_PRIORITY.filter(k => types.includes(k));
+}
+/**
+ * Get all keywords with task-size-based filtering applied.
+ * For small tasks, heavy orchestration modes (ralph/autopilot/team/ultrawork etc.)
+ * are suppressed to avoid over-orchestration.
+ *
+ * This is the recommended function to use in the bridge hook for keyword detection.
+ */
+export function getAllKeywordsWithSizeCheck(text, options = {}) {
+    const { enabled = true, smallWordLimit = 50, largeWordLimit = 200, suppressHeavyModesForSmallTasks = true, } = options;
+    const keywords = getAllKeywords(text);
+    if (!enabled || !suppressHeavyModesForSmallTasks || keywords.length === 0) {
+        return { keywords, taskSizeResult: null, suppressedKeywords: [] };
+    }
+    const thresholds = { smallWordLimit, largeWordLimit };
+    const taskSizeResult = classifyTaskSize(text, thresholds);
+    // Only suppress heavy modes for small tasks
+    if (taskSizeResult.size !== 'small') {
+        return { keywords, taskSizeResult, suppressedKeywords: [] };
+    }
+    const suppressedKeywords = [];
+    const filteredKeywords = keywords.filter(keyword => {
+        if (isHeavyMode(keyword)) {
+            suppressedKeywords.push(keyword);
+            return false;
+        }
+        return true;
+    });
+    return {
+        keywords: filteredKeywords,
+        taskSizeResult,
+        suppressedKeywords,
+    };
 }
 /**
  * Get the highest priority keyword detected with conflict resolution

@@ -106,6 +106,7 @@ export function formatSessionEnd(payload) {
     if (payload.contextSummary) {
         lines.push("", `**Summary:** ${payload.contextSummary}`);
     }
+    appendTmuxTail(lines, payload);
     lines.push("");
     lines.push(buildFooter(payload, true));
     return lines.join("\n");
@@ -123,6 +124,68 @@ export function formatSessionIdle(payload) {
     }
     if (payload.modesUsed && payload.modesUsed.length > 0) {
         lines.push(`**Modes:** ${payload.modesUsed.join(", ")}`);
+    }
+    appendTmuxTail(lines, payload);
+    lines.push("");
+    lines.push(buildFooter(payload, true));
+    return lines.join("\n");
+}
+/** Matches ANSI escape sequences (CSI and two-character escapes). */
+const ANSI_ESCAPE_RE = /\x1b(?:[@-Z\\-_]|\[[0-9;]*[a-zA-Z])/g;
+/** Lines starting with these characters are OMC UI chrome, not output. */
+const UI_CHROME_RE = /^[●⎿✻·◼]/;
+/** Matches the "ctrl+o to expand" hint injected by OMC. */
+const CTRL_O_RE = /ctrl\+o to expand/i;
+/** Maximum number of meaningful lines to include in a notification. */
+const MAX_TAIL_LINES = 10;
+/**
+ * Parse raw tmux output into clean, human-readable lines.
+ * - Strips ANSI escape codes
+ * - Drops lines starting with OMC chrome characters (●, ⎿, ✻, ·, ◼)
+ * - Drops "ctrl+o to expand" hint lines
+ * - Returns at most 10 non-empty lines
+ */
+export function parseTmuxTail(raw) {
+    const meaningful = [];
+    for (const line of raw.split("\n")) {
+        const stripped = line.replace(ANSI_ESCAPE_RE, "");
+        const trimmed = stripped.trim();
+        if (!trimmed)
+            continue;
+        if (UI_CHROME_RE.test(trimmed))
+            continue;
+        if (CTRL_O_RE.test(trimmed))
+            continue;
+        meaningful.push(stripped.trimEnd());
+    }
+    return meaningful.slice(-MAX_TAIL_LINES).join("\n");
+}
+/**
+ * Append tmux tail content to a message if present in the payload.
+ */
+function appendTmuxTail(lines, payload) {
+    if (payload.tmuxTail) {
+        const parsed = parseTmuxTail(payload.tmuxTail);
+        if (parsed) {
+            lines.push("");
+            lines.push("**Recent output:**");
+            lines.push("```");
+            lines.push(parsed);
+            lines.push("```");
+        }
+    }
+}
+/**
+ * Format agent-call notification message.
+ * Sent when a new agent (Task) is spawned.
+ */
+export function formatAgentCall(payload) {
+    const lines = [`# Agent Spawned`, ""];
+    if (payload.agentName) {
+        lines.push(`**Agent:** \`${payload.agentName}\``);
+    }
+    if (payload.agentType) {
+        lines.push(`**Type:** \`${payload.agentType}\``);
     }
     lines.push("");
     lines.push(buildFooter(payload, true));
@@ -159,6 +222,8 @@ export function formatNotification(payload) {
             return formatSessionIdle(payload);
         case "ask-user-question":
             return formatAskUserQuestion(payload);
+        case "agent-call":
+            return formatAgentCall(payload);
         default:
             return payload.message || `Event: ${payload.event}`;
     }

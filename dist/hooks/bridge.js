@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { resolveToWorktreeRoot } from "../lib/worktree-paths.js";
 // Hot-path imports: needed on every/most hook invocations (keyword-detector, pre/post-tool-use)
-import { removeCodeBlocks, getAllKeywords } from "./keyword-detector/index.js";
+import { removeCodeBlocks, getAllKeywordsWithSizeCheck } from "./keyword-detector/index.js";
 import { processOrchestratorPreTool, processOrchestratorPostTool } from "./omc-orchestrator/index.js";
 import { normalizeHookInput } from "./bridge-normalize.js";
 import { addBackgroundTask, getRunningTaskCount, } from "../hud/background-tasks.js";
@@ -161,14 +161,36 @@ async function processKeywordDetector(input) {
     }
     // Remove code blocks to prevent false positives
     const cleanedText = removeCodeBlocks(promptText);
-    // Get all keywords (supports multiple keywords in one prompt)
-    const keywords = getAllKeywords(cleanedText);
-    if (keywords.length === 0) {
-        return { continue: true };
-    }
     const sessionId = input.sessionId;
     const directory = resolveToWorktreeRoot(input.directory);
     const messages = [];
+    // Load config for task-size detection settings
+    const config = loadConfig();
+    const taskSizeConfig = config.taskSizeDetection ?? {};
+    // Get all keywords with optional task-size filtering (issue #790)
+    const sizeCheckResult = getAllKeywordsWithSizeCheck(cleanedText, {
+        enabled: taskSizeConfig.enabled !== false,
+        smallWordLimit: taskSizeConfig.smallWordLimit ?? 50,
+        largeWordLimit: taskSizeConfig.largeWordLimit ?? 200,
+        suppressHeavyModesForSmallTasks: taskSizeConfig.suppressHeavyModesForSmallTasks !== false,
+    });
+    const keywords = sizeCheckResult.keywords;
+    // Notify user when heavy modes were suppressed for a small task
+    if (sizeCheckResult.suppressedKeywords.length > 0 && sizeCheckResult.taskSizeResult) {
+        const suppressed = sizeCheckResult.suppressedKeywords.join(', ');
+        const reason = sizeCheckResult.taskSizeResult.reason;
+        messages.push(`[TASK-SIZE: SMALL] Heavy orchestration mode(s) suppressed: ${suppressed}.\n` +
+            `Reason: ${reason}\n` +
+            `Running directly without heavy agent stacking. ` +
+            `Prefix with \`quick:\`, \`simple:\`, or \`tiny:\` to always use lightweight mode. ` +
+            `Use explicit mode keywords (e.g. \`ralph\`) only when you need full orchestration.`);
+    }
+    if (keywords.length === 0) {
+        if (messages.length > 0) {
+            return { continue: true, message: messages.join('\n\n---\n\n') };
+        }
+        return { continue: true };
+    }
     // Process each keyword and collect messages
     for (const keywordType of keywords) {
         switch (keywordType) {
@@ -205,10 +227,17 @@ async function processKeywordDetector(input) {
             case "team":
             case "pipeline":
             case "ralplan":
-            case "plan":
             case "tdd":
                 messages.push(`[MODE: ${keywordType.toUpperCase()}] Skill invocation handled by UserPromptSubmit hook.`);
                 break;
+            case "codex":
+            case "gemini": {
+                messages.push(`[MAGIC KEYWORD: omc-teams]\n` +
+                    `User intent: delegate to ${keywordType} CLI workers via omc-teams.\n` +
+                    `Agent type: ${keywordType}. Parse N from user message (default 1).\n` +
+                    `Invoke: /omc-teams N:${keywordType} "<task from user message>"`);
+                break;
+            }
             default:
                 // Skip unknown keywords
                 break;
@@ -244,8 +273,24 @@ async function processRalph(input) {
     }
     // Lazy-load ralph module
     const { readRalphState, incrementRalphIteration, clearRalphState, readVerificationState, getArchitectVerificationPrompt, clearVerificationState, } = await import("./ralph/index.js");
+    const { isExplicitCancelCommand } = await import("./todo-continuation/index.js");
+    const stopContext = {
+        stop_reason: input.stop_reason,
+        stopReason: input.stopReason,
+        end_turn_reason: input.end_turn_reason,
+        endTurnReason: input.endTurnReason,
+        prompt: input.prompt,
+        tool_name: input.tool_name,
+        toolName: input.toolName,
+        tool_input: input.tool_input,
+        toolInput: input.toolInput,
+    };
+    // Explicit cancel should bypass legacy ralph-loop re-enforcement.
+    if (isExplicitCancelCommand(stopContext)) {
+        return { continue: true };
+    }
     // Read Ralph state
-    const state = readRalphState(directory);
+    const state = readRalphState(directory, sessionId);
     if (!state || !state.active) {
         return { continue: true };
     }
@@ -254,7 +299,7 @@ async function processRalph(input) {
         return { continue: true };
     }
     // Check for existing verification state (architect verification in progress)
-    const verificationState = readVerificationState(directory);
+    const verificationState = readVerificationState(directory, sessionId);
     if (verificationState?.pending) {
         // Check if architect has approved (by looking for the tag in transcript)
         // This is handled more thoroughly in persistent-mode hook
@@ -267,15 +312,15 @@ async function processRalph(input) {
     }
     // Check max iterations
     if (state.iteration >= state.max_iterations) {
-        clearRalphState(directory);
-        clearVerificationState(directory);
+        clearRalphState(directory, sessionId);
+        clearVerificationState(directory, sessionId);
         return {
             continue: true,
             message: `[RALPH LOOP STOPPED] Max iterations (${state.max_iterations}) reached without completion.`,
         };
     }
     // Increment and continue
-    const newState = incrementRalphIteration(directory);
+    const newState = incrementRalphIteration(directory, sessionId);
     if (!newState) {
         return { continue: true };
     }
@@ -304,13 +349,20 @@ async function processPersistentMode(input) {
     const sessionId = input.sessionId;
     const directory = resolveToWorktreeRoot(input.directory);
     // Lazy-load persistent-mode and todo-continuation modules
-    const { checkPersistentModes, createHookOutput } = await import("./persistent-mode/index.js");
+    const { checkPersistentModes, createHookOutput, shouldSendIdleNotification, recordIdleNotificationSent } = await import("./persistent-mode/index.js");
     // Extract stop context for abort detection (supports both camelCase and snake_case)
     const stopContext = {
         stop_reason: input.stop_reason,
         stopReason: input.stopReason,
+        end_turn_reason: input.end_turn_reason,
+        endTurnReason: input.endTurnReason,
         user_requested: input.user_requested,
         userRequested: input.userRequested,
+        prompt: input.prompt,
+        tool_name: input.tool_name,
+        toolName: input.toolName,
+        tool_input: input.tool_input,
+        toolInput: input.toolInput,
     };
     const result = await checkPersistentModes(sessionId, directory, stopContext);
     const output = createHookOutput(result);
@@ -322,11 +374,17 @@ async function processPersistentMode(input) {
             const isAbort = stopContext.user_requested === true || stopContext.userRequested === true;
             const isContextLimit = stopContext.stop_reason === "context_limit" || stopContext.stopReason === "context_limit";
             if (!isAbort && !isContextLimit) {
-                import("../notifications/index.js").then(({ notify }) => notify("session-idle", {
-                    sessionId,
-                    projectPath: directory,
-                    profileName: process.env.OMC_NOTIFY_PROFILE,
-                }).catch(() => { })).catch(() => { });
+                // Per-session cooldown: prevent notification spam when the session idles repeatedly.
+                // Mirrors the cooldown logic in scripts/persistent-mode.cjs (closes #842).
+                const stateDir = join(directory, ".omc", "state");
+                if (shouldSendIdleNotification(stateDir)) {
+                    recordIdleNotificationSent(stateDir);
+                    import("../notifications/index.js").then(({ notify }) => notify("session-idle", {
+                        sessionId,
+                        projectPath: directory,
+                        profileName: process.env.OMC_NOTIFY_PROFILE,
+                    }).catch(() => { })).catch(() => { });
+                }
             }
             // IMPORTANT: Do NOT clean up reply-listener/session-registry on Stop hooks.
             // Stop can fire for normal "idle" turns while the session is still active.
@@ -369,6 +427,7 @@ async function processSessionStart(input) {
     const { readAutopilotState } = await import("./autopilot/index.js");
     const { readUltraworkState } = await import("./ultrawork/index.js");
     const { checkIncompleteTodos } = await import("./todo-continuation/index.js");
+    const { buildAgentsOverlay } = await import("./agents-overlay.js");
     // Trigger silent auto-update check (non-blocking, checks config internally)
     initSilentAutoUpdate();
     // Send session-start notification (non-blocking, swallows errors)
@@ -397,6 +456,16 @@ async function processSessionStart(input) {
         }).catch(() => { });
     }
     const messages = [];
+    // Inject startup codebase map (issue #804) — first context item so agents orient quickly
+    try {
+        const overlayResult = buildAgentsOverlay(directory);
+        if (overlayResult.message) {
+            messages.push(overlayResult.message);
+        }
+    }
+    catch {
+        // Non-blocking: codebase map failure must never break session start
+    }
     // Check for active autopilot state - only restore if it belongs to this session
     const autopilotState = readAutopilotState(directory);
     if (autopilotState?.active && autopilotState.session_id === sessionId) {
@@ -571,6 +640,22 @@ function processPreToolUse(input) {
     // Fire-and-forget: notify users that input is needed BEFORE the tool blocks
     if (input.toolName === "AskUserQuestion" && input.sessionId) {
         _notify.askUserQuestion(input.sessionId, directory, input.toolInput);
+    }
+    // Notify when a new agent is spawned via Task tool (issue #761)
+    // Fire-and-forget: verbosity filtering is handled inside notify()
+    if (input.toolName === "Task" && input.sessionId) {
+        const taskInput = input.toolInput;
+        const agentType = taskInput?.subagent_type;
+        const agentName = agentType?.includes(":")
+            ? agentType.split(":").pop()
+            : agentType;
+        import("../notifications/index.js").then(({ notify }) => notify("agent-call", {
+            sessionId: input.sessionId,
+            projectPath: directory,
+            agentName,
+            agentType,
+            profileName: process.env.OMC_NOTIFY_PROFILE,
+        }).catch(() => { })).catch(() => { });
     }
     // Warn about pkill -f self-termination risk (issue #210)
     // Matches: pkill -f, pkill -9 -f, pkill --full, etc.
@@ -792,7 +877,19 @@ export async function processHook(hookType, rawInput) {
                     return { continue: true };
                 }
                 const { handleSessionEnd } = await import("./session-end/index.js");
-                return await handleSessionEnd(input);
+                // De-normalize: SessionEndInput expects snake_case fields (session_id, cwd).
+                // normalizeHookInput mapped session_id→sessionId and cwd→directory, so we
+                // must reconstruct the snake_case shape before calling the handler.
+                const rawSE = input;
+                const sessionEndInput = {
+                    session_id: (rawSE.sessionId ?? rawSE.session_id),
+                    cwd: (rawSE.directory ?? rawSE.cwd),
+                    transcript_path: rawSE.transcript_path,
+                    permission_mode: (rawSE.permission_mode ?? "default"),
+                    hook_event_name: "SessionEnd",
+                    reason: rawSE.reason ?? "other",
+                };
+                return await handleSessionEnd(sessionEndInput);
             }
             case "subagent-start": {
                 if (!validateHookInput(input, requiredKeysForHook("subagent-start"), "subagent-start")) {
@@ -846,7 +943,18 @@ export async function processHook(hookType, rawInput) {
                     return { continue: true };
                 }
                 const { processPreCompact } = await import("./pre-compact/index.js");
-                return await processPreCompact(input);
+                // De-normalize: PreCompactInput expects snake_case fields (session_id, cwd).
+                const rawPC = input;
+                const preCompactInput = {
+                    session_id: (rawPC.sessionId ?? rawPC.session_id),
+                    cwd: (rawPC.directory ?? rawPC.cwd),
+                    transcript_path: rawPC.transcript_path,
+                    permission_mode: (rawPC.permission_mode ?? "default"),
+                    hook_event_name: "PreCompact",
+                    trigger: rawPC.trigger ?? "auto",
+                    custom_instructions: rawPC.custom_instructions,
+                };
+                return await processPreCompact(preCompactInput);
             }
             case "setup-init":
             case "setup-maintenance": {
@@ -854,18 +962,47 @@ export async function processHook(hookType, rawInput) {
                     return { continue: true };
                 }
                 const { processSetup } = await import("./setup/index.js");
-                return await processSetup({
-                    ...input,
-                    trigger: hookType === "setup-init" ? "init" : "maintenance",
+                // De-normalize: SetupInput expects snake_case fields (session_id, cwd).
+                const rawSetup = input;
+                const setupInput = {
+                    session_id: (rawSetup.sessionId ?? rawSetup.session_id),
+                    cwd: (rawSetup.directory ?? rawSetup.cwd),
+                    transcript_path: rawSetup.transcript_path,
+                    permission_mode: (rawSetup.permission_mode ?? "default"),
                     hook_event_name: "Setup",
-                });
+                    trigger: hookType === "setup-init" ? "init" : "maintenance",
+                };
+                return await processSetup(setupInput);
             }
             case "permission-request": {
                 if (!validateHookInput(input, requiredKeysForHook("permission-request"), "permission-request")) {
                     return { continue: true };
                 }
                 const { handlePermissionRequest } = await import("./permission-handler/index.js");
-                return await handlePermissionRequest(input);
+                // De-normalize: PermissionRequestInput expects snake_case fields
+                // (session_id, cwd, tool_name, tool_input).
+                const rawPR = input;
+                const permissionInput = {
+                    session_id: (rawPR.sessionId ?? rawPR.session_id),
+                    cwd: (rawPR.directory ?? rawPR.cwd),
+                    tool_name: (rawPR.toolName ?? rawPR.tool_name),
+                    tool_input: (rawPR.toolInput ?? rawPR.tool_input),
+                    transcript_path: rawPR.transcript_path,
+                    permission_mode: (rawPR.permission_mode ?? "default"),
+                    hook_event_name: "PermissionRequest",
+                    tool_use_id: rawPR.tool_use_id,
+                };
+                return await handlePermissionRequest(permissionInput);
+            }
+            case "code-simplifier": {
+                const directory = input.directory ?? process.cwd();
+                const stateDir = join(resolveToWorktreeRoot(directory), ".omc", "state");
+                const { processCodeSimplifier } = await import("./code-simplifier/index.js");
+                const result = processCodeSimplifier(directory, stateDir);
+                if (result.shouldBlock) {
+                    return { continue: false, message: result.message };
+                }
+                return { continue: true };
             }
             default:
                 return { continue: true };

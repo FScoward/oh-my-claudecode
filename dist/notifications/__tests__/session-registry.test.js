@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, unlinkSync, statSync, readFileSync, writeFileSync, utimesSync, openSync, closeSync, } from "fs";
+import { existsSync, mkdtempSync, rmSync, unlinkSync, statSync, readFileSync, writeFileSync, utimesSync, openSync, closeSync, } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { tmpdir } from "os";
 import { spawn } from "child_process";
 import { registerMessage, lookupByMessageId, removeSession, removeMessagesByPane, pruneStale, loadAllMappings, } from "../session-registry.js";
-const REGISTRY_PATH = join(homedir(), ".omc", "state", "reply-session-registry.jsonl");
-const LOCK_PATH = join(homedir(), ".omc", "state", "reply-session-registry.lock");
 const SESSION_REGISTRY_MODULE_PATH = join(process.cwd(), "src", "notifications", "session-registry.ts");
+let testDir;
+let REGISTRY_PATH;
+let LOCK_PATH;
 function registerMessageInChildProcess(mapping) {
     return new Promise((resolve, reject) => {
         const script = `
@@ -38,22 +39,16 @@ registerMessage(mapping);
 }
 describe("session-registry", () => {
     beforeEach(() => {
-        // Clean up registry before each test
-        if (existsSync(REGISTRY_PATH)) {
-            unlinkSync(REGISTRY_PATH);
-        }
-        if (existsSync(LOCK_PATH)) {
-            unlinkSync(LOCK_PATH);
-        }
+        // Create a fresh temp directory for each test so registry I/O is fully
+        // isolated from the real ~/.omc/state and from other parallel test runs.
+        testDir = mkdtempSync(join(tmpdir(), "omc-session-registry-test-"));
+        process.env["OMC_TEST_REGISTRY_DIR"] = testDir;
+        REGISTRY_PATH = join(testDir, "reply-session-registry.jsonl");
+        LOCK_PATH = join(testDir, "reply-session-registry.lock");
     });
     afterEach(() => {
-        // Clean up registry after each test
-        if (existsSync(REGISTRY_PATH)) {
-            unlinkSync(REGISTRY_PATH);
-        }
-        if (existsSync(LOCK_PATH)) {
-            unlinkSync(LOCK_PATH);
-        }
+        delete process.env["OMC_TEST_REGISTRY_DIR"];
+        rmSync(testDir, { recursive: true, force: true });
     });
     describe("registerMessage", () => {
         it("appends to JSONL file", () => {
@@ -267,6 +262,32 @@ describe("session-registry", () => {
             registerMessage(mapping);
             const result = lookupByMessageId("telegram", "123");
             expect(result).toBeNull();
+        });
+        it("returns the most recent entry when duplicate message IDs exist", () => {
+            const older = {
+                platform: "discord-bot",
+                messageId: "dup-id",
+                sessionId: "session-old",
+                tmuxPaneId: "%0",
+                tmuxSessionName: "old-session",
+                event: "session-start",
+                createdAt: new Date(Date.now() - 5000).toISOString(),
+            };
+            const newer = {
+                platform: "discord-bot",
+                messageId: "dup-id",
+                sessionId: "session-new",
+                tmuxPaneId: "%1",
+                tmuxSessionName: "new-session",
+                event: "session-start",
+                createdAt: new Date().toISOString(),
+            };
+            registerMessage(older);
+            registerMessage(newer);
+            const result = lookupByMessageId("discord-bot", "dup-id");
+            expect(result).not.toBeNull();
+            expect(result?.sessionId).toBe("session-new");
+            expect(result?.tmuxPaneId).toBe("%1");
         });
     });
     describe("removeSession", () => {

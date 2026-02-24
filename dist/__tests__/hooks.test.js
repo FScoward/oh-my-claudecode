@@ -246,16 +246,14 @@ describe('Keyword Detector', () => {
             expect(detected[0].type).toBe('ralplan');
             expect(detected[0].keyword).toBe('ralplan');
         });
-        it('should detect plan patterns', () => {
+        it('should NOT detect "plan this" / "plan the" patterns (FP-prone, removed in #824)', () => {
             const patterns = [
                 'plan this feature',
                 'plan the refactoring'
             ];
             for (const pattern of patterns) {
                 const detected = detectKeywordsWithType(pattern);
-                expect(detected.length).toBeGreaterThan(0);
-                const hasPlan = detected.some(d => d.type === 'plan');
-                expect(hasPlan).toBe(true);
+                expect(detected).toHaveLength(0);
             }
         });
         it('should detect tdd keyword', () => {
@@ -427,6 +425,21 @@ describe('Keyword Detector', () => {
             expect(primary).not.toBeNull();
             expect(primary.type).toBe('ralph');
         });
+        it('should not detect ralph in ralph-init compound name', () => {
+            const detected = detectKeywordsWithType('ralph-init "create a PRD"');
+            const ralphMatch = detected.find(d => d.type === 'ralph');
+            expect(ralphMatch).toBeUndefined();
+        });
+        it('should not detect ralph in /oh-my-claudecode:ralph-init', () => {
+            const primary = getPrimaryKeyword('/oh-my-claudecode:ralph-init "my project"');
+            expect(primary?.type).not.toBe('ralph');
+        });
+        it('should still detect ralph when standalone', () => {
+            const detected = detectKeywordsWithType('use ralph for this task');
+            const ralphMatch = detected.find(d => d.type === 'ralph');
+            expect(ralphMatch).toBeDefined();
+            expect(ralphMatch.keyword).toBe('ralph');
+        });
         it('should prioritize ultrapilot for legacy ultrapilot trigger', () => {
             const primary = getPrimaryKeyword('ultrapilot this task');
             expect(primary).not.toBeNull();
@@ -447,10 +460,9 @@ describe('Keyword Detector', () => {
             expect(primary).not.toBeNull();
             expect(primary.type).toBe('ralplan');
         });
-        it('should detect plan correctly', () => {
+        it('should NOT detect plan for "plan this feature" (FP-prone pattern removed in #824)', () => {
             const primary = getPrimaryKeyword('plan this feature');
-            expect(primary).not.toBeNull();
-            expect(primary.type).toBe('plan');
+            expect(primary).toBeNull();
         });
         it('should prioritize tdd correctly', () => {
             const primary = getPrimaryKeyword('tdd for this feature');

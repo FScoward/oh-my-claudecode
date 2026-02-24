@@ -9,13 +9,14 @@ import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { resolveStatePath, ensureOmcDir, validateWorkingDirectory, resolveSessionStatePath, ensureSessionStateDir, listSessionIds, validateSessionId, } from '../lib/worktree-paths.js';
 import { atomicWriteJsonSync } from '../lib/atomic-write.js';
 import { isModeActive, getActiveModes, getAllModeStatuses, clearModeState, getStateFilePath, MODE_CONFIGS, getActiveSessionsForMode } from '../hooks/mode-registry/index.js';
-// ExecutionMode from mode-registry (9 modes - NO ralplan)
+// ExecutionMode from mode-registry (8 modes - NO ralplan)
 const EXECUTION_MODES = [
     'autopilot', 'ultrapilot', 'swarm', 'pipeline', 'team',
-    'ralph', 'ultrawork', 'ultraqa', 'ecomode'
+    'ralph', 'ultrawork', 'ultraqa'
 ];
 // Extended type for state tools - includes ralplan which has state but isn't in mode-registry
 const STATE_TOOL_MODES = [...EXECUTION_MODES, 'ralplan'];
+const CANCEL_SIGNAL_TTL_MS = 30_000;
 /**
  * Get the state file path for any mode (including swarm and ralplan).
  *
@@ -284,6 +285,15 @@ export const stateClearTool = {
             // If session_id provided, clear only session-specific state
             if (sessionId) {
                 validateSessionId(sessionId);
+                const now = Date.now();
+                const cancelSignalPath = resolveSessionStatePath('cancel-signal', sessionId, root);
+                atomicWriteJsonSync(cancelSignalPath, {
+                    active: true,
+                    requested_at: new Date(now).toISOString(),
+                    expires_at: new Date(now + CANCEL_SIGNAL_TTL_MS).toISOString(),
+                    mode,
+                    source: 'state_clear'
+                });
                 if (MODE_CONFIGS[mode]) {
                     const success = clearModeState(mode, root, sessionId);
                     if (success) {

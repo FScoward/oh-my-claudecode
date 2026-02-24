@@ -23,7 +23,7 @@ describe('unified-team', () => {
       teamName,
       name,
       agentType === 'mcp-codex' ? 'codex' : 'gemini',
-      agentType === 'mcp-codex' ? 'gpt-5.3-codex' : 'gemini-3-pro-preview',
+      agentType === 'mcp-codex' ? 'gpt-5.3-codex' : 'gemini-3.1-pro-preview',
       `tmux-${name}`,
       testDir,
       testDir

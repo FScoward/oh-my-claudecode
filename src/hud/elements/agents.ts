@@ -8,7 +8,7 @@
  */
 
 import type { ActiveAgent, AgentsFormat } from '../types.js';
-import { cyan, dim, RESET, getModelTierColor, getDurationColor } from '../colors.js';
+import { dim, RESET, getModelTierColor, getDurationColor } from '../colors.js';
 import { truncateToWidth } from '../../utils/string-width.js';
 
 const CYAN = '\x1b[36m';
@@ -130,7 +130,7 @@ const AGENT_TYPE_CODES: Record<string, string> = {
   // ============================================================
   // BACKWARD COMPATIBILITY (Deprecated)
   // ============================================================
-  // Researcher - 'R' for Researcher (deprecated, points to dependency-expert)
+  // Researcher - 'r' for Researcher (deprecated, points to document-specialist)
   researcher: 'r',          // sonnet
 };
 
@@ -346,7 +346,7 @@ function truncateDescription(desc: string | undefined, maxWidth: number = 20): s
  */
 function getShortAgentName(agentType: string): string {
   const parts = agentType.split(':');
-  let name = parts[parts.length - 1] || agentType;
+  const name = parts[parts.length - 1] || agentType;
 
   // Abbreviate common names
   const abbrevs: Record<string, string> = {

@@ -26,7 +26,7 @@
 
 **Bước 2: Thiết lập**
 ```bash
-/oh-my-claudecode:omc-setup
+/omc-setup
 ```
 
 **Bước 3: Xây một thứ gì đó**
@@ -41,7 +41,7 @@ Vậy là xong. Mọi thứ còn lại đều tự động.
 Bắt đầu từ **v4.1.7**, **Team** là bề mặt điều phối chuẩn trong OMC. Các điểm vào cũ như **swarm** và **ultrapilot** vẫn được hỗ trợ, nhưng giờ đây chúng **được chuyển sang Team ở tầng bên dưới**.
 
 ```bash
-/oh-my-claudecode:team 3:executor "fix all TypeScript errors"
+/team 3:executor "fix all TypeScript errors"
 ```
 
 Team chạy theo pipeline theo từng giai đoạn:
@@ -60,22 +60,49 @@ Bật Claude Code native teams trong `~/.claude/settings.json`:
 
 > Nếu teams bị tắt, OMC sẽ cảnh báo và chuyển sang chế độ thực thi không dùng team khi có thể.
 
-> **Lưu ý: Tên package** — Dự án được xây dựng thương hiệu là **oh-my-claudecode** (repo, plugin, commands), nhưng package npm được phát hành dưới tên [`oh-my-claude-sisyphus`](https://www.npmjs.com/package/oh-my-claude-sisyphus). Nếu bạn cài công cụ CLI qua npm/bun, hãy dùng `npm install -g oh-my-claude-sisyphus`.
+### Công nhân CLI tmux — Codex & Gemini (v4.4.0+)
+
+**v4.4.0 xóa các máy chủ MCP Codex/Gemini** (nhà cung cấp `x`, `g`). Dùng `/omc-teams` để khởi động tiến trình CLI thực sự trong các pane tmux phân chia:
+
+```bash
+/omc-teams 2:codex   "review auth module for security issues"
+/omc-teams 2:gemini  "redesign UI components for accessibility"
+/omc-teams 1:claude  "implement the payment flow"
+```
+
+Để xử lý công việc Codex + Gemini trong một lệnh, dùng skill **`/ccg`**:
+
+```bash
+/ccg Review this PR — architecture (Codex) and UI components (Gemini)
+```
+
+| Skill | Công nhân | Tốt nhất cho |
+|-------|---------|----------|
+| `/omc-teams N:codex` | N pane Codex CLI | Xem xét code, phân tích bảo mật, kiến trúc |
+| `/omc-teams N:gemini` | N pane Gemini CLI | Thiết kế UI/UX, tài liệu, tác vụ ngữ cảnh lớn |
+| `/omc-teams N:claude` | N pane Claude CLI | Tác vụ chung qua Claude CLI trong tmux |
+| `/ccg` | 1 Codex + 1 Gemini | Điều phối ba mô hình song song |
+
+Công nhân được tạo theo yêu cầu và tắt khi hoàn thành tác vụ — không lãng phí tài nguyên. Cần cài `codex` / `gemini` CLI và có phiên tmux đang hoạt động.
+
+> **Lưu ý: Tên package** — Dự án được xây dựng thương hiệu là **oh-my-claudecode** (repo, plugin, commands), nhưng package npm được phát hành dưới tên [`oh-my-claudecode`](https://www.npmjs.com/package/oh-my-claude-sisyphus). Nếu bạn cài công cụ CLI qua npm/bun, hãy dùng `npm install -g oh-my-claude-sisyphus`.
 
 ### Cập nhật
 
 ```bash
-# 1. Update the plugin
-/plugin install oh-my-claudecode
+# 1. Cập nhật bản sao marketplace
+/plugin marketplace update omc
 
-# 2. Re-run setup to refresh configuration
-/oh-my-claudecode:omc-setup
+# 2. Chạy lại setup để làm mới cấu hình
+/omc-setup
 ```
+
+> **Lưu ý:** Nếu tự động cập nhật marketplace chưa được bật, bạn cần chạy `/plugin marketplace update omc` thủ công để đồng bộ phiên bản mới nhất trước khi chạy setup.
 
 Nếu gặp sự cố sau khi cập nhật, hãy xóa cache plugin cũ:
 
 ```bash
-/oh-my-claudecode:omc-doctor
+/omc-doctor
 ```
 
 <h1 align="center">Your Claude Just Have been Steroided.</h1>
@@ -107,6 +134,8 @@ Nhiều chiến lược cho nhiều tình huống — từ điều phối dựa 
 | Mode | Nó là gì | Dùng cho |
 |------|------------|---------|
 | **Team (khuyến nghị)** | Pipeline chuẩn theo giai đoạn (`team-plan → team-prd → team-exec → team-verify → team-fix`) | Các tác tử phối hợp trên một danh sách nhiệm vụ chung |
+| **omc-teams** | Công nhân CLI tmux — tiến trình `claude`/`codex`/`gemini` thực trong pane chia | Tác vụ Codex/Gemini CLI; tạo theo yêu cầu, tắt khi xong |
+| **ccg** | Tri-model: Codex (phân tích) + Gemini (thiết kế) song song, Claude tổng hợp | Công việc backend+UI cần cả Codex và Gemini |
 | **Autopilot** | Thực thi tự động (một tác tử dẫn dắt) | Làm tính năng end-to-end với ít thao tác phụ |
 | **Ultrawork** | Song song tối đa (không dùng team) | Sửa lỗi/refactor kiểu burst song song khi không cần Team |
 | **Ralph** | Chế độ bền bỉ với vòng lặp verify/fix | Tác vụ bắt buộc hoàn tất đầy đủ (không có hoàn thành một phần âm thầm) |
@@ -136,7 +165,9 @@ Các phím tắt tùy chọn cho người dùng nâng cao. Không dùng chúng t
 
 | Keyword | Hiệu ứng | Ví dụ |
 |---------|--------|---------|
-| `team` | Điều phối Team chuẩn | `/oh-my-claudecode:team 3:executor "fix all TypeScript errors"` |
+| `team` | Điều phối Team chuẩn | `/team 3:executor "fix all TypeScript errors"` |
+| `omc-teams` | Công nhân CLI tmux (codex/gemini/claude) | `/omc-teams 2:codex "security review"` |
+| `ccg` | Điều phối tri-model Codex+Gemini | `/ccg review this PR` |
 | `autopilot` | Thực thi tự động toàn phần | `autopilot: build a todo app` |
 | `ralph` | Chế độ bền bỉ | `ralph: refactor auth` |
 | `ulw` | Song song tối đa | `ulw fix all errors` |
@@ -163,7 +194,7 @@ omc wait --stop   # Disable daemon
 
 **Yêu cầu:** tmux (để phát hiện phiên)
 
-### Notification Tags (Telegram/Discord)
+### Notification Tags (Telegram/Discord/Slack)
 
 Bạn có thể cấu hình ai sẽ được tag khi stop callbacks gửi tóm tắt phiên.
 
@@ -171,6 +202,7 @@ Bạn có thể cấu hình ai sẽ được tag khi stop callbacks gửi tóm t
 # Set/replace tag list
 omc config-stop-callback telegram --enable --token <bot_token> --chat <chat_id> --tag-list "@alice,bob"
 omc config-stop-callback discord --enable --webhook <url> --tag-list "@here,123456789012345678,role:987654321098765432"
+omc config-stop-callback slack --enable --webhook <url> --tag-list "<!here>,<@U1234567890>"
 
 # Incremental updates
 omc config-stop-callback telegram --add-tag charlie
@@ -181,6 +213,7 @@ omc config-stop-callback discord --clear-tags
 Hành vi tag:
 - Telegram: `alice` trở thành `@alice`
 - Discord: hỗ trợ `@here`, `@everyone`, user ID dạng số, và `role:<id>`
+- Slack: hỗ trợ `<@MEMBER_ID>`, `<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^GROUP_ID>`
 - callbacks kiểu `file` bỏ qua các tùy chọn tag
 
 ---

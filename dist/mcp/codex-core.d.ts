@@ -17,7 +17,7 @@ export declare const RATE_LIMIT_RETRY_COUNT: number;
 export declare const RATE_LIMIT_INITIAL_DELAY: number;
 export declare const RATE_LIMIT_MAX_DELAY: number;
 export { CODEX_MODEL_FALLBACKS };
-export declare const CODEX_RECOMMENDED_ROLES: readonly ["architect", "planner", "critic", "analyst", "code-reviewer", "security-reviewer", "tdd-guide"];
+export declare const CODEX_RECOMMENDED_ROLES: readonly ["architect", "planner", "critic", "analyst", "code-reviewer", "security-reviewer", "test-engineer"];
 export declare const VALID_REASONING_EFFORTS: readonly ["minimal", "low", "medium", "high", "xhigh"];
 export type ReasoningEffort = typeof VALID_REASONING_EFFORTS[number];
 export declare const MAX_FILE_SIZE: number;
@@ -93,10 +93,6 @@ export declare function executeCodexBackground(fullPrompt: string, modelInput: s
 } | {
     error: string;
 };
-/**
- * Validate and read a file for context inclusion
- */
-export declare function validateAndReadFile(filePath: string, baseDir?: string): string;
 /**
  * Handle ask_codex tool invocation with all business logic
  *

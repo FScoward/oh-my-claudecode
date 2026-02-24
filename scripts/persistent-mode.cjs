@@ -5,7 +5,7 @@
  * Minimal continuation enforcer for all OMC modes.
  * Stripped down for reliability — no optional imports, no PRD, no notepad pruning.
  *
- * Supported modes: ralph, autopilot, ultrapilot, swarm, ultrawork, ecomode, ultraqa, pipeline
+ * Supported modes: ralph, autopilot, ultrapilot, swarm, ultrawork, ultraqa, pipeline
  */
 
 const {
@@ -53,6 +53,43 @@ function writeJsonFile(path, data) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Read the session-idle notification cooldown in seconds from ~/.omc/config.json.
+ * Default: 60. 0 = disabled.
+ */
+function getIdleCooldownSeconds() {
+  const configPath = join(homedir(), '.omc', 'config.json');
+  const config = readJsonFile(configPath);
+  const val = config?.notificationCooldown?.sessionIdleSeconds;
+  if (typeof val === 'number') return val;
+  return 60;
+}
+
+/**
+ * Check whether the session-idle cooldown has elapsed.
+ * Returns true if the notification should be sent.
+ */
+function shouldSendIdleNotification(stateDir) {
+  const cooldownSecs = getIdleCooldownSeconds();
+  if (cooldownSecs === 0) return true; // cooldown disabled
+
+  const cooldownPath = join(stateDir, 'idle-notif-cooldown.json');
+  const data = readJsonFile(cooldownPath);
+  if (data?.lastSentAt) {
+    const elapsed = (Date.now() - new Date(data.lastSentAt).getTime()) / 1000;
+    if (Number.isFinite(elapsed) && elapsed < cooldownSecs) return false;
+  }
+  return true;
+}
+
+/**
+ * Record that the session-idle notification was sent.
+ */
+function recordIdleNotificationSent(stateDir) {
+  const cooldownPath = join(stateDir, 'idle-notif-cooldown.json');
+  writeJsonFile(cooldownPath, { lastSentAt: new Date().toISOString() });
 }
 
 /**
@@ -367,7 +404,6 @@ async function main() {
     const autopilot = readStateFileWithSession(stateDir, "autopilot-state.json", sessionId);
     const ultrapilot = readStateFileWithSession(stateDir, "ultrapilot-state.json", sessionId);
     const ultrawork = readStateFileWithSession(stateDir, "ultrawork-state.json", sessionId);
-    const ecomode = readStateFileWithSession(stateDir, "ecomode-state.json", sessionId);
     const ultraqa = readStateFileWithSession(stateDir, "ultraqa-state.json", sessionId);
     const pipeline = readStateFileWithSession(stateDir, "pipeline-state.json", sessionId);
 
@@ -574,45 +610,11 @@ async function main() {
       return;
     }
 
-    // Priority 8: Ecomode - ALWAYS continue while active
-    if (ecomode.state?.active && !isStaleState(ecomode.state) && isSessionMatch(ecomode.state, sessionId)) {
-      const newCount = (ecomode.state.reinforcement_count || 0) + 1;
-      const maxReinforcements = ecomode.state.max_reinforcements || 50;
-
-      if (newCount > maxReinforcements) {
-        // Max reinforcements reached - allow stop
-        console.log(JSON.stringify({ continue: true, suppressOutput: true }));
-        return;
-      }
-
-      ecomode.state.reinforcement_count = newCount;
-      ecomode.state.last_checked_at = new Date().toISOString();
-      writeJsonFile(ecomode.path, ecomode.state);
-
-      // Fire-and-forget notification
-      sendStopNotification('ecomode', ecomode.state, sessionId, directory).catch(() => {});
-
-      let reason = `[ECOMODE #${newCount}/${maxReinforcements}] Mode active.`;
-
-      if (totalIncomplete > 0) {
-        const itemType = taskCount > 0 ? "Tasks" : "todos";
-        reason += ` ${totalIncomplete} incomplete ${itemType} remain. Continue working.`;
-      } else if (newCount >= 3) {
-        // Only suggest cancel after minimum iterations (guard against no-tasks-created scenario)
-        reason += ` If all work is complete, run /oh-my-claudecode:cancel to cleanly exit ecomode and clean up state files. If cancel fails, retry with /oh-my-claudecode:cancel --force. Otherwise, continue working.`;
-      } else {
-        // Early iterations with no tasks yet - just tell LLM to continue
-        reason += ` Continue working - create Tasks to track your progress.`;
-      }
-
-      console.log(JSON.stringify({ decision: "block", reason }));
-      return;
-    }
-
     // No blocking needed — Claude is truly idle.
     // Send session-idle notification (fire-and-forget) so external integrations
     // (Telegram, Discord) know the session went idle without any active mode.
-    if (sessionId) {
+    // Per-session cooldown prevents notification spam when the session idles repeatedly.
+    if (sessionId && shouldSendIdleNotification(stateDir)) {
       try {
         const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
         if (pluginRoot) {
@@ -625,6 +627,7 @@ async function main() {
               }).catch(() => {})
             )
             .catch(() => {});
+          recordIdleNotificationSent(stateDir);
         }
       } catch {
         // Notification module not available, skip silently

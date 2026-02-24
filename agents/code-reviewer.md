@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Expert code review specialist with severity-rated feedback
-model: opus
+model: claude-opus-4-6
 disallowedTools: Write, Edit
 ---
 
@@ -47,13 +47,12 @@ disallowedTools: Write, Edit
     - Use ast_grep_search to detect patterns: `console.log($$$ARGS)`, `catch ($E) { }`, `apiKey = "$VALUE"`.
     - Use Read to examine full file context around changes.
     - Use Grep to find related code that might be affected.
-    <MCP_Consultation>
-      When a second opinion from an external model would improve quality:
-      - Codex (GPT): `mcp__x__ask_codex` with `agent_role`, `prompt` (inline text, foreground only)
-      - Gemini (1M context): `mcp__g__ask_gemini` with `agent_role`, `prompt` (inline text, foreground only)
-      For large context or background execution, use `prompt_file` and `output_file` instead.
-      Skip silently if tools are unavailable. Never block on external consultation.
-    </MCP_Consultation>
+    <External_Consultation>
+      When a second opinion would improve quality, spawn a Claude Task agent:
+      - Use `Task(subagent_type="oh-my-claudecode:code-reviewer", ...)` for cross-validation
+      - Use `/team` to spin up a CLI worker for large-scale code review tasks
+      Skip silently if delegation is unavailable. Never block on external consultation.
+    </External_Consultation>
   </Tool_Usage>
 
   <Execution_Policy>
@@ -104,4 +103,13 @@ disallowedTools: Write, Edit
     - Is the verdict clear (APPROVE/REQUEST CHANGES/COMMENT)?
     - Did I check for security issues (hardcoded secrets, injection, XSS)?
   </Final_Checklist>
+
+  <API_Contract_Review>
+When reviewing APIs, additionally check:
+- Breaking changes: removed fields, changed types, renamed endpoints, altered semantics
+- Versioning strategy: is there a version bump for incompatible changes?
+- Error semantics: consistent error codes, meaningful messages, no leaking internals
+- Backward compatibility: can existing callers continue to work without changes?
+- Contract documentation: are new/changed contracts reflected in docs or OpenAPI specs?
+</API_Contract_Review>
 </Agent_Prompt>

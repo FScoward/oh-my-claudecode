@@ -264,14 +264,14 @@ function createWorktree(
     }
 
     // Fetch latest from origin
-    execSync(`git fetch origin ${baseBranch}`, {
+    execFileSync('git', ['fetch', 'origin', baseBranch], {
       cwd: repoRoot,
       stdio: 'pipe',
     });
 
     // Create branch from base if it doesn't exist
     try {
-      execSync(`git branch ${branchName} origin/${baseBranch}`, {
+      execFileSync('git', ['branch', branchName, `origin/${baseBranch}`], {
         cwd: repoRoot,
         stdio: 'pipe',
       });
@@ -280,7 +280,7 @@ function createWorktree(
     }
 
     // Create the worktree
-    execSync(`git worktree add "${worktreePath}" ${branchName}`, {
+    execFileSync('git', ['worktree', 'add', worktreePath, branchName], {
       cwd: repoRoot,
       stdio: 'pipe',
     });

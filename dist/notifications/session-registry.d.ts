@@ -31,7 +31,7 @@ export declare function registerMessage(mapping: SessionMapping): void;
 export declare function loadAllMappings(): SessionMapping[];
 /**
  * Look up a mapping by platform and message ID.
- * Returns the first match (most recent entry wins if duplicates exist).
+ * Returns the most recent entry when duplicates exist (last match in append-ordered JSONL).
  */
 export declare function lookupByMessageId(platform: string, messageId: string): SessionMapping | null;
 /**

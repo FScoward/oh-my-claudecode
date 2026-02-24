@@ -18,6 +18,7 @@ This directory contains rule templates that you can copy to your project's `.cla
 | `security.md` | Security checklist and best practices |
 | `performance.md` | Performance guidelines and model selection |
 | `git-workflow.md` | Git commit and PR workflow |
+| `karpathy-guidelines.md` | Coding discipline — think before coding, simplicity, surgical changes |
 
 ## Auto-Discovery
 

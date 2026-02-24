@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { tmpdir } from 'os';
 import { getTeamStatus } from '../team-status.js';
 import { atomicWriteJson } from '../fs-utils.js';
 import { appendOutbox } from '../inbox-outbox.js';
+import { recordTaskUsage } from '../usage-tracker.js';
 import type { HeartbeatData, TaskFile, OutboxMessage, McpWorkerMember } from '../types.js';
 
 const TEST_TEAM = 'test-team-status';
@@ -85,6 +86,10 @@ describe('getTeamStatus', () => {
     expect(status.teamName).toBe(TEST_TEAM);
     expect(status.workers).toEqual([]);
     expect(status.taskSummary.total).toBe(0);
+    expect(status.usage.taskCount).toBe(0);
+    expect(status.performance.taskScanMs).toBeGreaterThanOrEqual(0);
+    expect(status.performance.workerScanMs).toBeGreaterThanOrEqual(0);
+    expect(status.performance.totalMs).toBeGreaterThanOrEqual(0);
     expect(status.lastUpdated).toBeTruthy();
   });
 
@@ -122,6 +127,8 @@ describe('getTeamStatus', () => {
     expect(status.taskSummary.completed).toBe(1);
     expect(status.taskSummary.inProgress).toBe(1);
     expect(status.taskSummary.pending).toBe(1);
+    expect(status.usage.taskCount).toBe(0);
+    expect(status.performance.totalMs).toBeGreaterThanOrEqual(status.performance.taskScanMs);
   });
 
   it('detects dead workers via heartbeat age', () => {
@@ -164,5 +171,50 @@ describe('getTeamStatus', () => {
     // With 15s max age, worker should be alive
     const status15s = getTeamStatus(TEST_TEAM, WORK_DIR, 15000);
     expect(status15s.workers[0].isAlive).toBe(true);
+  });
+
+  it('includes usage telemetry in status output', () => {
+    const w1 = makeWorker('w1', 'codex');
+    writeWorkerRegistry([w1]);
+
+    recordTaskUsage(WORK_DIR, TEST_TEAM, {
+      taskId: '1',
+      workerName: 'w1',
+      provider: 'codex',
+      model: 'test-model',
+      startedAt: new Date(Date.now() - 2000).toISOString(),
+      completedAt: new Date().toISOString(),
+      wallClockMs: 2000,
+      promptChars: 123,
+      responseChars: 456,
+    });
+
+    const status = getTeamStatus(TEST_TEAM, WORK_DIR);
+    expect(status.usage.taskCount).toBe(1);
+    expect(status.usage.totalWallClockMs).toBe(2000);
+    expect(status.usage.workers[0]?.workerName).toBe('w1');
+    expect(status.performance.usageReadMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('can skip usage log parsing for fast status polls', () => {
+    const w1 = makeWorker('w1', 'codex');
+    writeWorkerRegistry([w1]);
+
+    recordTaskUsage(WORK_DIR, TEST_TEAM, {
+      taskId: '1',
+      workerName: 'w1',
+      provider: 'codex',
+      model: 'test-model',
+      startedAt: new Date(Date.now() - 1000).toISOString(),
+      completedAt: new Date().toISOString(),
+      wallClockMs: 1000,
+      promptChars: 11,
+      responseChars: 22,
+    });
+
+    const status = getTeamStatus(TEST_TEAM, WORK_DIR, 30000, { includeUsage: false });
+    expect(status.usage.taskCount).toBe(0);
+    expect(status.usage.workers).toEqual([]);
+    expect(status.performance.usageReadMs).toBe(0);
   });
 });

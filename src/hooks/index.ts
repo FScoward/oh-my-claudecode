@@ -1,5 +1,5 @@
 /**
- * Hooks Module for Oh-My-Claude-Sisyphus
+ * Hooks Module for Oh-My-ClaudeCode
  *
  * This module provides the TypeScript bridge for Claude Code's native shell hook system.
  * Shell scripts call these TypeScript functions for complex logic processing.
@@ -176,7 +176,7 @@ export {
 
 export {
   // OMC Orchestrator
-  createSisyphusOrchestratorHook,
+  createOmcOrchestratorHook,
   isAllowedPath,
   isWriteEditTool,
   getGitDiffStats,
@@ -459,6 +459,7 @@ export {
   validateCommitMessage,
   runTypeCheck,
   runTests,
+  runLint,
   runPreCommitChecks,
   getPreCommitReminderMessage,
   getAutoFormatMessage,
@@ -827,4 +828,36 @@ export {
   recordSkillInvoked,
   recordModeChange,
 } from './subagent-tracker/flow-tracer.js';
+
+export {
+  // Codebase Map Generator (issue #804)
+  generateCodebaseMap,
+  buildTree,
+  renderTree,
+  shouldSkipEntry,
+  extractPackageMetadata,
+  type CodebaseMapOptions,
+  type CodebaseMapResult,
+} from './codebase-map.js';
+
+export {
+  // Agents Overlay - startup context injection (issue #804)
+  buildAgentsOverlay,
+  type AgentsOverlayResult,
+} from './agents-overlay.js';
+
+export {
+  // Code Simplifier Stop Hook
+  processCodeSimplifier,
+  isCodeSimplifierEnabled,
+  getModifiedFiles,
+  readOmcConfig,
+  isAlreadyTriggered,
+  writeTriggerMarker,
+  clearTriggerMarker,
+  buildSimplifierMessage,
+  TRIGGER_MARKER_FILENAME,
+  type CodeSimplifierConfig,
+  type CodeSimplifierHookResult,
+} from './code-simplifier/index.js';
 

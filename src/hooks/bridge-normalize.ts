@@ -219,7 +219,7 @@ function filterPassthrough(input: Record<string, unknown>, hookType?: string): R
       // Conservative: pass through but warn on truly unknown fields
       extra[key] = value;
       if (!KNOWN_FIELDS.has(key)) {
-        console.debug(`[bridge-normalize] Unknown field "${key}" passed through for hook "${hookType ?? 'unknown'}"`);
+        console.error(`[bridge-normalize] Unknown field "${key}" passed through for hook "${hookType ?? 'unknown'}"`);
       }
     }
   }

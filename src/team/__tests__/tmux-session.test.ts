@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeName, sessionName, createSession, killSession } from '../tmux-session.js';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { sanitizeName, sessionName, createSession, killSession, shouldAttemptAdaptiveRetry } from '../tmux-session.js';
 
 describe('sanitizeName', () => {
   it('passes alphanumeric names', () => {
@@ -39,6 +41,78 @@ describe('sessionName', () => {
 
   it('sanitizes both parts', () => {
     expect(sessionName('my team!', 'work@er')).toBe('omc-team-myteam-worker');
+  });
+});
+
+describe('shouldAttemptAdaptiveRetry', () => {
+  it('only enables adaptive retry for busy panes with visible unsent message', () => {
+    delete process.env.OMX_TEAM_AUTO_INTERRUPT_RETRY;
+    expect(shouldAttemptAdaptiveRetry({
+      paneBusy: false,
+      latestCapture: '❯ check-inbox',
+      message: 'check-inbox',
+      paneInCopyMode: false,
+      retriesAttempted: 0,
+    })).toBe(false);
+    expect(shouldAttemptAdaptiveRetry({
+      paneBusy: true,
+      latestCapture: '❯ ready prompt',
+      message: 'check-inbox',
+      paneInCopyMode: false,
+      retriesAttempted: 0,
+    })).toBe(false);
+    expect(shouldAttemptAdaptiveRetry({
+      paneBusy: true,
+      latestCapture: '❯ check-inbox',
+      message: 'check-inbox',
+      paneInCopyMode: true,
+      retriesAttempted: 0,
+    })).toBe(false);
+    expect(shouldAttemptAdaptiveRetry({
+      paneBusy: true,
+      latestCapture: '❯ check-inbox',
+      message: 'check-inbox',
+      paneInCopyMode: false,
+      retriesAttempted: 1,
+    })).toBe(false);
+    expect(shouldAttemptAdaptiveRetry({
+      paneBusy: true,
+      latestCapture: '❯ check-inbox\ngpt-5.3-codex high · 80% left',
+      message: 'check-inbox',
+      paneInCopyMode: false,
+      retriesAttempted: 0,
+    })).toBe(true);
+  });
+
+  it('respects OMX_TEAM_AUTO_INTERRUPT_RETRY=0', () => {
+    process.env.OMX_TEAM_AUTO_INTERRUPT_RETRY = '0';
+    expect(shouldAttemptAdaptiveRetry({
+      paneBusy: true,
+      latestCapture: '❯ check-inbox',
+      message: 'check-inbox',
+      paneInCopyMode: false,
+      retriesAttempted: 0,
+    })).toBe(false);
+    delete process.env.OMX_TEAM_AUTO_INTERRUPT_RETRY;
+  });
+});
+
+describe('sendToWorker implementation guards', () => {
+  const source = readFileSync(join(__dirname, '..', 'tmux-session.ts'), 'utf-8');
+
+  it('checks and exits tmux copy-mode before injection', () => {
+    expect(source).toContain('#{pane_in_mode}');
+    expect(source).toContain('skip injection entirely');
+  });
+
+  it('supports env-gated adaptive interrupt retry', () => {
+    expect(source).toContain('OMX_TEAM_AUTO_INTERRUPT_RETRY');
+    expect(source).toContain("await sendKey('C-u')");
+  });
+
+  it('re-checks copy-mode before adaptive and fail-open fallback keys', () => {
+    expect(source).toContain('Safety gate: copy-mode can turn on while we retry');
+    expect(source).toContain('Before fallback control keys, re-check copy-mode');
   });
 });
 

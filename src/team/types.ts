@@ -58,7 +58,7 @@ export interface InboxMessage {
 
 /** JSONL message from worker -> lead (outbox) */
 export interface OutboxMessage {
-  type: 'ready' | 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'drain_ack' | 'heartbeat' | 'error';
+  type: 'ready' | 'task_complete' | 'task_failed' | 'idle' | 'shutdown_ack' | 'drain_ack' | 'heartbeat' | 'error' | 'all_tasks_complete';
   taskId?: string;
   summary?: string;
   message?: string;
@@ -98,7 +98,7 @@ export interface McpWorkerMember {
 export interface HeartbeatData {
   workerName: string;
   teamName: string;
-  provider: 'codex' | 'gemini';
+  provider: 'codex' | 'gemini' | 'claude';
   pid: number;
   lastPollAt: string;       // ISO timestamp of last poll cycle
   currentTaskId?: string;   // task being executed, if any
@@ -133,7 +133,15 @@ export interface TaskFailureSidecar {
 }
 
 /** Worker backend type */
-export type WorkerBackend = 'claude-native' | 'mcp-codex' | 'mcp-gemini';
+export type WorkerBackend = 'claude-native' | 'mcp-codex' | 'mcp-gemini' | 'tmux-claude' | 'tmux-codex' | 'tmux-gemini';
+
+/** Signal file written by CLI workers when their task completes */
+export interface DoneSignal {
+  taskId: string;
+  status: 'completed' | 'failed';
+  summary: string;
+  completedAt: string; // ISO timestamp
+}
 
 /** Worker capability tag */
 export type WorkerCapability =

@@ -16,6 +16,7 @@ import type {
   DiscordNotificationConfig,
   DiscordBotNotificationConfig,
   TelegramNotificationConfig,
+  VerbosityLevel,
 } from "./types.js";
 
 const CONFIG_FILE = join(getClaudeConfigDir(), ".omc-config.json");
@@ -98,6 +99,23 @@ export function validateMention(raw: string | undefined): string | undefined {
 }
 
 /**
+ * Validate Slack mention format.
+ * Accepts: <@UXXXXXXXX> (user), <!channel>, <!here>, <!everyone>, <!subteam^SXXXXXXXXX> (user group).
+ * Returns the mention string if valid, undefined otherwise.
+ */
+export function validateSlackMention(raw: string | undefined): string | undefined {
+  const mention = normalizeOptional(raw);
+  if (!mention) return undefined;
+  // <@U...> user mention
+  if (/^<@[UW][A-Z0-9]{8,11}>$/.test(mention)) return mention;
+  // <!channel>, <!here>, <!everyone>
+  if (/^<!(?:channel|here|everyone)>$/.test(mention)) return mention;
+  // <!subteam^S...> user group
+  if (/^<!subteam\^S[A-Z0-9]{8,11}>$/.test(mention)) return mention;
+  return undefined;
+}
+
+/**
  * Parse a validated mention into allowed_mentions structure for Discord API.
  */
 export function parseMentionAllowedMentions(
@@ -168,6 +186,7 @@ export function buildConfigFromEnv(): NotificationConfig | null {
     config.slack = {
       enabled: true,
       webhookUrl: slackWebhook,
+      mention: validateSlackMention(process.env.OMC_SLACK_MENTION),
     };
     hasAnyPlatform = true;
   }
@@ -239,6 +258,20 @@ function mergeEnvIntoFileConfig(
   // Merge slack
   if (!merged.slack && envConfig.slack) {
     merged.slack = envConfig.slack;
+  } else if (merged.slack && envConfig.slack) {
+    merged.slack = {
+      ...merged.slack,
+      webhookUrl: merged.slack.webhookUrl || envConfig.slack.webhookUrl,
+      mention:
+        merged.slack.mention !== undefined
+          ? validateSlackMention(merged.slack.mention)
+          : envConfig.slack.mention,
+    };
+  } else if (merged.slack) {
+    merged.slack = {
+      ...merged.slack,
+      mention: validateSlackMention(merged.slack.mention),
+    };
   }
 
   return merged;
@@ -258,15 +291,91 @@ function applyEnvMerge(config: NotificationConfig): NotificationConfig {
   // platforms (not present in env) also receive the env mention.
   const envMention = validateMention(process.env.OMC_DISCORD_MENTION);
   if (envMention) {
-    if (merged["discord-bot"] && merged["discord-bot"].mention === undefined) {
+    if (merged["discord-bot"] && merged["discord-bot"].mention == null) {
       merged = { ...merged, "discord-bot": { ...merged["discord-bot"], mention: envMention } };
     }
-    if (merged.discord && merged.discord.mention === undefined) {
+    if (merged.discord && merged.discord.mention == null) {
       merged = { ...merged, discord: { ...merged.discord, mention: envMention } };
     }
   }
 
+  // Apply env mention to any Slack config that still lacks one.
+  const envSlackMention = validateSlackMention(process.env.OMC_SLACK_MENTION);
+  if (envSlackMention) {
+    if (merged.slack && merged.slack.mention == null) {
+      merged = { ...merged, slack: { ...merged.slack, mention: envSlackMention } };
+    }
+  }
+
   return merged;
+}
+
+/** Valid verbosity level values */
+const VALID_VERBOSITY_LEVELS: ReadonlySet<string> = new Set([
+  "verbose",
+  "agent",
+  "session",
+  "minimal",
+]);
+
+/** Session events allowed at minimal/session verbosity */
+const SESSION_EVENTS: ReadonlySet<NotificationEvent> = new Set([
+  "session-start",
+  "session-stop",
+  "session-end",
+  "session-idle",
+]);
+
+/**
+ * Get the effective verbosity level.
+ *
+ * Priority: OMC_NOTIFY_VERBOSITY env var > config.verbosity > "session" default.
+ * Invalid env var values are ignored (fall back to config or default).
+ */
+export function getVerbosity(config: NotificationConfig): VerbosityLevel {
+  const envValue = process.env.OMC_NOTIFY_VERBOSITY;
+  if (envValue && VALID_VERBOSITY_LEVELS.has(envValue)) {
+    return envValue as VerbosityLevel;
+  }
+  if (config.verbosity && VALID_VERBOSITY_LEVELS.has(config.verbosity)) {
+    return config.verbosity;
+  }
+  return "session";
+}
+
+/**
+ * Check if an event is allowed by the given verbosity level.
+ *
+ * Level matrix:
+ * - minimal: session-start, session-stop, session-end, session-idle
+ * - session: same as minimal (tmux tail handled separately)
+ * - agent:   session events + agent-call
+ * - verbose: all events
+ */
+export function isEventAllowedByVerbosity(
+  verbosity: VerbosityLevel,
+  event: NotificationEvent,
+): boolean {
+  switch (verbosity) {
+    case "verbose":
+      return true;
+    case "agent":
+      return SESSION_EVENTS.has(event) || event === "agent-call";
+    case "session":
+    case "minimal":
+      return SESSION_EVENTS.has(event);
+    default:
+      return SESSION_EVENTS.has(event);
+  }
+}
+
+/**
+ * Check if tmux tail content should be included at the given verbosity level.
+ *
+ * Returns true for session, agent, verbose. Returns false for minimal.
+ */
+export function shouldIncludeTmuxTail(verbosity: VerbosityLevel): boolean {
+  return verbosity !== "minimal";
 }
 
 /**

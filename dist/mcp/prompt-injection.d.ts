@@ -1,69 +1,23 @@
+export { resolveSystemPrompt, getValidAgentRoles, isValidAgentRoleName, VALID_AGENT_ROLES, wrapUntrustedFileContent, wrapUntrustedCliResponse, sanitizePromptContent, singleErrorBlock, inlineSuccessBlocks, } from '../agents/prompt-helpers.js';
+export type { AgentRole } from '../agents/prompt-helpers.js';
 /**
- * Prompt Injection Helper
- *
- * Shared utilities for injecting system prompts into Codex/Gemini MCP tools.
- * Enables agents to pass their personality/guidelines when consulting external models.
+ * Subagent mode marker prepended to all prompts sent to external CLI agents.
+ * Prevents recursive subagent spawning within subagent tool calls.
  */
-import type { ExternalModelProvider } from '../shared/types.js';
+export declare const SUBAGENT_HEADER = "[SUBAGENT MODE] You are a subagent running inside a tool call.\nDO NOT spawn additional subagents or invoke Codex/Gemini CLI recursively.\nComplete the task directly with your available tools.";
 /**
- * Check if a role name is valid (contains only allowed characters).
- * This is a security check, not an allowlist check.
+ * Validate context file paths for use as external model context.
+ * Rejects paths with control characters (prompt injection) and paths that
+ * escape the base directory (path traversal).
  */
-export declare function isValidAgentRoleName(name: string): boolean;
-export declare function getValidAgentRoles(): string[];
-/**
- * Valid agent roles discovered from build-time injection or runtime scan.
- * Computed at module load time for backward compatibility.
- */
-export declare const VALID_AGENT_ROLES: readonly string[];
-/**
- * AgentRole type - now string since roles are dynamic.
- */
-export type AgentRole = string;
-/**
- * Resolve the system prompt from either explicit system_prompt or agent_role.
- * system_prompt takes precedence over agent_role.
- *
- * Returns undefined if neither is provided or resolution fails.
- */
-export declare function resolveSystemPrompt(systemPrompt?: string, agentRole?: string, provider?: ExternalModelProvider): string | undefined;
-/**
- * Wrap file content with untrusted delimiters to prevent prompt injection.
- * Each file's content is clearly marked as data to analyze, not instructions.
- */
-export declare function wrapUntrustedFileContent(filepath: string, content: string): string;
-/**
- * Wrap CLI response content with untrusted delimiters to prevent prompt injection.
- * Used for inline CLI responses that are returned directly to the caller.
- */
-export declare function wrapUntrustedCliResponse(content: string, metadata: {
-    source: string;
-    tool: string;
-}): string;
-export declare function singleErrorBlock(text: string): {
-    content: [{
-        type: 'text';
-        text: string;
-    }];
-    isError: true;
-};
-export declare function inlineSuccessBlocks(metadataText: string, wrappedResponse: string): {
-    content: [{
-        type: 'text';
-        text: string;
-    }, {
-        type: 'text';
-        text: string;
-    }];
-    isError: false;
+export declare function validateContextFilePaths(paths: string[], baseDir: string, allowExternal?: boolean): {
+    validPaths: string[];
+    errors: string[];
 };
 /**
- * Build the full prompt with system prompt prepended.
- *
- * Order: system_prompt > file_context > user_prompt
- *
- * Uses clear XML-like delimiters so the external model can distinguish sections.
- * File context is wrapped with untrusted data warnings to mitigate prompt injection.
+ * Build the full prompt for an external CLI agent.
+ * Always prepends SUBAGENT_HEADER to prevent recursive agent spawning.
+ * Order: SUBAGENT_HEADER > system_prompt > file_context > user_prompt
  */
 export declare function buildPromptWithSystemContext(userPrompt: string, fileContext: string | undefined, systemPrompt: string | undefined): string;
 //# sourceMappingURL=prompt-injection.d.ts.map

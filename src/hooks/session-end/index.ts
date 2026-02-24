@@ -4,6 +4,7 @@ import * as readline from 'readline';
 import { triggerStopCallbacks } from './callbacks.js';
 import { notify } from '../../notifications/index.js';
 import { cleanupBridgeSessions } from '../../tools/python-repl/bridge-manager.js';
+import { resolveToWorktreeRoot } from '../../lib/worktree-paths.js';
 
 export interface SessionEndInput {
   session_id: string;
@@ -47,7 +48,7 @@ function getAgentCounts(directory: string): { spawned: number; completed: number
     const completed = tracking.agents?.filter((a: any) => a.status === 'completed').length || 0;
 
     return { spawned, completed };
-  } catch (error) {
+  } catch (_error) {
     return { spawned: 0, completed: 0 };
   }
 }
@@ -140,7 +141,7 @@ export function getSessionStartTime(directory: string, sessionId?: string): stri
         }
       }
       // else: state has a different session_id — stale, skip
-    } catch (error) {
+    } catch (_error) {
       continue;
     }
   }
@@ -173,7 +174,7 @@ export function recordSessionMetrics(directory: string, input: SessionEndInput):
       const startTime = new Date(startedAt).getTime();
       const endTime = new Date(endedAt).getTime();
       metrics.duration_ms = endTime - startTime;
-    } catch (error) {
+    } catch (_error) {
       // Invalid date, skip duration
     }
   }
@@ -198,7 +199,7 @@ export function cleanupTransientState(directory: string): number {
     try {
       fs.unlinkSync(trackingPath);
       filesRemoved++;
-    } catch (error) {
+    } catch (_error) {
       // Ignore removal errors
     }
   }
@@ -220,7 +221,7 @@ export function cleanupTransientState(directory: string): number {
           filesRemoved++;
         }
       }
-    } catch (error) {
+    } catch (_error) {
       // Ignore cleanup errors
     }
   }
@@ -240,7 +241,7 @@ export function cleanupTransientState(directory: string): number {
           filesRemoved++;
         }
       }
-    } catch (error) {
+    } catch (_error) {
       // Ignore errors
     }
   };
@@ -407,7 +408,7 @@ export function exportSessionSummary(directory: string, metrics: SessionMetrics)
 
   try {
     fs.writeFileSync(sessionFile, JSON.stringify(metrics, null, 2), 'utf-8');
-  } catch (error) {
+  } catch (_error) {
     // Ignore write errors
   }
 }
@@ -416,17 +417,21 @@ export function exportSessionSummary(directory: string, metrics: SessionMetrics)
  * Process session end
  */
 export async function processSessionEnd(input: SessionEndInput): Promise<HookOutput> {
+  // Normalize cwd to the git worktree root so .omc/state/ is always resolved
+  // from the repo root, even when Claude Code is running from a subdirectory (issue #891).
+  const directory = resolveToWorktreeRoot(input.cwd);
+
   // Record and export session metrics to disk
-  const metrics = recordSessionMetrics(input.cwd, input);
-  exportSessionSummary(input.cwd, metrics);
+  const metrics = recordSessionMetrics(directory, input);
+  exportSessionSummary(directory, metrics);
 
   // Clean up transient state files
-  cleanupTransientState(input.cwd);
+  cleanupTransientState(directory);
 
   // Clean up mode state files to prevent stale state issues
   // This ensures the stop hook won't malfunction in subsequent sessions
   // Pass session_id to only clean up this session's states
-  cleanupModeStates(input.cwd, input.session_id);
+  cleanupModeStates(directory, input.session_id);
 
   // Clean up Python REPL bridge sessions used in this transcript (#641).
   // Best-effort only: session end should not fail because cleanup fails.

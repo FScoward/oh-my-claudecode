@@ -2,16 +2,15 @@
  * Configuration Loader
  *
  * Handles loading and merging configuration from multiple sources:
- * - User config: ~/.config/claude-sisyphus/config.jsonc
- * - Project config: .claude/sisyphus.jsonc
+ * - User config: ~/.config/claude-omc/config.jsonc
+ * - Project config: .claude/omc.jsonc
  * - Environment variables
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { homedir } from 'os';
 import { join, dirname } from 'path';
 import * as jsonc from 'jsonc-parser';
-import type { PluginConfig, ExternalModelsConfig, DelegationRoutingConfig } from '../shared/types.js';
+import type { PluginConfig, ExternalModelsConfig } from '../shared/types.js';
 import { getConfigDir } from '../utils/paths.js';
 
 /**
@@ -29,8 +28,8 @@ export const DEFAULT_CONFIG: PluginConfig = {
     // New agents from oh-my-opencode
     critic: { model: 'claude-opus-4-6-20260205', enabled: true },
     analyst: { model: 'claude-opus-4-6-20260205', enabled: true },
-    orchestratorSisyphus: { model: 'claude-sonnet-4-6-20260217', enabled: true },
-    sisyphusJunior: { model: 'claude-sonnet-4-6-20260217', enabled: true },
+    coordinator: { model: 'claude-sonnet-4-6-20260217', enabled: true },
+    executor: { model: 'claude-sonnet-4-6-20260217', enabled: true },
     planner: { model: 'claude-opus-4-6-20260205', enabled: true }
   },
   features: {
@@ -87,7 +86,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   externalModels: {
     defaults: {
       codexModel: process.env.OMC_CODEX_DEFAULT_MODEL || 'gpt-5.3-codex',
-      geminiModel: process.env.OMC_GEMINI_DEFAULT_MODEL || 'gemini-3-pro-preview',
+      geminiModel: process.env.OMC_GEMINI_DEFAULT_MODEL || 'gemini-3.1-pro-preview',
     },
     fallbackPolicy: {
       onModelFailure: 'provider_chain',
@@ -100,7 +99,20 @@ export const DEFAULT_CONFIG: PluginConfig = {
     enabled: false,  // Opt-in feature
     defaultProvider: 'claude',
     roles: {},
-  }
+  },
+  // Startup codebase map injection (issue #804)
+  startupCodebaseMap: {
+    enabled: true,
+    maxFiles: 200,
+    maxDepth: 4,
+  },
+  // Task size detection (issue #790): prevent over-orchestration for small tasks
+  taskSizeDetection: {
+    enabled: true,
+    smallWordLimit: 50,
+    largeWordLimit: 200,
+    suppressHeavyModesForSmallTasks: true,
+  },
 };
 
 /**
@@ -110,8 +122,8 @@ export function getConfigPaths(): { user: string; project: string } {
   const userConfigDir = getConfigDir();
 
   return {
-    user: join(userConfigDir, 'claude-sisyphus', 'config.jsonc'),
-    project: join(process.cwd(), '.claude', 'sisyphus.jsonc')
+    user: join(userConfigDir, 'claude-omc', 'config.jsonc'),
+    project: join(process.cwd(), '.claude', 'omc.jsonc')
   };
 }
 
@@ -390,14 +402,14 @@ export function loadContextFromFiles(files: string[]): string {
 export function generateConfigSchema(): object {
   return {
     $schema: 'http://json-schema.org/draft-07/schema#',
-    title: 'Oh-My-Claude-Sisyphus Configuration',
+    title: 'Oh-My-ClaudeCode Configuration',
     type: 'object',
     properties: {
       agents: {
         type: 'object',
         description: 'Agent model and feature configuration',
         properties: {
-          sisyphus: {
+          omc: {
             type: 'object',
             properties: {
               model: { type: 'string', description: 'Model ID for the main orchestrator' }
@@ -519,7 +531,7 @@ export function generateConfigSchema(): object {
               },
               geminiModel: {
                 type: 'string',
-                default: 'gemini-3-pro-preview',
+                default: 'gemini-3.1-pro-preview',
                 description: 'Default Gemini model'
               }
             }
@@ -595,7 +607,7 @@ export function generateConfigSchema(): object {
               type: 'object',
               properties: {
                 provider: { type: 'string', enum: ['claude', 'codex', 'gemini'] },
-                tool: { type: 'string', enum: ['Task', 'ask_codex', 'ask_gemini'] },
+                tool: { type: 'string', enum: ['Task'] },
                 model: { type: 'string' },
                 agentType: { type: 'string' },
                 fallback: { type: 'array', items: { type: 'string' } }

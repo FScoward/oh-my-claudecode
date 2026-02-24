@@ -15,10 +15,6 @@ import { randomUUID } from 'crypto';
 // ============================================================================
 // Constants
 // ============================================================================
-/** Global registry path (not worktree-scoped) */
-const REGISTRY_PATH = join(homedir(), '.omc', 'state', 'reply-session-registry.jsonl');
-/** Lock file path for cross-process synchronization */
-const REGISTRY_LOCK_PATH = join(homedir(), '.omc', 'state', 'reply-session-registry.lock');
 /** Secure file permissions (owner read/write only) */
 const SECURE_FILE_MODE = 0o600;
 /** Maximum age for entries (24 hours) */
@@ -27,6 +23,22 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const LOCK_TIMEOUT_MS = 2000;
 const LOCK_RETRY_MS = 20;
 const LOCK_STALE_MS = 10000;
+/**
+ * Return the registry state directory.
+ * OMC_TEST_REGISTRY_DIR overrides the default (~/.omc/state) so that tests
+ * can redirect all I/O to a temporary directory without touching global state.
+ */
+function getRegistryStateDir() {
+    return process.env['OMC_TEST_REGISTRY_DIR'] ?? join(homedir(), '.omc', 'state');
+}
+/** Global registry JSONL path */
+function getRegistryPath() {
+    return join(getRegistryStateDir(), 'reply-session-registry.jsonl');
+}
+/** Lock file path for cross-process synchronization */
+function getLockPath() {
+    return join(getRegistryStateDir(), 'reply-session-registry.lock');
+}
 // Shared array for Atomics.wait-based synchronous sleep
 const SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 // ============================================================================
@@ -36,7 +48,7 @@ const SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
  * Ensure registry directory exists with secure permissions
  */
 function ensureRegistryDir() {
-    const registryDir = dirname(REGISTRY_PATH);
+    const registryDir = dirname(getRegistryPath());
     if (!existsSync(registryDir)) {
         mkdirSync(registryDir, { recursive: true, mode: 0o700 });
     }
@@ -73,7 +85,7 @@ function isPidAlive(pid) {
  */
 function readLockSnapshot() {
     try {
-        const raw = readFileSync(REGISTRY_LOCK_PATH, 'utf-8');
+        const raw = readFileSync(getLockPath(), 'utf-8');
         const trimmed = raw.trim();
         if (!trimmed) {
             return { raw, pid: null, token: null };
@@ -103,7 +115,7 @@ function readLockSnapshot() {
  */
 function removeLockIfUnchanged(snapshot) {
     try {
-        const currentRaw = readFileSync(REGISTRY_LOCK_PATH, 'utf-8');
+        const currentRaw = readFileSync(getLockPath(), 'utf-8');
         if (currentRaw !== snapshot.raw) {
             return false;
         }
@@ -112,7 +124,7 @@ function removeLockIfUnchanged(snapshot) {
         return false;
     }
     try {
-        unlinkSync(REGISTRY_LOCK_PATH);
+        unlinkSync(getLockPath());
         return true;
     }
     catch {
@@ -129,7 +141,7 @@ function acquireRegistryLock() {
     while (Date.now() - started < LOCK_TIMEOUT_MS) {
         try {
             const token = randomUUID();
-            const fd = openSync(REGISTRY_LOCK_PATH, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, SECURE_FILE_MODE);
+            const fd = openSync(getLockPath(), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, SECURE_FILE_MODE);
             // Write lock payload for stale-lock checks + ownership-safe unlock.
             const lockPayload = JSON.stringify({
                 pid: process.pid,
@@ -146,7 +158,7 @@ function acquireRegistryLock() {
             }
             // Remove stale lock only if ownership checks indicate it's safe.
             try {
-                const lockAgeMs = Date.now() - statSync(REGISTRY_LOCK_PATH).mtimeMs;
+                const lockAgeMs = Date.now() - statSync(getLockPath()).mtimeMs;
                 if (lockAgeMs > LOCK_STALE_MS) {
                     const snapshot = readLockSnapshot();
                     if (!snapshot) {
@@ -238,7 +250,7 @@ export function registerMessage(mapping) {
     withRegistryLockOrWait(() => {
         ensureRegistryDir();
         const line = JSON.stringify(mapping) + '\n';
-        const fd = openSync(REGISTRY_PATH, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT, SECURE_FILE_MODE);
+        const fd = openSync(getRegistryPath(), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT, SECURE_FILE_MODE);
         try {
             const buf = Buffer.from(line, 'utf-8');
             writeSync(fd, buf);
@@ -259,11 +271,11 @@ export function loadAllMappings() {
  * Caller must already hold lock (or accept race risk).
  */
 function readAllMappingsUnsafe() {
-    if (!existsSync(REGISTRY_PATH)) {
+    if (!existsSync(getRegistryPath())) {
         return [];
     }
     try {
-        const content = readFileSync(REGISTRY_PATH, 'utf-8');
+        const content = readFileSync(getRegistryPath(), 'utf-8');
         return content
             .split('\n')
             .filter(line => line.trim())
@@ -283,12 +295,12 @@ function readAllMappingsUnsafe() {
 }
 /**
  * Look up a mapping by platform and message ID.
- * Returns the first match (most recent entry wins if duplicates exist).
+ * Returns the most recent entry when duplicates exist (last match in append-ordered JSONL).
  */
 export function lookupByMessageId(platform, messageId) {
     const mappings = loadAllMappings();
-    // Find first match (JSONL is append-only, so first occurrence is the original)
-    return mappings.find(m => m.platform === platform && m.messageId === messageId) || null;
+    // Use findLast so that the most recently appended entry wins when duplicates exist.
+    return mappings.findLast(m => m.platform === platform && m.messageId === messageId) ?? null;
 }
 /**
  * Remove all entries for a given session ID.
@@ -359,10 +371,10 @@ function rewriteRegistryUnsafe(mappings) {
     ensureRegistryDir();
     if (mappings.length === 0) {
         // Empty registry - write empty file
-        writeFileSync(REGISTRY_PATH, '', { mode: SECURE_FILE_MODE });
+        writeFileSync(getRegistryPath(), '', { mode: SECURE_FILE_MODE });
         return;
     }
     const content = mappings.map(m => JSON.stringify(m)).join('\n') + '\n';
-    writeFileSync(REGISTRY_PATH, content, { mode: SECURE_FILE_MODE });
+    writeFileSync(getRegistryPath(), content, { mode: SECURE_FILE_MODE });
 }
 //# sourceMappingURL=session-registry.js.map

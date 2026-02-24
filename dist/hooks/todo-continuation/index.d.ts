@@ -76,6 +76,16 @@ export interface StopContext {
     user_requested?: boolean;
     /** Whether user explicitly requested stop - camelCase variant */
     userRequested?: boolean;
+    /** Prompt text (when available) */
+    prompt?: string;
+    /** Tool name from hook payload (snake_case) */
+    tool_name?: string;
+    /** Tool name from hook payload (camelCase) */
+    toolName?: string;
+    /** Tool input from hook payload (snake_case) */
+    tool_input?: unknown;
+    /** Tool input from hook payload (camelCase) */
+    toolInput?: unknown;
 }
 export interface TodoContinuationHook {
     checkIncomplete: (sessionId?: string) => Promise<IncompleteTodosResult>;
@@ -102,6 +112,13 @@ export interface TodoContinuationHook {
  */
 export declare function isUserAbort(context?: StopContext): boolean;
 /**
+ * Detect explicit /cancel command paths that should bypass stop-hook reinforcement.
+ *
+ * This is stricter than generic user-abort detection and is intended to prevent
+ * re-enforcement races when the user explicitly invokes /cancel or /cancel --force.
+ */
+export declare function isExplicitCancelCommand(context?: StopContext): boolean;
+/**
  * Detect if stop was triggered by context-limit related reasons.
  * When context is exhausted, Claude Code needs to stop so it can compact.
  * Blocking these stops causes a deadlock: can't compact because can't stop,
@@ -110,6 +127,16 @@ export declare function isUserAbort(context?: StopContext): boolean;
  * See: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/213
  */
 export declare function isContextLimitStop(context?: StopContext): boolean;
+/**
+ * Detect if stop was triggered by rate limiting (HTTP 429 / quota exhausted).
+ * When the API is rate-limited, Claude Code stops the session.
+ * Blocking these stops causes an infinite retry loop: the persistent-mode hook
+ * injects a continuation prompt, Claude immediately hits the rate limit again,
+ * stops again, and the cycle repeats indefinitely.
+ *
+ * Fix for: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/777
+ */
+export declare function isRateLimitStop(context?: StopContext): boolean;
 /**
  * Get the Task directory for a session
  *

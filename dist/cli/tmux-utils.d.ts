@@ -24,10 +24,11 @@ export declare function isClaudeAvailable(): boolean;
  */
 export declare function resolveLaunchPolicy(env?: NodeJS.ProcessEnv): ClaudeLaunchPolicy;
 /**
- * Build tmux session name from directory and git branch
- * Format: omc-{dir}-{branch}-{session}
+ * Build tmux session name from directory, git branch, and UTC timestamp
+ * Format: omc-{dir}-{branch}-{utctimestamp}
+ * e.g.  omc-myproject-dev-20260221143052
  */
-export declare function buildTmuxSessionName(cwd: string, sessionId: string): string;
+export declare function buildTmuxSessionName(cwd: string): string;
 /**
  * Sanitize string for use in tmux session/window names
  * Lowercase, alphanumeric + hyphens only

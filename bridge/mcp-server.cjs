@@ -6,7 +6,8 @@ try {
   var _Module = require('module');
   var _globalRoot = _cp.execSync('npm root -g', { encoding: 'utf8', timeout: 5000 }).trim();
   if (_globalRoot) {
-    process.env.NODE_PATH = _globalRoot + (process.env.NODE_PATH ? ':' + process.env.NODE_PATH : '');
+    var _sep = process.platform === 'win32' ? ';' : ':';
+    process.env.NODE_PATH = _globalRoot + (process.env.NODE_PATH ? _sep + process.env.NODE_PATH : '');
     _Module._initPaths();
   }
 } catch (_e) { /* npm not available - native modules will gracefully degrade */ }
@@ -18477,6 +18478,9 @@ var LspClientManager = class {
   }
 };
 var lspClientManager = new LspClientManager();
+async function disconnectAll() {
+  return lspClientManager.disconnectAll();
+}
 
 // src/tools/lsp/utils.ts
 var SYMBOL_KINDS = {
@@ -18739,11 +18743,11 @@ function findFiles(directory, extensions, ignoreDirs = []) {
               results.push(fullPath);
             }
           }
-        } catch (error2) {
+        } catch (_error) {
           continue;
         }
       }
-    } catch (error2) {
+    } catch (_error) {
       return;
     }
   }
@@ -18768,7 +18772,7 @@ async function runLspAggregatedDiagnostics(directory, extensions = [".ts", ".tsx
         }
         filesChecked++;
       });
-    } catch (error2) {
+    } catch (_error) {
       continue;
     }
   }
@@ -20200,7 +20204,7 @@ var SessionLock = class {
         acquired: true,
         reason: existingLock ? "stale_broken" : "success"
       };
-    } catch (err) {
+    } catch (_err) {
       return {
         acquired: false,
         reason: "error"
@@ -20905,7 +20909,7 @@ async function handleReset(sessionId, socketPath) {
   try {
     const result = await sendSocketRequest(socketPath, "reset", {}, 1e4);
     return formatResetResult(result, sessionId);
-  } catch (error2) {
+  } catch (_error) {
     await killBridgeWithEscalation(sessionId);
     return [
       "=== Bridge Restarted ===",
@@ -21328,12 +21332,6 @@ var MODE_CONFIGS = {
     name: "UltraQA",
     stateFile: "ultraqa-state.json",
     activeProperty: "active"
-  },
-  ecomode: {
-    name: "Ecomode",
-    stateFile: "ecomode-state.json",
-    activeProperty: "active",
-    hasGlobalState: false
   }
 };
 function getStateDir(cwd) {
@@ -21436,7 +21434,9 @@ function getAllModeStatuses(cwd, sessionId) {
 function clearModeState(mode, cwd, sessionId) {
   const config2 = MODE_CONFIGS[mode];
   let success = true;
-  if (sessionId && !config2.isSqlite) {
+  const markerFile = getMarkerFilePath(cwd, mode);
+  const isSessionScopedClear = Boolean(sessionId && !config2.isSqlite);
+  if (isSessionScopedClear && sessionId) {
     const sessionStateFile = resolveSessionStatePath(mode, sessionId, cwd);
     if ((0, import_fs7.existsSync)(sessionStateFile)) {
       try {
@@ -21445,35 +21445,61 @@ function clearModeState(mode, cwd, sessionId) {
         success = false;
       }
     }
-    return success;
+    if (config2.markerFile) {
+      const markerStateName = config2.markerFile.replace(/\.json$/i, "");
+      const sessionMarkerFile = resolveSessionStatePath(markerStateName, sessionId, cwd);
+      if ((0, import_fs7.existsSync)(sessionMarkerFile)) {
+        try {
+          (0, import_fs7.unlinkSync)(sessionMarkerFile);
+        } catch {
+          success = false;
+        }
+      }
+    }
+    if (markerFile && (0, import_fs7.existsSync)(markerFile)) {
+      try {
+        const markerRaw = JSON.parse((0, import_fs7.readFileSync)(markerFile, "utf-8"));
+        const markerSessionId = markerRaw.session_id ?? markerRaw.sessionId;
+        if (!markerSessionId || markerSessionId === sessionId) {
+          (0, import_fs7.unlinkSync)(markerFile);
+        }
+      } catch {
+        try {
+          (0, import_fs7.unlinkSync)(markerFile);
+        } catch {
+          success = false;
+        }
+      }
+    }
   }
   const stateFile = getStateFilePath(cwd, mode);
-  if ((0, import_fs7.existsSync)(stateFile)) {
-    try {
-      (0, import_fs7.unlinkSync)(stateFile);
-    } catch {
-      success = false;
-    }
-  }
-  if (config2.isSqlite) {
-    const walFile = stateFile + "-wal";
-    const shmFile = stateFile + "-shm";
-    if ((0, import_fs7.existsSync)(walFile)) {
+  if (!isSessionScopedClear) {
+    if ((0, import_fs7.existsSync)(stateFile)) {
       try {
-        (0, import_fs7.unlinkSync)(walFile);
+        (0, import_fs7.unlinkSync)(stateFile);
       } catch {
         success = false;
       }
     }
-    if ((0, import_fs7.existsSync)(shmFile)) {
-      try {
-        (0, import_fs7.unlinkSync)(shmFile);
-      } catch {
-        success = false;
+    if (config2.isSqlite) {
+      const walFile = stateFile + "-wal";
+      const shmFile = stateFile + "-shm";
+      if ((0, import_fs7.existsSync)(walFile)) {
+        try {
+          (0, import_fs7.unlinkSync)(walFile);
+        } catch {
+          success = false;
+        }
+      }
+      if ((0, import_fs7.existsSync)(shmFile)) {
+        try {
+          (0, import_fs7.unlinkSync)(shmFile);
+        } catch {
+          success = false;
+        }
       }
     }
   }
-  const markerFile = getMarkerFilePath(cwd, mode);
   if (markerFile && (0, import_fs7.existsSync)(markerFile)) {
     try {
       (0, import_fs7.unlinkSync)(markerFile);
@@ -21501,10 +21527,10 @@ var EXECUTION_MODES = [
   "team",
   "ralph",
   "ultrawork",
-  "ultraqa",
-  "ecomode"
+  "ultraqa"
 ];
 var STATE_TOOL_MODES = [...EXECUTION_MODES, "ralplan"];
+var CANCEL_SIGNAL_TTL_MS = 3e4;
 function getStatePath(mode, root) {
   if (MODE_CONFIGS[mode]) {
     return getStateFilePath(root, mode);
@@ -21784,6 +21810,15 @@ var stateClearTool = {
       const sessionId = session_id;
       if (sessionId) {
         validateSessionId(sessionId);
+        const now = Date.now();
+        const cancelSignalPath = resolveSessionStatePath("cancel-signal", sessionId, root);
+        atomicWriteJsonSync(cancelSignalPath, {
+          active: true,
+          requested_at: new Date(now).toISOString(),
+          expires_at: new Date(now + CANCEL_SIGNAL_TTL_MS).toISOString(),
+          mode,
+          source: "state_clear"
+        });
         if (MODE_CONFIGS[mode]) {
           const success = clearModeState(mode, root, sessionId);
           if (success) {
@@ -22832,7 +22867,7 @@ async function loadProjectMemory(projectRoot) {
       return null;
     }
     return memory;
-  } catch (error2) {
+  } catch (_error) {
     return null;
   }
 }
@@ -23025,7 +23060,7 @@ var projectMemoryAddNoteTool = {
     const { category, content, workingDirectory } = args;
     try {
       const root = validateWorkingDirectory(workingDirectory);
-      let memory = await loadProjectMemory(root);
+      const memory = await loadProjectMemory(root);
       if (!memory) {
         return {
           content: [{
@@ -23067,7 +23102,7 @@ var projectMemoryAddDirectiveTool = {
     const { directive, context = "", priority = "normal", workingDirectory } = args;
     try {
       const root = validateWorkingDirectory(workingDirectory);
-      let memory = await loadProjectMemory(root);
+      const memory = await loadProjectMemory(root);
       if (!memory) {
         return {
           content: [{
@@ -23763,6 +23798,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true
     };
   }
+});
+async function gracefulShutdown(signal) {
+  const forceExitTimer = setTimeout(() => process.exit(1), 5e3);
+  forceExitTimer.unref();
+  console.error(`OMC MCP Server: received ${signal}, disconnecting LSP servers...`);
+  try {
+    await disconnectAll();
+  } catch {
+  }
+  try {
+    await server.close();
+  } catch {
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", () => {
+  gracefulShutdown("SIGTERM");
+});
+process.on("SIGINT", () => {
+  gracefulShutdown("SIGINT");
 });
 async function main() {
   const transport = new StdioServerTransport();

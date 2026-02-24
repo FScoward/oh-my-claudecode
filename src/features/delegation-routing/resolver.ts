@@ -12,7 +12,11 @@ import type {
   DelegationProvider,
   DelegationTool,
 } from '../../shared/types.js';
-import { isDelegationEnabled, ROLE_CATEGORY_DEFAULTS } from './types.js';
+import {
+  isDelegationEnabled,
+  ROLE_CATEGORY_DEFAULTS,
+  normalizeDelegationRole,
+} from './types.js';
 
 /**
  * Resolve delegation decision based on configuration and context
@@ -25,19 +29,23 @@ import { isDelegationEnabled, ROLE_CATEGORY_DEFAULTS } from './types.js';
  */
 export function resolveDelegation(options: ResolveDelegationOptions): DelegationDecision {
   const { agentRole, explicitTool, explicitModel, config } = options;
+  const canonicalAgentRole = normalizeDelegationRole(agentRole);
 
   // Priority 1: Explicit tool invocation
   if (explicitTool) {
-    return resolveExplicitTool(explicitTool, explicitModel, agentRole);
+    return resolveExplicitTool(explicitTool, explicitModel, canonicalAgentRole);
   }
 
   // Priority 2: Configured routing (if enabled)
-  if (isDelegationEnabled(config) && config?.roles?.[agentRole]) {
-    return resolveFromConfig(agentRole, config.roles[agentRole], config);
+  const configuredRoute = config?.roles?.[agentRole]
+    ?? (canonicalAgentRole !== agentRole ? config?.roles?.[canonicalAgentRole] : undefined);
+
+  if (config && isDelegationEnabled(config) && configuredRoute) {
+    return resolveFromConfig(canonicalAgentRole, configuredRoute);
   }
 
   // Priority 3 & 4: Default heuristic
-  return resolveDefault(agentRole, config);
+  return resolveDefault(canonicalAgentRole, config);
 }
 
 /**
@@ -48,31 +56,11 @@ function resolveExplicitTool(
   model: string | undefined,
   agentRole: string
 ): DelegationDecision {
-  // Map tool to provider and model
-  let provider: DelegationProvider;
-  let agentOrModel: string;
-
-  switch (tool) {
-    case 'ask_codex':
-      provider = 'codex';
-      agentOrModel = model || 'gpt-5.3-codex';
-      break;
-    case 'ask_gemini':
-      provider = 'gemini';
-      // Keep default consistent with Gemini core + external-model policy
-      agentOrModel = model || 'gemini-3-pro-preview';
-      break;
-    case 'Task':
-    default:
-      provider = 'claude';
-      agentOrModel = agentRole;
-      break;
-  }
-
+  // Only 'Task' is supported - explicit tool invocation always uses Claude
   return {
-    provider,
-    tool,
-    agentOrModel,
+    provider: 'claude',
+    tool: 'Task',
+    agentOrModel: agentRole,
     reason: `Explicit tool invocation: ${tool}`,
   };
 }
@@ -83,21 +71,28 @@ function resolveExplicitTool(
 function resolveFromConfig(
   agentRole: string,
   route: DelegationRoute,
-  config: DelegationRoutingConfig
 ): DelegationDecision {
-  let provider = route.provider;
+  const provider = route.provider;
   let tool = route.tool;
 
-  // Validate provider matches tool
-  const validCombinations: Record<string, DelegationTool> = {
-    claude: 'Task',
-    codex: 'ask_codex',
-    gemini: 'ask_gemini',
-  };
+  // Warn and fall back to claude for deprecated codex/gemini providers
+  if (provider === 'codex' || provider === 'gemini') {
+    console.warn('[OMC] Codex/Gemini MCP delegation is deprecated. Use /team to coordinate CLI workers instead.');
+    const agentOrModel = route.model || route.agentType || agentRole;
+    const fallbackChain = route.fallback;
+    return {
+      provider: 'claude',
+      tool: 'Task',
+      agentOrModel,
+      reason: `Configured routing for role "${agentRole}" (deprecated provider "${provider}", falling back to Claude Task)`,
+      fallbackChain,
+    };
+  }
 
-  if (validCombinations[provider] !== tool) {
-    console.warn(`[delegation-routing] Provider/tool mismatch: ${provider} with ${tool}. Correcting to ${validCombinations[provider]}.`);
-    tool = validCombinations[provider];
+  // Only claude → Task is valid; correct any mismatch
+  if (tool !== 'Task') {
+    console.warn(`[delegation-routing] Provider/tool mismatch: ${provider} with ${tool}. Correcting to Task.`);
+    tool = 'Task';
   }
 
   const agentOrModel = route.model || route.agentType || agentRole;
@@ -134,25 +129,11 @@ function resolveDefault(
   // Fall back to default provider or claude
   const defaultProvider = config?.defaultProvider || 'claude';
 
-  if (defaultProvider === 'codex') {
-    return {
-      provider: 'codex',
-      tool: 'ask_codex',
-      agentOrModel: 'gpt-5.3-codex',
-      reason: `Fallback to default provider: ${defaultProvider}`,
-    };
+  if (defaultProvider === 'codex' || defaultProvider === 'gemini') {
+    console.warn('[OMC] Codex/Gemini MCP delegation is deprecated. Use /team to coordinate CLI workers instead.');
   }
 
-  if (defaultProvider === 'gemini') {
-    return {
-      provider: 'gemini',
-      tool: 'ask_gemini',
-      agentOrModel: 'gemini-3-pro-preview',
-      reason: `Fallback to default provider: ${defaultProvider}`,
-    };
-  }
-
-  // Default to claude Task
+  // Default to claude Task (codex/gemini default providers fall back to claude)
   return {
     provider: 'claude',
     tool: 'Task',

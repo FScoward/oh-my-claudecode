@@ -183,6 +183,8 @@ export class TokenTracker {
             }
             const stats = this.initializeSessionStats();
             stats.sessionId = sessionId;
+            const savedStats = this.sessionStats;
+            this.sessionStats = stats;
             for (const line of linesToProcess) {
                 if (!line.trim())
                     continue;
@@ -196,9 +198,10 @@ export class TokenTracker {
                     continue;
                 }
             }
+            this.sessionStats = savedStats;
             return stats.totalInputTokens > 0 ? stats : null;
         }
-        catch (error) {
+        catch (_error) {
             return null;
         }
     }
@@ -235,7 +238,7 @@ export class TokenTracker {
                 lastEntry: agentData.lastEntry,
             };
         }
-        catch (error) {
+        catch (_error) {
             // If tokscale fails, fall back to legacy implementation
             return this.getAllStatsLegacy();
         }
@@ -292,7 +295,7 @@ export class TokenTracker {
             result.sessionCount = sessions.size;
             return result;
         }
-        catch (error) {
+        catch (_error) {
             // If file doesn't exist or is empty, return empty result
             return result;
         }
@@ -367,7 +370,7 @@ export class TokenTracker {
             stats.sessionCount = sessions.size;
             return stats;
         }
-        catch (error) {
+        catch (_error) {
             // If file doesn't exist or is empty, return empty stats
             return stats;
         }
@@ -405,13 +408,13 @@ export class TokenTracker {
         try {
             const content = await fs.readFile(TOKEN_LOG_FILE, "utf-8");
             const lines = content.trim().split("\n");
-            let kept = 0;
+            let _kept = 0;
             let removed = 0;
             const filteredLines = lines.filter((line) => {
                 const record = JSON.parse(line);
                 const recordDate = new Date(record.timestamp);
                 if (recordDate >= cutoffDate) {
-                    kept++;
+                    _kept++;
                     return true;
                 }
                 removed++;
@@ -420,7 +423,7 @@ export class TokenTracker {
             await fs.writeFile(TOKEN_LOG_FILE, filteredLines.join("\n") + "\n", "utf-8");
             return removed;
         }
-        catch (error) {
+        catch (_error) {
             return 0;
         }
     }

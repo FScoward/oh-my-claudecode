@@ -12,8 +12,9 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync } from 'child_process';
-import { install as installSisyphus, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin } from '../installer/index.js';
+import { install as installOmc, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin } from '../installer/index.js';
 import { getConfigDir } from '../utils/config-dir.js';
+import { purgeStalePluginCacheVersions } from '../utils/paths.js';
 /** GitHub repository information */
 export const REPO_OWNER = 'Yeachan-Heo';
 export const REPO_NAME = 'oh-my-claudecode';
@@ -274,7 +275,7 @@ export function reconcileUpdateRuntime(options) {
         }
     }
     try {
-        const installResult = installSisyphus({
+        const installResult = installOmc({
             force: true,
             verbose: options?.verbose ?? false,
             skipClaudeCheck: true,
@@ -288,6 +289,21 @@ export function reconcileUpdateRuntime(options) {
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`Failed to refresh installer artifacts: ${message}`);
+    }
+    // Purge stale plugin cache versions (non-fatal)
+    try {
+        const purgeResult = purgeStalePluginCacheVersions();
+        if (purgeResult.removed > 0 && options?.verbose) {
+            console.log(`[omc] Purged ${purgeResult.removed} stale plugin cache version(s)`);
+        }
+        if (purgeResult.errors.length > 0 && options?.verbose) {
+            for (const err of purgeResult.errors) {
+                console.warn(`[omc] Cache purge warning: ${err}`);
+            }
+        }
+    }
+    catch {
+        // Cache purge is best-effort; never block reconciliation
     }
     if (errors.length > 0) {
         return {
@@ -335,7 +351,7 @@ export async function performUpdate(options) {
             }
             // CRITICAL FIX: After npm updates the global package, the current process
             // still has OLD code loaded in memory. We must re-exec to run reconciliation
-            // with the NEW code. Otherwise, installSisyphus() runs OLD logic against NEW files.
+            // with the NEW code. Otherwise, installOmc() runs OLD logic against NEW files.
             if (!process.env.OMC_UPDATE_RECONCILE) {
                 // Set flag to prevent infinite loop
                 process.env.OMC_UPDATE_RECONCILE = '1';

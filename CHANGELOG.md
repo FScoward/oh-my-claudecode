@@ -1,3 +1,337 @@
+# oh-my-claudecode v4.4.2: Cross-Platform Hardening & Cancel Race Fix
+
+## Patch Notes
+
+This release hardens cross-platform hook execution, fixes a cancel re-arm race in ralph/ultrawork, and improves tmux injection safety with adaptive polling and copy-mode guards.
+
+**11 commits, 75 files changed, +2312 -222 lines**
+
+---
+
+### Features
+
+- **Win32 startup warning** (#923): CLI now displays a platform compatibility warning when running on native Windows (not WSL), informing users about potential limitations.
+- **Adaptive polling for tmux workers** (#907): New `shouldAttemptAdaptiveRetry` logic retries message delivery to busy worker panes without interrupting active turns. Includes copy-mode detection to prevent key injection when a pane is in scroll mode.
+- **Runtime/status telemetry** (#907): Team runtime emits per-cycle telemetry (`monitorMs`, `tasksMs`, `workerMs`) for diagnosing slow polling loops. `team-status` extended with richer status reporting.
+
+---
+
+### Bug Fixes
+
+- **Cancel re-arm race in ralph/ultrawork** (#921): The stop hook could re-enforce ralph/ultrawork persistence after `/cancel` was invoked but before state files were fully cleared. A new `cancel-signal` sentinel file with a 30-second TTL prevents re-arming during the cancellation window.
+- **Codex background prompt normalization** (#919, #920): Background inline prompts passed to Codex CLI are now normalized to `prompt_file` at the callsite, fixing cases where prompts with special characters were mangled or lost.
+- **`ralph-init` triggering ralph loop** (#914): The `ralph` keyword regex now uses a negative lookahead (`(?!-)`) so that `ralph-init` no longer falsely triggers the ralph persistence loop.
+- **Cross-platform hook runner** (#912): Replaced the `sh + find-node.sh` chain with a new `scripts/run.cjs` that uses `process.execPath` to spawn hook scripts. Fixes hook execution failures on Windows where `/usr/bin/sh` is unavailable, and resolves nvm/fnm node binary discovery issues (#909, #899, #892, #869).
+- **HUD `--watch` mode repeated setup error** (#911): Added a stdin cache (`hud-stdin-cache.json`) so `--watch` mode can recover HUD data when stdin becomes a TTY on subsequent iterations, preventing repeated setup errors.
+
+---
+
+### Security
+
+- **tmux copy-mode injection guard**: `sendToWorker` and `injectToLeaderPane` now check `paneInCopyMode` before every `send-keys` call, preventing unintended key injection when a tmux pane is in scroll/copy mode. Multiple guard points added throughout the send-keys retry loop.
+
+---
+
+### Testing
+
+- **Cancel race test suite** (`cancel-race.test.ts`): Validates that `isSessionCancelInProgress` correctly reads/expires cancel signals and that ralph/ultrawork checks respect the cancel window.
+- **Win32 warning test** (`cli-win32-warning.test.ts`): Verifies the platform warning renders on win32 and is suppressed on other platforms.
+- **Team bridge usage test** (`mcp-team-bridge.usage.test.ts`): End-to-end test for the MCP team bridge tool registration.
+- **Runtime assign test** (`runtime-assign.test.ts`): Tests task assignment logic in the team runtime.
+- **Improved mocks** (`team-cleanup.test.ts`): Replaced `Function` callback types with properly typed mocks.
+- **Extended coverage**: `session-isolation.test.ts`, `tmux-session.test.ts`, `team-status.test.ts`, `runtime.test.ts`, `tmux-comm.test.ts` all expanded with new test cases.
+
+---
+
+### Internal
+
+- **`scripts/run.cjs`**: New cross-platform CJS hook runner that uses `spawnSync(process.execPath, ...)` to bypass shell discovery.
+- **`hooks.json` updated**: All hook commands now use the `node + run.cjs` chain instead of `sh + find-node.sh`.
+- **`plugin-setup.mjs` improvements**: Setup script patching updated to support the new runner chain.
+- **`bridge/runtime-cli.cjs`**: +126 lines of telemetry, adaptive polling, and worker lifecycle improvements.
+- **`bridge/team-bridge.cjs`**: +181 lines of enhanced team bridge coordination.
+- **`todo-continuation`**: Added `isExplicitCancelCommand` detection for cleaner cancel handling.
+- **`mode-registry`**: Improved mode detection and session isolation logic.
+
+---
+
+### Codex Review Summary
+
+Infrastructure review (2 findings, non-blocking):
+- **Low**: Unquoted absolute node path in hook commands could theoretically break on paths with spaces on Windows.
+- **Low**: `run.cjs` exits cleanly (`process.exit(0)`) when spawn fails, which suppresses error details from Claude Code's hook output.
+
+No tmux shell injection vulnerabilities found in the hardened `sendToWorker`/`injectToLeaderPane` implementations.
+
+---
+
+# oh-my-claudecode v4.4.1: HUD hotfix
+
+## Patch Notes
+
+**Fix: HUD disappears after updating to v4.4.0** (#hotfix)
+
+In v4.4.0, `dist/hud/index.js` was changed to export `main` for programmatic use and guard its auto-run with `process.argv[1] === fileURLToPath(import.meta.url)`. This check correctly identifies direct execution (`node dist/hud/index.js`) but **fails when the module is loaded via dynamic `import()` from the `omc-hud.mjs` wrapper** — in that case `process.argv[1]` is the wrapper path, not `index.js`, so `main()` was never called and the HUD silently produced no output.
+
+**Fix:** Remove the direct-execution guard and call `main()` unconditionally. The `export { main }` is preserved for programmatic/watch-loop use.
+
+---
+
+# oh-my-claudecode v4.4.0: tmux CLI Workers, On-Demand Workers, Surgical Pane Cleanup & Security Hardening
+
+This is a major release that rewrites how Codex and Gemini are integrated into OMC. The old MCP server architecture (`x`, `g` providers) has been replaced entirely by a tmux-based CLI worker runtime that spawns real CLI processes in visible panes. Workers are now spun up on demand and torn down immediately when done. Team session cleanup has been hardened to never destroy the user's shell. Several security issues in the MCP surface have been fixed.
+
+---
+
+### Breaking Changes
+
+**Codex/Gemini MCP servers removed** ⚠️
+
+The `x` (Codex) and `g` (Gemini) MCP server providers have been removed. Any `CLAUDE.md` or skill using `mcp__x__ask_codex`, `mcp__g__ask_gemini`, or `ToolSearch("ask_codex")` will no longer work.
+
+- `codexMcpServer`, `codexToolNames`, `geminiMcpServer`, `geminiToolNames` exports removed from `src/mcp/index.ts`.
+- The deleted source files — `codex-core.ts`, `codex-server.ts`, `codex-standalone-server.ts`, `gemini-core.ts`, `gemini-server.ts`, `gemini-standalone-server.ts` — are no longer compiled or bundled.
+- **Migration**: use `/omc-teams N:codex "task"` or `/omc-teams N:gemini "task"` to spawn Codex/Gemini CLI workers in tmux panes. The `/ccg` skill fans out Codex (analytical) + Gemini (design/UI) tasks simultaneously.
+- Keyword detection for `"ask codex"` / `"use gemini"` / `"delegate to codex"` now automatically routes to `/omc-teams` instead of the removed MCP tools.
+- `docs/CLAUDE.md` updated: `<mcp_routing>` section removed; `<tools>` section updated with `mcp__team__` tool names; `ccg` skill added to `<skills>`.
+
+---
+
+### New Features
+
+**tmux-based CLI workers (`/omc-teams` skill)**
+- Spawn N `claude`, `codex`, or `gemini` CLI processes in tmux split-panes for parallel task execution.
+- File-based coordination: each worker reads `inbox.md` and writes `done.json` on completion — no inter-process messaging required.
+- MCP tools exposed via the `team` MCP server:
+  - `omc_run_team_start` — non-blocking spawn; returns `jobId` immediately
+  - `omc_run_team_wait` — blocking poll with exponential backoff (500 ms → 2 s); returns when all workers finish
+  - `omc_run_team_status` — non-blocking status check for mid-flight inspection
+  - `omc_run_team_cleanup` — kills only worker panes, never `kill-session`
+- Default `omc_run_team_wait` timeout is 60 s; on timeout workers keep running — call wait again or cleanup to cancel.
+
+**On-demand worker lifecycle** (#904)
+- Workers are spawned only when a task arrives and killed immediately when their task completes.
+- Hard per-session timeout removed; workers live exactly as long as their task requires.
+- Eliminates idle workers consuming resources during long-running team pipelines.
+
+**`/ccg` skill — Claude-Codex-Gemini tri-model orchestration**
+- Fans out backend/analytical tasks to a Codex CLI worker and frontend/UI tasks to a Gemini CLI worker simultaneously.
+- Claude synthesizes both results into a unified response.
+- Falls back to Claude-only Task agents when Codex or Gemini CLI is not installed.
+- Execution protocol updated to use `mcp__team__omc_run_team_start` + `omc_run_team_wait` (removed stale TypeScript `startTeam`/`assignTask`/`monitorTeam`/`shutdownTeam` imports).
+
+---
+
+### Fixed
+
+**Team session cleanup hardening**
+- `killWorkerPanes()`: SIGTERM → 10 s grace → SIGKILL escalation per pane; leader-pane guard prevents ever killing the invoking shell; shutdown sentinel written before force-kill so workers can detect graceful shutdown.
+- `killTeamSession()`: never calls `kill-session` when `sessionName` contains `:` (split-pane mode); only worker-owned sessions are ever destroyed.
+- `omc_run_team_wait` timeout no longer kills workers — it returns a timeout status and leaves workers running so the caller can decide whether to keep waiting or cleanup (#903).
+- Pane IDs persisted to `~/.omc/team-jobs/{jobId}-panes.json` immediately after `startTeam()` resolves so cleanup always has valid targets even after a lead crash.
+
+**Exit codes**
+- `doShutdown()` in `runtime-cli` now exits with `0` (completed), `1` (failed), or `2` (timeout) instead of always exiting `0`. `team-server` interprets close codes correctly and surfaces them in `taskResults`.
+
+**Windows: false hook error labels** (#899, #902)
+- Hooks no longer run `sh` + `find-node.sh` on Windows, which was causing Claude Code to display "hook error" for hooks that completed successfully.
+
+**HUD**
+- Plugin-cache lookup now respects `CLAUDE_CONFIG_DIR` (#897), fixing HUD on systems where Claude's config directory is non-default.
+
+**Update checks**
+- `session-start.mjs` and `auto-update.ts` now fetch version and install from `oh-my-claude-sisyphus` (the published npm package name) instead of the legacy `oh-my-claudecode` package name.
+
+**Team reliability (from 4.3.x backlog)**
+- Hard-kill backstop and orphan PID detection (#901): processes that outlive their pane are forcefully terminated.
+- Exit-code propagation from Claude CLI workers: a worker that exits non-zero is now surfaced as `status: failed` in `taskResults`.
+- User-scoped job directory `~/.omc/team-jobs/` to avoid cross-user collisions on shared machines.
+
+**Docs & skills sync**
+- `docs/CLAUDE.md`: added `mcp__team__` tool names to `<tools>` section; added `ccg` skill entry with trigger patterns; removed stale `<mcp_routing>` section referencing removed providers.
+- `skills/ccg/SKILL.md`: replaced stale TypeScript module imports (`startTeam`, `assignTask`, `monitorTeam`, `shutdownTeam`) with the correct `mcp__team__omc_run_team_start` + `omc_run_team_wait` async pattern.
+
+---
+
+### Security
+
+- `validateJobId()` enforces `/^omc-[a-z0-9]{1,12}$/` on all `job_id` inputs to `omc_run_team_*` MCP tools, preventing path traversal via forged job IDs.
+- Removed `context_files` path traversal vector that existed in the now-deleted Codex/Gemini MCP servers.
+- `SUBAGENT_HEADER` anti-recursion guard removed (no longer needed without Codex/Gemini MCP workers).
+
+---
+
+# oh-my-claudecode v4.3.4: MCP Reliability & Hook Hardening
+
+This release is a concentrated bug-fix batch targeting MCP bridge stability, hook field normalization, security hardening, and cross-platform compatibility. No breaking changes.
+
+---
+
+### Fixed
+
+**MCP / Codex / Gemini**
+- **Codex trust bypass hardening + disconnect retries**: `fix(mcp)` — bridge now retries on disconnect and tightens trust-bypass checks (#895).
+- **`--skip-git-repo-check` added to all Codex CLI invocations** (#888): Codex no longer fails when invoked outside a git repo.
+- **SUBAGENT_HEADER anti-recursion guard** (#828): Prevents Codex/Gemini from spawning further Codex/Gemini subagents.
+- **`context_files` path validation** (#840): Validates paths to prevent path traversal and prompt injection attacks.
+- **File paths passed instead of file contents** (#837): MCP tools now pass file paths to Codex/Gemini rather than inlining content, reducing token bloat.
+- **ToolSearch discovery hardened** (#816): 3-step sequence prevents false negatives when MCP tools are deferred.
+
+**Hooks**
+- **nvm/fnm node binary resolution** (#892): Hook scripts now resolve the correct `node` binary for nvm/fnm users instead of falling back to system node.
+- **snake_case re-normalization for 4 hook handlers** (#858): `camelCase` fields from Claude Code are correctly de-normalized back to `snake_case` before being forwarded.
+- **`OMC_SKIP_HOOKS` guard added to standalone hook scripts** (#839): Standalone `.cjs` scripts now respect the kill-switch env var.
+- **Unknown-field debug log redirected to stderr** (#871): Hook bridge no longer pollutes stdout with debug messages.
+
+**Session & CLI**
+- **`cwd` normalized to git worktree root in session-end hook** (#891): `.omc/` path resolution now correctly anchors to the worktree root instead of the raw `cwd`.
+- **tmux mouse mode enabled** (#890): Scroll now works in tmux panes instead of accidentally navigating shell history.
+- **Claude non-zero exit codes propagated** (#870): `cli-launch` no longer swallows non-zero exit codes from Claude.
+- **HUD pane enabled on launch** (#863): `omc hud` command is registered at startup so the HUD pane renders correctly.
+- **`pre-compact` job DB queries now receive `cwd`** (#862): `getActiveJobsSummary` was running queries without the working directory, returning empty results.
+
+**Team**
+- **Auto-cleanup guard for empty task list** (#841): Team auto-cleanup no longer panics when all tasks complete simultaneously.
+- **Auto-cleanup workers on task completion** (#835): Workers are now shut down automatically when all tasks reach terminal states.
+- **`require()` → ESM `import` in `captureFileSnapshot`** (#875): Fixes module-type mismatch in team file snapshot utility.
+
+**Live-data**
+- **HTML-escape command/output in tag attributes** (#854): Prevents XSS-class injection in live-data rendered output.
+- **Skip directives inside unterminated fenced code blocks** (#853): Live-data parser no longer evaluates directives embedded in code fences.
+- **`allowed_patterns` enforced independently of `allowed_commands`** (#855): Pattern allowlist was being skipped when `allowed_commands` was also set.
+
+**Notifications**
+- **Duplicate `messageId` — most recent entry returned** (#877): `lookupByMessageId` now resolves to the latest entry instead of the first.
+- **Per-session idle cooldown wired into TypeScript path** (#842): Idle cooldown was only applied in the CJS path; now enforced end-to-end.
+- **Notification tests made hermetic** (#876): Session-registry tests use a temp dir to avoid cross-test pollution.
+
+**Security**
+- **Shell injection fix in `createWorktree`** (#851): `execSync` replaced with `execFileSync` to prevent shell injection via branch names.
+
+**Models**
+- **`opus` alias resolves to `claude-opus-4-6`** (#681 / #817): The `opus` shorthand now correctly maps to the current Opus 4.6 model ID.
+
+**Ralplan**
+- **Mandatory `AskUserQuestion` removed from consensus mode** (#821): Ralplan no longer blocks on a user question in non-interactive runs; use `--interactive` flag to restore the prompt + team-approval option.
+
+**Plugin**
+- **`validateCommitMessage` uses `config.types`** (#865): Commit message validator was ignoring the configured type list.
+- **`isValidFilePath` accepts Windows paths** (#865): Path validator now handles backslash-separated Windows file paths.
+- **`runPreCommitChecks` runs tests and lint** (#865): Pre-commit validation now actually invokes tests and linting.
+- **Cache purge path comparison hardened + race condition guard** (#811): Stale plugin cache pruning now handles symlinks and concurrent runs safely.
+
+**Misc**
+- **`compact` added to native CC command denylist** (#830): `/compact` is now blocked from being treated as a skill invocation.
+- **Agents overlay duplicate truncation note removed** (#844): Cleaned up redundant text in the agents context overlay.
+
+---
+
+### Added
+
+- **Startup codebase map injection hook** (#804 / #818): A new startup hook injects a lightweight codebase map into the session context for faster orientation.
+- **`parseTmuxTail` for clean tmux output in notifications** (#819): Notification payloads now strip tmux control sequences before sending to Discord/Telegram.
+- **Interop tooling gated by mode** (#829): Direct-write bridge and interop tools are only active when an appropriate execution mode is enabled.
+- **Stale plugin cache pruning on update** (#811): Old plugin cache versions are automatically removed when the plugin updates.
+
+---
+
+### Changed
+
+- **Default Gemini model → `gemini-3.1-pro-preview`** (#813): MCP Gemini provider now targets the latest model by default.
+- **Lint: 180 production warnings resolved to zero** (#874): Full production lint pass with no suppressions.
+- **Remaining `sisyphus` / `OmO` references removed** (#823): Repository-wide rename completes the branding cleanup.
+
+---
+
+# oh-my-claudecode v4.3.1: Agent Registry Consolidation
+
+This release completes the Phase 3 agent catalog cleanup. The registry shrinks from **30 → 21 canonical agents**. All removed agents are replaced by deprecation-aware aliases that auto-route to their canonical successors — **no user action required** for most users.
+
+> **Migration note:** If you hard-code agent names in custom `CLAUDE.md` files, task prompts, or automation scripts, check the alias table below. Old names still work but will route silently to the canonical agent.
+
+---
+
+### Changed: Agent Registry (30 → 21 agents)
+
+**Review Lane** — 5 specialized reviewers collapsed into 3:
+
+| Removed | Now handled by |
+|---------|---------------|
+| `style-reviewer` | `quality-reviewer` (use `model=haiku` for style-only checks) |
+| `api-reviewer` | `code-reviewer` |
+| `performance-reviewer` | `quality-reviewer` |
+
+**Domain Specialists** — 3 specialists removed or renamed:
+
+| Removed | Now handled by |
+|---------|---------------|
+| `dependency-expert` | `document-specialist` |
+| `quality-strategist` | `quality-reviewer` |
+
+**Product Lane** — fully removed (4 agents):
+
+`product-manager`, `ux-researcher`, `information-architect`, `product-analyst` have been removed from the registry. These were low-utilization and overlapped with `analyst`, `planner`, and `designer`.
+
+**Coordination** — `vision` removed:
+
+`vision` (image analysis) → `document-specialist`. The `critic` agent remains the sole coordination agent.
+
+---
+
+### Auto-Routing for Deprecated Names
+
+A new `normalizeDelegationRole()` function silently maps old names to canonical ones at runtime. The full alias table:
+
+| Old name | Routes to |
+|---------|-----------|
+| `researcher` | `document-specialist` |
+| `tdd-guide` | `test-engineer` |
+| `api-reviewer` | `code-reviewer` |
+| `performance-reviewer` | `quality-reviewer` |
+| `dependency-expert` | `document-specialist` |
+| `quality-strategist` | `quality-reviewer` |
+| `vision` | `document-specialist` |
+
+---
+
+### Added
+
+- **Deprecation metadata on skills** (`deprecatedAlias`, `deprecationMessage` fields on `BuiltinSkill`) — foundation for future migration warnings in the auto-slash-command system.
+- **`listBuiltinSkillNames({ includeAliases })`** — returns 35 canonical skills by default; pass `{ includeAliases: true }` to include `swarm` and `psm` aliases (37 total).
+- **`DEPRECATED_ROLE_ALIASES` map** — runtime lookup for auto-routing deprecated agent names to canonical agents.
+- **`deep-executor` restored** — was accidentally dropped from the TypeScript registry in v4.3.0; re-added with full export and `getAgentDefinitions()` entry.
+- **Phase 3 roadmap doc** at `docs/design/CONSOLIDATION_PHASE3_ROADMAP.md`.
+
+### Fixed
+
+- **Skill files referenced `tdd-guide`, `performance-reviewer`, `product-manager`** — `skills/tdd`, `skills/pipeline`, `skills/ccg`, `skills/team` updated to use canonical names.
+- **Agent prompt role boundaries referenced removed agents** — `quality-reviewer`, `security-reviewer`, `debugger`, `verifier`, `test-engineer` prompt files updated to remove dangling `(style-reviewer)`, `(performance-reviewer)`, `(api-reviewer)` parentheticals.
+- **`docs/CLAUDE.md` deprecated aliases incomplete** — all 7 deprecated aliases now listed explicitly.
+
+---
+
+# oh-my-claudecode v4.2.15
+
+### Added
+
+- **CCG skill** (#744): Added `claude-developer-platform` skill (`ccg`) for building programs that call the Claude API or Anthropic SDK.
+
+### Removed
+
+- **Ecomode execution mode** (#737): Removed `ecomode` from `KeywordType`, `ExecutionMode`, `MODE_CONFIGS`, and all hook scripts. The `persistent-mode` stop hook no longer has a Priority 8 ecomode continuation block. The keyword detector no longer recognizes `eco`, `ecomode`, `eco-mode`, `efficient`, `save-tokens`, or `budget` as execution mode triggers.
+
+### Fixed
+
+- **Windows HUD not showing** (#742): Fixed HUD rendering on Windows by correcting `NODE_PATH` separator handling.
+- **WSL2 scroll fix**: Fixed scroll behavior in WSL2 environments.
+- **tmux session name resolution** (#736, #740, #741): Use `TMUX_PANE` env variable to correctly resolve the tmux session name in notifications.
+
+### Docs
+
+- **oh-my-codex cross-reference** (#744): Added cross-reference documentation for Codex users.
+
+---
+
 # oh-my-claudecode v4.2.4: Session Idle Notifications
 
 Session-idle notifications now fire when Claude stops without any active persistent mode, closing the gap where external integrations (Telegram, Discord) were never informed that a session went idle.

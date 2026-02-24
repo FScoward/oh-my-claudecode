@@ -1,5 +1,5 @@
 /**
- * Shared types for Oh-My-Claude-Sisyphus
+ * Shared types for Oh-My-ClaudeCode
  */
 export type ModelType = 'sonnet' | 'opus' | 'haiku' | 'inherit';
 export interface AgentConfig {
@@ -51,11 +51,11 @@ export interface PluginConfig {
             model?: string;
             enabled?: boolean;
         };
-        orchestratorSisyphus?: {
+        coordinator?: {
             model?: string;
             enabled?: boolean;
         };
-        sisyphusJunior?: {
+        executor?: {
             model?: string;
             enabled?: boolean;
         };
@@ -119,6 +119,24 @@ export interface PluginConfig {
     };
     externalModels?: ExternalModelsConfig;
     delegationRouting?: DelegationRoutingConfig;
+    startupCodebaseMap?: {
+        /** Enable codebase map injection on session start. Default: true */
+        enabled?: boolean;
+        /** Maximum files to include in the map. Default: 200 */
+        maxFiles?: number;
+        /** Maximum directory depth to scan. Default: 4 */
+        maxDepth?: number;
+    };
+    taskSizeDetection?: {
+        /** Enable task-size detection to prevent over-orchestration for small tasks. Default: true */
+        enabled?: boolean;
+        /** Word count threshold below which a task is classified as "small". Default: 50 */
+        smallWordLimit?: number;
+        /** Word count threshold above which a task is classified as "large". Default: 200 */
+        largeWordLimit?: number;
+        /** Suppress heavy orchestration modes (ralph/autopilot/team/ultrawork) for small tasks. Default: true */
+        suppressHeavyModesForSmallTasks?: boolean;
+    };
 }
 export interface SessionState {
     sessionId?: string;
@@ -218,11 +236,13 @@ export interface ResolveOptions {
 /**
  * Provider type for delegation routing
  */
-export type DelegationProvider = 'claude' | 'codex' | 'gemini';
-/**
- * Tool type for delegation routing
- */
-export type DelegationTool = 'Task' | 'ask_codex' | 'ask_gemini';
+export type DelegationProvider = 'claude'
+/** Use /team to coordinate Codex CLI workers in tmux panes. */
+ | 'codex'
+/** Use /team to coordinate Gemini CLI workers in tmux panes. */
+ | 'gemini';
+/** Tool type for delegation routing — only Claude Task is supported. */
+export type DelegationTool = 'Task';
 /**
  * Individual route configuration for a role
  */

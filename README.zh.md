@@ -26,7 +26,7 @@
 
 **第二步：配置**
 ```bash
-/oh-my-claudecode:omc-setup
+/omc-setup
 ```
 
 **第三步：开始构建**
@@ -36,22 +36,73 @@ autopilot: build a REST API for managing tasks
 
 就这么简单。其余都是自动的。
 
-> **注意：包命名** — 项目品牌名为 **oh-my-claudecode**（仓库、插件、命令），但 npm 包以 [`oh-my-claude-sisyphus`](https://www.npmjs.com/package/oh-my-claude-sisyphus) 发布。通过 npm/bun 安装 CLI 工具时，请使用 `npm install -g oh-my-claude-sisyphus`。
+## Team 模式（推荐）
+
+从 **v4.1.7** 开始，**Team** 是 OMC 的标准编排方式。**swarm** 和 **ultrapilot** 等旧版入口仍受支持，但现在**在底层路由到 Team**。
+
+```bash
+/team 3:executor "fix all TypeScript errors"
+```
+
+Team 按阶段化流水线运行：
+
+`team-plan → team-prd → team-exec → team-verify → team-fix (loop)`
+
+在 `~/.claude/settings.json` 中启用 Claude Code 原生团队：
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+> 如果团队被禁用，OMC 会发出警告并在可能的情况下回退到非 Team 执行模式。
+
+### tmux CLI 工作者 — Codex & Gemini (v4.4.0+)
+
+**v4.4.0 移除了 Codex/Gemini MCP 服务器**（`x`、`g` 提供商）。请改用 `/omc-teams` 在 tmux 分屏中启动真实的 CLI 进程：
+
+```bash
+/omc-teams 2:codex   "review auth module for security issues"
+/omc-teams 2:gemini  "redesign UI components for accessibility"
+/omc-teams 1:claude  "implement the payment flow"
+```
+
+如需在一个命令中混合使用 Codex + Gemini，请使用 **`/ccg`** 技能：
+
+```bash
+/ccg Review this PR — architecture (Codex) and UI components (Gemini)
+```
+
+| 技能 | 工作者 | 最适合 |
+|-------|---------|----------|
+| `/omc-teams N:codex` | N 个 Codex CLI 窗格 | 代码审查、安全分析、架构 |
+| `/omc-teams N:gemini` | N 个 Gemini CLI 窗格 | UI/UX 设计、文档、大上下文任务 |
+| `/omc-teams N:claude` | N 个 Claude CLI 窗格 | 通过 tmux 中的 Claude CLI 处理通用任务 |
+| `/ccg` | 1 个 Codex + 1 个 Gemini | 并行三模型编排 |
+
+工作者按需生成，任务完成后自动退出 — 无空闲资源浪费。需要安装 `codex` / `gemini` CLI 并有活跃的 tmux 会话。
+
+> **注意：包命名** — 项目品牌名为 **oh-my-claudecode**（仓库、插件、命令），但 npm 包以 [`oh-my-claudecode`](https://www.npmjs.com/package/oh-my-claude-sisyphus) 发布。通过 npm/bun 安装 CLI 工具时，请使用 `npm install -g oh-my-claude-sisyphus`。
 
 ### 更新
 
 ```bash
-# 1. 更新插件
-/plugin install oh-my-claudecode
+# 1. 更新 marketplace 克隆
+/plugin marketplace update omc
 
 # 2. 重新运行设置以刷新配置
-/oh-my-claudecode:omc-setup
+/omc-setup
 ```
+
+> **注意：** 如果 marketplace 自动更新未启用，您需要在运行设置之前手动执行 `/plugin marketplace update omc` 来同步最新版本。
 
 如果更新后遇到问题，清除旧的插件缓存：
 
 ```bash
-/oh-my-claudecode:omc-doctor
+/omc-doctor
 ```
 
 <h1 align="center">你的 Claude 已被注入超能力。</h1>
@@ -79,14 +130,16 @@ autopilot: build a REST API for managing tasks
 ### 执行模式
 针对不同场景的多种策略 - 从全自动构建到 token 高效重构。[了解更多 →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
 
-| 模式 | 速度 | 适用场景 |
-|------|-------|---------|
-| **Autopilot** | 快速 | 全自动工作流 |
-| **Ultrawork** | 并行 | 任何任务的最大并行化 |
-| **Ralph** | 持久 | 必须完整完成的任务 |
-| **Ultrapilot** | 3-5倍速 | 多组件系统 |
-| **Swarm** | 协同 | 并行独立任务 |
-| **Pipeline** | 顺序 | 多阶段处理 |
+| 模式 | 特点 | 适用场景 |
+|------|---------|---------|
+| **Team（推荐）** | 阶段化流水线 | 在共享任务列表上协作的 Claude 智能体 |
+| **omc-teams** | tmux CLI 工作者 | Codex/Gemini CLI 任务；按需生成，完成后退出 |
+| **ccg** | 三模型并行 | Codex（分析）+ Gemini（设计），Claude 合成 |
+| **Autopilot** | 自主执行 | 最小化繁琐配置的端到端功能开发 |
+| **Ultrawork** | 最大并行 | 不需要 Team 的并行修复/重构 |
+| **Ralph** | 持久模式 | 必须完整完成的任务 |
+| **Pipeline** | 顺序处理 | 需要严格顺序的多阶段转换 |
+| **Swarm / Ultrapilot（旧版）** | 路由到 Team | 现有工作流和旧文档 |
 
 ### 智能编排
 
@@ -111,11 +164,16 @@ autopilot: build a REST API for managing tasks
 
 | 关键词 | 效果 | 示例 |
 |---------|--------|---------|
+| `team` | 标准 Team 编排 | `/team 3:executor "fix all TypeScript errors"` |
+| `omc-teams` | tmux CLI 工作者 (codex/gemini/claude) | `/omc-teams 2:codex "security review"` |
+| `ccg` | 三模型 Codex+Gemini 编排 | `/ccg review this PR` |
 | `autopilot` | 全自动执行 | `autopilot: build a todo app` |
 | `ralph` | 持久模式 | `ralph: refactor auth` |
 | `ulw` | 最大并行化 | `ulw fix all errors` |
 | `plan` | 规划访谈 | `plan the API` |
 | `ralplan` | 迭代规划共识 | `ralplan this feature` |
+| `swarm` | 旧版关键词（路由到 Team） | `swarm 5 agents: fix lint errors` |
+| `ultrapilot` | 旧版关键词（路由到 Team） | `ultrapilot: build a fullstack app` |
 
 **ralph 包含 ultrawork：** 激活 ralph 模式时，会自动包含 ultrawork 的并行执行。无需组合关键词。
 
@@ -135,7 +193,7 @@ omc wait --stop   # 禁用守护进程
 
 **需要：** tmux（用于会话检测）
 
-### 通知标签配置 (Telegram/Discord)
+### 通知标签配置 (Telegram/Discord/Slack)
 
 你可以配置 stop 回调发送会话摘要时要 @ 谁。
 
@@ -143,6 +201,7 @@ omc wait --stop   # 禁用守护进程
 # 设置/替换标签列表
 omc config-stop-callback telegram --enable --token <bot_token> --chat <chat_id> --tag-list "@alice,bob"
 omc config-stop-callback discord --enable --webhook <url> --tag-list "@here,123456789012345678,role:987654321098765432"
+omc config-stop-callback slack --enable --webhook <url> --tag-list "<!here>,<@U1234567890>"
 
 # 增量更新
 omc config-stop-callback telegram --add-tag charlie
@@ -153,6 +212,7 @@ omc config-stop-callback discord --clear-tags
 标签规则：
 - Telegram：`alice` 会规范化为 `@alice`
 - Discord：支持 `@here`、`@everyone`、纯数字用户 ID、`role:<id>`
+- Slack：支持 `<@MEMBER_ID>`、`<!channel>`、`<!here>`、`<!everyone>`、`<!subteam^GROUP_ID>`
 - `file` 回调会忽略标签选项
 
 ---
@@ -179,9 +239,12 @@ export OMC_DISCORD_NOTIFIER_CHANNEL="your_channel_id"
 export OMC_TELEGRAM_BOT_TOKEN="your_bot_token"
 export OMC_TELEGRAM_CHAT_ID="your_chat_id"
 
+# Slack
+export OMC_SLACK_WEBHOOK_URL="your_webhook_url"
+export OMC_SLACK_MENTION="<@U1234567890>"  # optional
+
 # 可选 webhook
 export OMC_DISCORD_WEBHOOK_URL="your_webhook_url"
-export OMC_SLACK_WEBHOOK_URL="your_webhook_url"
 ```
 
 > 注意：请确保在运行 `claude` 的同一个 Shell 中已加载这些环境变量。

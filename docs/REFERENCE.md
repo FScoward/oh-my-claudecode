@@ -13,7 +13,6 @@ Complete reference for oh-my-claudecode. For quick start, see the main [README.m
 - [Slash Commands](#slash-commands)
 - [Hooks System](#hooks-system)
 - [Magic Keywords](#magic-keywords)
-- [MCP Path Boundary Rules](#mcp-path-boundary-rules)
 - [Platform Support](#platform-support)
 - [Performance Monitoring](#performance-monitoring)
 - [Troubleshooting](#troubleshooting)
@@ -182,7 +181,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | **Testing** | - | `qa-tester` | - |
 | **Security** | `security-reviewer-low` | - | `security-reviewer` |
 | **Build** | - | `build-fixer` | - |
-| **TDD** | `tdd-guide-low` | `tdd-guide` | - |
+| **TDD** | - | `test-engineer` | - |
 | **Code Review** | - | - | `code-reviewer` |
 | **Data Science** | - | `scientist` | `scientist-high` |
 
@@ -211,8 +210,8 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | Quick security scan | `security-reviewer-low` | haiku |
 | Fix build errors | `build-fixer` | sonnet |
 | Simple build fix | `build-fixer` (model=haiku) | haiku |
-| TDD workflow | `tdd-guide` | sonnet |
-| Quick test suggestions | `tdd-guide-low` | haiku |
+| TDD workflow | `test-engineer` | sonnet |
+| Quick test suggestions | `test-engineer` (model=haiku) | haiku |
 | Code review | `code-reviewer` | opus |
 | Quick code check | `code-reviewer` (model=haiku) | haiku |
 | Data analysis/stats | `scientist` | sonnet |
@@ -231,9 +230,9 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | `autopilot` | Full autonomous execution from idea to working code | `/oh-my-claudecode:autopilot` |
 | `ultrawork` | Maximum performance with parallel agents | `/oh-my-claudecode:ultrawork` |
 | `ultrapilot` | Parallel autopilot with 3-5x speedup | `/oh-my-claudecode:ultrapilot` |
-| `swarm` | N coordinated agents with task claiming | `/oh-my-claudecode:swarm` |
+| `team` | N coordinated agents on shared task list using native teams | `/oh-my-claudecode:team` |
+| `swarm` | **Deprecated** compatibility facade over team orchestration (use `team`) | `/oh-my-claudecode:swarm` |
 | `pipeline` | Sequential agent chaining | `/oh-my-claudecode:pipeline` |
-| `` | Token-efficient parallel execution | `/oh-my-claudecode:` |
 | `ralph` | Self-referential development until completion | `/oh-my-claudecode:ralph` |
 | `ralph-init` | Initialize PRD for structured task tracking | `/oh-my-claudecode:ralph-init` |
 | `ultraqa` | Autonomous QA cycling workflow | `/oh-my-claudecode:ultraqa` |
@@ -271,6 +270,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | `mcp-setup` | Configure MCP servers | `/oh-my-claudecode:mcp-setup` |
 | `writer-memory` | Agentic memory system for writers | `/oh-my-claudecode:writer-memory` |
 | `project-session-manager` | Manage isolated dev environments (git worktrees + tmux) | `/oh-my-claudecode:project-session-manager` |
+| `psm` | **Deprecated** compatibility alias for `project-session-manager` | `/oh-my-claudecode:psm` |
 | `skill` | Manage local skills (list, add, remove, search, edit) | `/oh-my-claudecode:skill` |
 
 ---
@@ -285,9 +285,9 @@ All skills are available as slash commands with the prefix `/oh-my-claudecode:`.
 | `/oh-my-claudecode:autopilot <task>` | Full autonomous execution |
 | `/oh-my-claudecode:ultrawork <task>` | Maximum performance mode with parallel agents |
 | `/oh-my-claudecode:ultrapilot <task>` | Parallel autopilot (3-5x faster) |
-| `/oh-my-claudecode:swarm <N>:<agent> <task>` | Coordinated agent swarm |
+| `/oh-my-claudecode:team <N>:<agent> <task>` | Coordinated native team workflow |
+| `/oh-my-claudecode:swarm <N>:<agent> <task>` | Deprecated alias for Team orchestration |
 | `/oh-my-claudecode:pipeline <stages>` | Sequential agent chaining |
-| `/oh-my-claudecode: <task>` | Token-efficient parallel execution |
 | `/oh-my-claudecode:ralph-init <task>` | Initialize PRD for structured task tracking |
 | `/oh-my-claudecode:ralph <task>` | Self-referential loop until task completion |
 | `/oh-my-claudecode:ultraqa <goal>` | Autonomous QA cycling workflow |
@@ -308,6 +308,7 @@ All skills are available as slash commands with the prefix `/oh-my-claudecode:`.
 | `/oh-my-claudecode:hud` | Configure HUD statusline |
 | `/oh-my-claudecode:release` | Automated release workflow |
 | `/oh-my-claudecode:mcp-setup` | Configure MCP servers |
+| `/oh-my-claudecode:psm <arguments>` | Deprecated alias for project session manager |
 
 ---
 
@@ -323,9 +324,10 @@ Oh-my-claudecode includes 31 lifecycle hooks that enhance Claude Code's behavior
 | `ultrawork` | Maximum parallel agent execution |
 | `ralph` | Persistence until verified complete |
 | `ultrapilot` | Parallel autopilot with file ownership |
+| `team-pipeline` | Native team staged pipeline orchestration |
 | `ultraqa` | QA cycling until goal met |
 | `swarm` | Coordinated multi-agent with SQLite task claiming |
-| `mode-registry` | Tracks active execution mode (incl. ) |
+| `mode-registry` | Tracks active execution mode state (including team/ralph/ultrawork/ralplan) |
 | `persistent-mode` | Maintains mode state across sessions |
 
 ### Core Hooks
@@ -358,6 +360,45 @@ Oh-my-claudecode includes 31 lifecycle hooks that enhance Claude Code's behavior
 | `empty-message-sanitizer` | Empty message handling |
 | `permission-handler` | Permission requests and validation |
 | `think-mode` | Extended thinking detection |
+| `code-simplifier` | Auto-simplify recently modified files on Stop (opt-in) |
+
+### Code Simplifier Hook
+
+The `code-simplifier` Stop hook automatically delegates recently modified source files to the
+`code-simplifier` agent after each Claude turn. It is **disabled by default** and must be
+explicitly enabled via `~/.omc/config.json`.
+
+**Enable:**
+```json
+{
+  "codeSimplifier": {
+    "enabled": true
+  }
+}
+```
+
+**Full config options:**
+```json
+{
+  "codeSimplifier": {
+    "enabled": true,
+    "extensions": [".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs"],
+    "maxFiles": 10
+  }
+}
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | `boolean` | `false` | Opt-in to automatic simplification |
+| `extensions` | `string[]` | `[".ts",".tsx",".js",".jsx",".py",".go",".rs"]` | File extensions to consider |
+| `maxFiles` | `number` | `10` | Maximum files simplified per turn |
+
+**How it works:**
+1. When Claude stops, the hook runs `git diff HEAD --name-only` to find modified files
+2. If modified source files are found, the hook injects a message asking Claude to delegate to the `code-simplifier` agent
+3. The agent simplifies the files for clarity and consistency without changing behavior
+4. A turn-scoped marker prevents the hook from triggering more than once per turn cycle
 
 ### Coordination & Environment
 
@@ -432,99 +473,6 @@ swarm 5 agents: fix all lint errors
 # Agent chaining
 pipeline: analyze → fix → test this bug
 ```
-
----
-
-## MCP Path Boundary Rules
-
-The MCP tools (`ask_codex`, `ask_gemini`) enforce strict path boundaries for security. Both `prompt_file` and `output_file` are resolved relative to `working_directory`.
-
-### Default Behavior (Strict Mode)
-
-By default, both files must reside within the `working_directory`:
-
-| Parameter | Requirement |
-|-----------|-------------|
-| `prompt_file` | Must be within `working_directory` (after symlink resolution) |
-| `output_file` | Must be within `working_directory` (after symlink resolution) |
-| `working_directory` | Must be within the project worktree (unless bypassed) |
-
-### Environment Variable Overrides
-
-| Variable | Values | Description |
-|----------|--------|-------------|
-| `OMC_MCP_OUTPUT_PATH_POLICY` | `strict` (default), `redirect_output` | Controls output file path enforcement |
-| `OMC_MCP_OUTPUT_REDIRECT_DIR` | Path (default: `.omc/outputs`) | Directory for redirected outputs when policy is `redirect_output` |
-| `OMC_MCP_ALLOW_EXTERNAL_PROMPT` | `0` (default), `1` | Allow prompt files outside working directory |
-| `OMC_ALLOW_EXTERNAL_WORKDIR` | unset (default), `1` | Allow working_directory outside project worktree |
-| `OMC_DISCORD_WEBHOOK_URL` | URL | Discord webhook URL for notifications |
-| `OMC_DISCORD_NOTIFIER_BOT_TOKEN` | Token | Discord bot token for Bot API notifications |
-| `OMC_DISCORD_NOTIFIER_CHANNEL` | Channel ID | Discord channel ID for Bot API notifications |
-| `OMC_DISCORD_MENTION` | `<@uid>` or `<@&role_id>` | Mention to prepend to Discord messages |
-| `OMC_TELEGRAM_BOT_TOKEN` | Token | Telegram bot token for notifications |
-| `OMC_TELEGRAM_CHAT_ID` | Chat ID | Telegram chat ID for notifications |
-| `OMC_SLACK_WEBHOOK_URL` | URL | Slack incoming webhook URL for notifications |
-
-### Policy Descriptions
-
-**`OMC_MCP_OUTPUT_PATH_POLICY=strict` (Default)**
-- Output files must be within `working_directory`
-- Attempts to write outside the boundary fail with `E_PATH_OUTSIDE_WORKDIR_OUTPUT`
-- Most secure option - recommended for production
-
-**`OMC_MCP_OUTPUT_PATH_POLICY=redirect_output`**
-- Output files are automatically redirected to `OMC_MCP_OUTPUT_REDIRECT_DIR`
-- Only the filename is preserved; directory structure is flattened
-- Useful when you want to collect all outputs in a single location
-- Logs redirection at `[MCP Config]` level
-
-**`OMC_MCP_ALLOW_EXTERNAL_PROMPT=1`**
-- Allows reading prompt files from outside `working_directory`
-- **Security Warning**: Enables reading arbitrary files on the filesystem
-- Use only in trusted environments
-
-**`OMC_ALLOW_EXTERNAL_WORKDIR=1`**
-- Allows `working_directory` to be outside the project worktree
-- Bypasses the worktree boundary check
-- Use when running MCP tools against external projects
-
-### Error Tokens
-
-| Token | Meaning |
-|-------|---------|
-| `E_PATH_OUTSIDE_WORKDIR_PROMPT` | prompt_file is outside working_directory |
-| `E_PATH_OUTSIDE_WORKDIR_OUTPUT` | output_file is outside working_directory |
-| `E_PATH_RESOLUTION_FAILED` | Failed to resolve symlink or directory |
-| `E_WRITE_FAILED` | Failed to write output file (I/O error) |
-| `E_WORKDIR_INVALID` | working_directory does not exist or is inaccessible |
-
-### Example Valid/Invalid Patterns
-
-**Valid paths (working_directory: `/home/user/project`)**
-```
-prompt.txt                    -> /home/user/project/prompt.txt
-./prompts/task.md             -> /home/user/project/prompts/task.md
-../project/output.txt         -> /home/user/project/output.txt (resolves inside)
-.omc/outputs/response.md      -> /home/user/project/.omc/outputs/response.md
-```
-
-**Invalid paths (working_directory: `/home/user/project`)**
-```
-/etc/passwd                   -> Outside working directory (absolute)
-../../etc/shadow              -> Outside working directory (traverses too far)
-/tmp/output.txt               -> Outside working directory (different root)
-```
-
-### Troubleshooting Matrix
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `E_PATH_OUTSIDE_WORKDIR_PROMPT` error | prompt_file outside working_directory | Move file to working directory or change working_directory to a common ancestor |
-| `E_PATH_OUTSIDE_WORKDIR_OUTPUT` error | output_file outside working_directory | Use relative path within working directory, or set `OMC_MCP_OUTPUT_PATH_POLICY=redirect_output` |
-| `E_PATH_RESOLUTION_FAILED` error | Symlink resolution failed or directory inaccessible | Ensure target directory exists and is accessible |
-| `E_WRITE_FAILED` error | I/O error (permissions, disk full) | Check file permissions and disk space |
-| `working_directory is outside the project worktree` | working_directory not within git worktree | Set `OMC_ALLOW_EXTERNAL_WORKDIR=1` or use a working directory inside the project |
-| Output file not where expected | `redirect_output` policy active | Check `OMC_MCP_OUTPUT_REDIRECT_DIR` (default: `.omc/outputs`) |
 
 ---
 

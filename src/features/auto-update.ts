@@ -14,8 +14,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync } from 'child_process';
 import { TaskTool } from '../hooks/beads-context/types.js';
-import { install as installSisyphus, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin } from '../installer/index.js';
+import { install as installOmc, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin } from '../installer/index.js';
 import { getConfigDir } from '../utils/config-dir.js';
+import { purgeStalePluginCacheVersions } from '../utils/paths.js';
 import type { NotificationConfig } from '../notifications/types.js';
 
 /** GitHub repository information */
@@ -98,12 +99,24 @@ export interface StopCallbackDiscordConfig {
 }
 
 /**
+ * Stop hook callback configuration for Slack
+ */
+export interface StopCallbackSlackConfig {
+  enabled: boolean;
+  /** Slack incoming webhook URL */
+  webhookUrl?: string;
+  /** Optional tags/mentions to include in notifications */
+  tagList?: string[];
+}
+
+/**
  * Stop hook callbacks configuration
  */
 export interface StopHookCallbacksConfig {
   file?: StopCallbackFileConfig;
   telegram?: StopCallbackTelegramConfig;
   discord?: StopCallbackDiscordConfig;
+  slack?: StopCallbackSlackConfig;
 }
 
 /**
@@ -140,6 +153,9 @@ export interface OMCConfig {
   /** Whether to prompt for upgrade at session start when a new version is available (default: true).
    *  Set to false to show a passive notification instead of an interactive prompt. */
   autoUpgradePrompt?: boolean;
+  /** Absolute path to the Node.js binary detected at setup time.
+   *  Used by find-node.sh so hooks work for nvm/fnm users where node is not on PATH. */
+  nodeBinary?: string;
 }
 
 /**
@@ -439,7 +455,7 @@ export function reconcileUpdateRuntime(options?: { verbose?: boolean }): UpdateR
   }
 
   try {
-    const installResult = installSisyphus({
+    const installResult = installOmc({
       force: true,
       verbose: options?.verbose ?? false,
       skipClaudeCheck: true,
@@ -453,6 +469,21 @@ export function reconcileUpdateRuntime(options?: { verbose?: boolean }): UpdateR
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     errors.push(`Failed to refresh installer artifacts: ${message}`);
+  }
+
+  // Purge stale plugin cache versions (non-fatal)
+  try {
+    const purgeResult = purgeStalePluginCacheVersions();
+    if (purgeResult.removed > 0 && options?.verbose) {
+      console.log(`[omc] Purged ${purgeResult.removed} stale plugin cache version(s)`);
+    }
+    if (purgeResult.errors.length > 0 && options?.verbose) {
+      for (const err of purgeResult.errors) {
+        console.warn(`[omc] Cache purge warning: ${err}`);
+      }
+    }
+  } catch {
+    // Cache purge is best-effort; never block reconciliation
   }
 
   if (errors.length > 0) {
@@ -512,7 +543,7 @@ export async function performUpdate(options?: {
 
       // CRITICAL FIX: After npm updates the global package, the current process
       // still has OLD code loaded in memory. We must re-exec to run reconciliation
-      // with the NEW code. Otherwise, installSisyphus() runs OLD logic against NEW files.
+      // with the NEW code. Otherwise, installOmc() runs OLD logic against NEW files.
       if (!process.env.OMC_UPDATE_RECONCILE) {
         // Set flag to prevent infinite loop
         process.env.OMC_UPDATE_RECONCILE = '1';

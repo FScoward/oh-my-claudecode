@@ -6,15 +6,7 @@ argument-hint: <search query or topic>
 
 # External Context Skill
 
-Invoke parallel document-specialist agents to search the web for external documentation, references, and context.
-
-## Overview
-
-External Context decomposes a query into parallel web search facets, each handled by an independent document-specialist agent:
-
-1. **Decomposition** - Break query into 2-5 independent search facets
-2. **Parallel Search** - Spawn document-specialist agents for each facet
-3. **Synthesis** - Aggregate findings into structured context
+Fetch external documentation, references, and context for a query. Decomposes into 2-5 facets and spawns parallel document-specialist Claude agents.
 
 ## Usage
 
@@ -32,7 +24,7 @@ External Context decomposes a query into parallel web search facets, each handle
 
 ## Protocol
 
-### Facet Decomposition
+### Step 1: Facet Decomposition
 
 Given a query, decompose into 2-5 independent search facets:
 
@@ -49,7 +41,7 @@ Given a query, decompose into 2-5 independent search facets:
 ...
 ```
 
-### Parallel Agent Invocation
+### Step 2: Parallel Agent Invocation
 
 Fire independent facets in parallel via Task tool:
 
@@ -59,9 +51,11 @@ Task(subagent_type="oh-my-claudecode:document-specialist", model="sonnet", promp
 Task(subagent_type="oh-my-claudecode:document-specialist", model="sonnet", prompt="Search for: <facet 2 description>. Use WebSearch and WebFetch to find official documentation and examples. Cite all sources with URLs.")
 ```
 
-### Synthesis
+Maximum 5 parallel document-specialist agents.
 
-After all agents complete, synthesize findings:
+### Step 3: Synthesis Output Format
+
+Present synthesized results in this format:
 
 ```markdown
 ## External Context: <query>
@@ -86,5 +80,4 @@ After all agents complete, synthesize findings:
 ## Configuration
 
 - Maximum 5 parallel document-specialist agents
-- Each agent uses WebSearch and WebFetch tools
 - No magic keyword trigger - explicit invocation only

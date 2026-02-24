@@ -11,8 +11,8 @@
  * 3. autopilot: Full autonomous execution
  * 4. team: Coordinated team execution (replaces ultrapilot/swarm)
  * 5. ultrawork/ulw: Maximum parallel execution
- * 6. ecomode/eco: Token-efficient execution
- * 7. pipeline: Sequential agent chaining
+ * 6. pipeline: Sequential agent chaining
+ * 7. ccg: Claude-Codex-Gemini tri-model orchestration
  * 9. ralplan: Iterative planning with consensus
  * 10. plan: Planning interview mode
  * 11. tdd: Test-driven development
@@ -20,8 +20,6 @@
  * 13. ultrathink/think: Extended reasoning
  * 14. deepsearch: Codebase search (restricted patterns)
  * 15. analyze: Analysis mode (restricted patterns)
- * 16. codex/gpt: Delegate to Codex MCP (ask_codex)
- * 17. gemini: Delegate to Gemini MCP (ask_gemini)
  */
 
 import { writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
@@ -235,59 +233,14 @@ IMPORTANT: Invoke ALL skills listed above. Start with the first skill IMMEDIATEL
 }
 
 /**
- * Create MCP delegation message (NOT a skill invocation)
+ * Create combined output for multiple skill matches
  */
-function createMcpDelegation(provider, originalPrompt) {
-  const configs = {
-    codex: {
-      tool: 'ask_codex',
-      roles: 'architect, planner, critic, analyst, code-reviewer, security-reviewer, tdd-guide',
-      defaultRole: 'architect',
-    },
-    gemini: {
-      tool: 'ask_gemini',
-      roles: 'designer, writer, vision',
-      defaultRole: 'designer',
-    },
-  };
-  const config = configs[provider];
-  if (!config) return '';
-
-  return `[MAGIC KEYWORD: ${provider.toUpperCase()}]
-
-You MUST delegate this task to the ${provider === 'codex' ? 'Codex' : 'Gemini'} MCP tool.
-
-Steps:
-1. Write a prompt file to \`.omc/prompts/${provider}-{purpose}-{timestamp}.md\` containing clear task instructions derived from the user's request
-2. Determine the appropriate agent_role from: ${config.roles}
-3. Call the \`${config.tool}\` MCP tool with:
-   - agent_role: <detected or default "${config.defaultRole}">
-   - prompt_file: <path you wrote>
-   - output_file: <corresponding -summary.md path>
-   - context_files: <relevant files from user's request>
-
-User request:
-${originalPrompt}
-
-IMPORTANT: Do NOT invoke a skill. Delegate to the MCP tool IMMEDIATELY.`;
-}
-
-/**
- * Create combined output for skills + MCP delegations
- */
-function createCombinedOutput(skillMatches, delegationMatches, originalPrompt) {
+function createCombinedOutput(skillMatches, originalPrompt) {
   const parts = [];
-
   if (skillMatches.length > 0) {
     parts.push('## Section 1: Skill Invocations\n\n' + createMultiSkillInvocation(skillMatches, originalPrompt));
   }
-
-  if (delegationMatches.length > 0) {
-    const delegationParts = delegationMatches.map(d => createMcpDelegation(d.name, originalPrompt));
-    parts.push('## Section ' + (skillMatches.length > 0 ? '2' : '1') + ': MCP Delegations\n\n' + delegationParts.join('\n\n---\n\n'));
-  }
-
-  const allNames = [...skillMatches, ...delegationMatches].map(m => m.name.toUpperCase());
+  const allNames = skillMatches.map(m => m.name.toUpperCase());
   return `[MAGIC KEYWORDS DETECTED: ${allNames.join(', ')}]\n\n${parts.join('\n\n---\n\n')}\n\nIMPORTANT: Complete ALL sections above in order.`;
 }
 
@@ -304,10 +257,6 @@ function resolveConflicts(matches) {
 
   let resolved = [...matches];
 
-  // Ecomode beats ultrawork
-  if (names.includes('ecomode') && names.includes('ultrawork')) {
-    resolved = resolved.filter(m => m.name !== 'ultrawork');
-  }
 
   // Team beats autopilot (legacy ultrapilot semantics)
   if (names.includes('team') && names.includes('autopilot')) {
@@ -323,9 +272,8 @@ function resolveConflicts(matches) {
   // Both keywords are preserved so the skill can detect the composition.
 
   // Sort by priority order
-  const priorityOrder = ['cancel','ralph','autopilot','team','ultrawork','ecomode',
-    'pipeline','ralplan','plan','tdd','research','ultrathink','deepsearch','analyze',
-    'codex','gemini'];
+  const priorityOrder = ['cancel','ralph','autopilot','team','ultrawork',
+    'pipeline','ccg','ralplan','plan','tdd','research','ultrathink','deepsearch','analyze'];
   resolved.sort((a, b) => priorityOrder.indexOf(a.name) - priorityOrder.indexOf(b.name));
 
   return resolved;
@@ -347,6 +295,13 @@ function createHookOutput(additionalContext) {
 
 // Main
 async function main() {
+  // Skip guard: check OMC_SKIP_HOOKS env var (see issue #838)
+  const _skipHooks = (process.env.OMC_SKIP_HOOKS || '').split(',').map(s => s.trim());
+  if (process.env.DISABLE_OMC === '1' || _skipHooks.includes('keyword-detector')) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
+
   try {
     const input = await readStdin();
     if (!input.trim()) {
@@ -382,9 +337,7 @@ async function main() {
 
     // Autopilot keywords
     if (/\b(autopilot|auto pilot|auto-pilot|autonomous|full auto|fullsend)\b/i.test(cleanPrompt) ||
-        /\bbuild\s+me\s+/i.test(cleanPrompt) ||
-        /\bcreate\s+me\s+/i.test(cleanPrompt) ||
-        /\bmake\s+me\s+/i.test(cleanPrompt) ||
+        /\b(build|create|make)\s+me\s+(an?\s+)?(app|feature|project|tool|plugin|website|api|server|cli|script|system|service|dashboard|bot|extension)\b/i.test(cleanPrompt) ||
         /\bi\s+want\s+a\s+/i.test(cleanPrompt) ||
         /\bi\s+want\s+an\s+/i.test(cleanPrompt) ||
         /\bhandle\s+it\s+all\b/i.test(cleanPrompt) ||
@@ -407,10 +360,6 @@ async function main() {
       matches.push({ name: 'ultrawork', args: '' });
     }
 
-    // Ecomode keywords
-    if (/\b(eco|ecomode|eco-mode|efficient|save-tokens|budget)\b/i.test(cleanPrompt)) {
-      matches.push({ name: 'ecomode', args: '' });
-    }
 
     // Team keywords (intent-gated to prevent false positives on bare "team")
     // Uses negative lookbehind to exclude possessive/article contexts like "my team", "the team"
@@ -425,14 +374,14 @@ async function main() {
       matches.push({ name: 'pipeline', args: '' });
     }
 
+    // CCG keywords (Claude-Codex-Gemini tri-model orchestration)
+    if (/\b(ccg|claude-codex-gemini)\b/i.test(cleanPrompt)) {
+      matches.push({ name: 'ccg', args: '' });
+    }
+
     // Ralplan keyword
     if (/\b(ralplan)\b/i.test(cleanPrompt)) {
       matches.push({ name: 'ralplan', args: '' });
-    }
-
-    // Plan keywords
-    if (/\b(plan this|plan the)\b/i.test(cleanPrompt)) {
-      matches.push({ name: 'plan', args: '' });
     }
 
     // TDD keywords
@@ -442,10 +391,8 @@ async function main() {
       matches.push({ name: 'tdd', args: '' });
     }
 
-    // Research keywords
-    if (/\b(research)\b/i.test(cleanPrompt) ||
-        /\banalyze\s+data\b/i.test(cleanPrompt) ||
-        /\bstatistics\b/i.test(cleanPrompt)) {
+    // Sciomc keywords
+    if (/\banalyze\s+data\b/i.test(cleanPrompt)) {
       matches.push({ name: 'sciomc', args: '' });
     }
 
@@ -466,16 +413,6 @@ async function main() {
         /\binvestigate\s+(the|this|why)\b/i.test(cleanPrompt) ||
         /\bdebug\s+(the|this|why)\b/i.test(cleanPrompt)) {
       matches.push({ name: 'analyze', args: '' });
-    }
-
-    // Codex keywords (intent-phrase only)
-    if (/\b(ask|use|delegate\s+to)\s+(codex|gpt)\b/i.test(cleanPrompt)) {
-      matches.push({ name: 'codex', args: '' });
-    }
-
-    // Gemini keywords (intent-phrase only)
-    if (/\b(ask|use|delegate\s+to)\s+gemini\b/i.test(cleanPrompt)) {
-      matches.push({ name: 'gemini', args: '' });
     }
 
     // No matches - pass through
@@ -510,13 +447,13 @@ async function main() {
 
     // Handle cancel specially - clear states and emit
     if (resolved.length > 0 && resolved[0].name === 'cancel') {
-      clearStateFiles(directory, ['ralph', 'autopilot', 'team', 'ultrawork', 'ecomode', 'swarm', 'pipeline'], sessionId);
+      clearStateFiles(directory, ['ralph', 'autopilot', 'team', 'ultrawork', 'swarm', 'pipeline'], sessionId);
       console.log(JSON.stringify(createHookOutput(createSkillInvocation('cancel', prompt))));
       return;
     }
 
     // Activate states for modes that need them
-    const stateModes = resolved.filter(m => ['ralph', 'autopilot', 'team', 'ultrawork', 'ecomode'].includes(m.name));
+    const stateModes = resolved.filter(m => ['ralph', 'autopilot', 'team', 'ultrawork'].includes(m.name));
     for (const mode of stateModes) {
       activateState(directory, prompt, mode.name, sessionId);
     }
@@ -528,12 +465,11 @@ async function main() {
       }
     }
 
-    // Special: Ralph with ultrawork (only if ecomode NOT present)
+    // Special: Ralph with ultrawork
     const hasRalph = resolved.some(m => m.name === 'ralph');
-    const hasEcomode = resolved.some(m => m.name === 'ecomode');
     const hasUltrawork = resolved.some(m => m.name === 'ultrawork');
     const hasTeam = resolved.some(m => m.name === 'team');
-    if (hasRalph && !hasEcomode && !hasUltrawork) {
+    if (hasRalph && !hasUltrawork) {
       activateState(directory, prompt, 'ultrawork', sessionId);
     }
 
@@ -560,20 +496,8 @@ async function main() {
       return;
     }
 
-    // Split resolved into skills vs MCP delegations
-    const MCP_KEYWORDS = ['codex', 'gemini'];
-    const skillMatches = resolved.filter(m => !MCP_KEYWORDS.includes(m.name));
-    const delegationMatches = resolved.filter(m => MCP_KEYWORDS.includes(m.name));
-
-    if (skillMatches.length > 0 && delegationMatches.length > 0) {
-      // Combined: skills + MCP delegations
-      console.log(JSON.stringify(createHookOutput(createCombinedOutput(skillMatches, delegationMatches, prompt))));
-    } else if (delegationMatches.length > 0) {
-      // MCP delegation only
-      const delegationParts = delegationMatches.map(d => createMcpDelegation(d.name, prompt));
-      console.log(JSON.stringify(createHookOutput(delegationParts.join('\n\n---\n\n'))));
-    } else {
-      // Skills only (existing behavior)
+    const skillMatches = resolved;
+    if (skillMatches.length > 0) {
       console.log(JSON.stringify(createHookOutput(createMultiSkillInvocation(skillMatches, prompt))));
     }
   } catch (error) {

@@ -86,6 +86,13 @@ export declare function runTests(directory: string): {
     success: boolean;
     message: string;
 };
+/**
+ * Run project-level lint checks
+ */
+export declare function runLint(directory: string): {
+    success: boolean;
+    message: string;
+};
 export interface PreCommitResult {
     canCommit: boolean;
     checks: Array<{

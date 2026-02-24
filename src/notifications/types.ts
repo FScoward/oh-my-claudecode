@@ -6,13 +6,17 @@
  * session lifecycle events (start, stop, end, ask-user-question).
  */
 
+/** Verbosity levels for notification filtering (ordered most to least verbose) */
+export type VerbosityLevel = "verbose" | "agent" | "session" | "minimal";
+
 /** Events that can trigger notifications */
 export type NotificationEvent =
   | "session-start"
   | "session-stop"
   | "session-end"
   | "session-idle"
-  | "ask-user-question";
+  | "ask-user-question"
+  | "agent-call";
 
 /** Supported notification platforms */
 export type NotificationPlatform =
@@ -64,6 +68,8 @@ export interface SlackNotificationConfig {
   channel?: string;
   /** Optional username override */
   username?: string;
+  /** Optional mention to prepend to messages (e.g. "<@U12345678>" for user, "<!subteam^S12345>" for group, "<!channel>" / "<!here>" / "<!everyone>") */
+  mention?: string;
 }
 
 /** Generic webhook configuration */
@@ -104,6 +110,9 @@ export interface NotificationConfig {
   /** Global enable/disable for all notifications */
   enabled: boolean;
 
+  /** Verbosity level controlling which events fire and tmux tail inclusion */
+  verbosity?: VerbosityLevel;
+
   /** Default platform configs (used when event-specific config is not set) */
   discord?: DiscordNotificationConfig;
   "discord-bot"?: DiscordBotNotificationConfig;
@@ -118,6 +127,7 @@ export interface NotificationConfig {
     "session-end"?: EventNotificationConfig;
     "session-idle"?: EventNotificationConfig;
     "ask-user-question"?: EventNotificationConfig;
+    "agent-call"?: EventNotificationConfig;
   };
 }
 
@@ -161,6 +171,12 @@ export interface NotificationPayload {
   incompleteTasks?: number;
   /** tmux pane ID for reply injection target */
   tmuxPaneId?: string;
+  /** Agent name for agent-call events (e.g., "executor", "architect") */
+  agentName?: string;
+  /** Agent type for agent-call events (e.g., "oh-my-claudecode:executor") */
+  agentType?: string;
+  /** Captured tmux pane content (last N lines) */
+  tmuxTail?: string;
 }
 
 /** Named notification profiles (keyed by profile name) */

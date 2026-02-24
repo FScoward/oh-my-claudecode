@@ -1,5 +1,5 @@
 /**
- * Hooks Module for Oh-My-Claude-Sisyphus
+ * Hooks Module for Oh-My-ClaudeCode
  *
  * This module provides the TypeScript bridge for Claude Code's native shell hook system.
  * Shell scripts call these TypeScript functions for complex logic processing.
@@ -40,7 +40,7 @@ export {
 createRulesInjectorHook, getRulesForPath, findProjectRoot, findRuleFiles, parseRuleFrontmatter, shouldApplyRule, createContentHash, isDuplicateByRealPath, isDuplicateByContentHash, loadInjectedRules, saveInjectedRules, clearInjectedRules, RULES_INJECTOR_STORAGE, PROJECT_MARKERS, PROJECT_RULE_SUBDIRS, PROJECT_RULE_FILES, USER_RULE_DIR, RULE_EXTENSIONS, TRACKED_TOOLS } from './rules-injector/index.js';
 export { 
 // OMC Orchestrator
-createSisyphusOrchestratorHook, isAllowedPath, isWriteEditTool, getGitDiffStats, formatFileChanges, buildVerificationReminder, buildOrchestratorReminder, buildBoulderContinuation, checkBoulderContinuation, processOrchestratorPreTool, processOrchestratorPostTool, HOOK_NAME as OMC_ORCHESTRATOR_HOOK_NAME, ALLOWED_PATH_PREFIX, WRITE_EDIT_TOOLS, DIRECT_WORK_REMINDER, ORCHESTRATOR_DELEGATION_REQUIRED, BOULDER_CONTINUATION_PROMPT, VERIFICATION_REMINDER, SINGLE_TASK_DIRECTIVE } from './omc-orchestrator/index.js';
+createOmcOrchestratorHook, isAllowedPath, isWriteEditTool, getGitDiffStats, formatFileChanges, buildVerificationReminder, buildOrchestratorReminder, buildBoulderContinuation, checkBoulderContinuation, processOrchestratorPreTool, processOrchestratorPostTool, HOOK_NAME as OMC_ORCHESTRATOR_HOOK_NAME, ALLOWED_PATH_PREFIX, WRITE_EDIT_TOOLS, DIRECT_WORK_REMINDER, ORCHESTRATOR_DELEGATION_REQUIRED, BOULDER_CONTINUATION_PROMPT, VERIFICATION_REMINDER, SINGLE_TASK_DIRECTIVE } from './omc-orchestrator/index.js';
 export { 
 // Auto Slash Command
 createAutoSlashCommandHook, processSlashCommand, detectSlashCommand, extractPromptText as extractSlashPromptText, parseSlashCommand, removeCodeBlocks as removeSlashCodeBlocks, isExcludedCommand, executeSlashCommand, findCommand, discoverAllCommands, listAvailableCommands, HOOK_NAME as AUTO_SLASH_COMMAND_HOOK_NAME, AUTO_SLASH_COMMAND_TAG_OPEN, AUTO_SLASH_COMMAND_TAG_CLOSE, SLASH_COMMAND_PATTERN, EXCLUDED_COMMANDS } from './auto-slash-command/index.js';
@@ -91,7 +91,7 @@ export {
 checkPersistentModes, createHookOutput } from './persistent-mode/index.js';
 export { 
 // Plugin Patterns (Popular Community Patterns)
-getFormatter, isFormatterAvailable, formatFile, getLinter, lintFile, validateCommitMessage, runTypeCheck, runTests, runPreCommitChecks, getPreCommitReminderMessage, getAutoFormatMessage } from './plugin-patterns/index.js';
+getFormatter, isFormatterAvailable, formatFile, getLinter, lintFile, validateCommitMessage, runTypeCheck, runTests, runLint, runPreCommitChecks, getPreCommitReminderMessage, getAutoFormatMessage } from './plugin-patterns/index.js';
 // Ralph Verifier is now exported from ./ralph/index.js above
 export { 
 // UltraQA Loop (QA cycling workflow)
@@ -137,4 +137,13 @@ registerProjectMemoryContext, clearProjectMemorySession, rescanProjectEnvironmen
 export { 
 // Flow Tracer (Agent Flow Trace Recording)
 recordHookFire, recordHookResult, recordKeywordDetected, recordSkillActivated, recordSkillInvoked, recordModeChange, } from './subagent-tracker/flow-tracer.js';
+export { 
+// Codebase Map Generator (issue #804)
+generateCodebaseMap, buildTree, renderTree, shouldSkipEntry, extractPackageMetadata, } from './codebase-map.js';
+export { 
+// Agents Overlay - startup context injection (issue #804)
+buildAgentsOverlay, } from './agents-overlay.js';
+export { 
+// Code Simplifier Stop Hook
+processCodeSimplifier, isCodeSimplifierEnabled, getModifiedFiles, readOmcConfig, isAlreadyTriggered, writeTriggerMarker, clearTriggerMarker, buildSimplifierMessage, TRIGGER_MARKER_FILENAME, } from './code-simplifier/index.js';
 //# sourceMappingURL=index.js.map

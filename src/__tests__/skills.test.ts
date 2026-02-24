@@ -8,14 +8,14 @@ describe('Builtin Skills', () => {
   });
 
   describe('createBuiltinSkills()', () => {
-    it('should return correct number of skills (40)', () => {
+    it('should return correct number of skills (38)', () => {
       const skills = createBuiltinSkills();
-      // 40 skills: analyze, autopilot, build-fix, cancel, code-review, configure-discord, configure-telegram,
-      // deepinit, deepsearch, omc-doctor, external-context, frontend-ui-ux, git-master, omc-help, hud,
-      // learn-about-omc, learner, mcp-setup, note, omc-setup, pipeline, plan, project-session-manager,
-      // psm, ralph, ralph-init, ralplan, release, review, sciomc, security-review, skill, swarm, tdd,
-      // team, trace, ultrapilot, ultraqa, ultrawork, writer-memory
-      expect(skills).toHaveLength(40);
+      // 38 skills: analyze, autopilot, build-fix, cancel, ccg, code-review, configure-notifications,
+      // deepinit, omc-doctor, external-context, omc-help, hud, learn-about-omc, learner, mcp-setup,
+      // note, omc-setup, omc-teams, pipeline, omc-plan, project-session-manager, psm, ralph, ralph-init,
+      // ralplan, release, omc-review, sciomc, omc-security-review, skill, swarm, tdd, team, trace,
+      // ultrapilot, ultraqa, ultrawork, writer-memory
+      expect(skills).toHaveLength(38);
     });
 
     it('should return an array of BuiltinSkill objects', () => {
@@ -69,15 +69,12 @@ describe('Builtin Skills', () => {
         'autopilot',
         'build-fix',
         'cancel',
+        'ccg',
         'code-review',
-        'configure-discord',
-        'configure-telegram',
+        'configure-notifications',
         'deepinit',
-        'deepsearch',
         'omc-doctor',
         'external-context',
-        'frontend-ui-ux',
-        'git-master',
         'omc-help',
         'hud',
         'learn-about-omc',
@@ -85,6 +82,7 @@ describe('Builtin Skills', () => {
         'mcp-setup',
         'note',
         'omc-setup',
+        'omc-teams',
         'pipeline',
         'omc-plan',
         'project-session-manager',
@@ -146,17 +144,17 @@ describe('Builtin Skills', () => {
   });
 
   describe('listBuiltinSkillNames()', () => {
-    it('should return all skill names', () => {
+    it('should return canonical skill names by default', () => {
       const names = listBuiltinSkillNames();
-      expect(names).toHaveLength(40);
+
+      expect(names).toHaveLength(36);
       expect(names).toContain('autopilot');
       expect(names).toContain('cancel');
+      expect(names).toContain('ccg');
+      expect(names).toContain('configure-notifications');
       expect(names).toContain('ralph');
-      expect(names).toContain('frontend-ui-ux');
-      expect(names).toContain('git-master');
       expect(names).toContain('ultrawork');
       expect(names).toContain('analyze');
-      expect(names).toContain('deepsearch');
       expect(names).toContain('omc-plan');
       expect(names).toContain('deepinit');
       expect(names).toContain('release');
@@ -165,6 +163,8 @@ describe('Builtin Skills', () => {
       expect(names).toContain('hud');
       expect(names).toContain('note');
       expect(names).toContain('omc-setup');
+      expect(names).not.toContain('swarm');
+      expect(names).not.toContain('psm');
     });
 
     it('should return an array of strings', () => {
@@ -172,6 +172,36 @@ describe('Builtin Skills', () => {
       names.forEach((name) => {
         expect(typeof name).toBe('string');
       });
+    });
+
+    it('should include aliases when explicitly requested', () => {
+      const names = listBuiltinSkillNames({ includeAliases: true });
+
+      expect(names).toHaveLength(38);
+      expect(names).toContain('swarm');
+      expect(names).toContain('psm');
+    });
+  });
+
+  describe('CC native command denylist (issue #830)', () => {
+    it('should not expose any builtin skill whose name is a bare CC native command', () => {
+      const skills = createBuiltinSkills();
+      const bareNativeNames = [
+        'compact', 'clear', 'help', 'config', 'plan',
+        'review', 'doctor', 'init', 'memory', 'security-review',
+      ];
+      const skillNames = skills.map((s) => s.name.toLowerCase());
+      for (const native of bareNativeNames) {
+        expect(skillNames).not.toContain(native);
+      }
+    });
+
+    it('should not return a skill for "compact" via getBuiltinSkill', () => {
+      expect(getBuiltinSkill('compact')).toBeUndefined();
+    });
+
+    it('should not return a skill for "clear" via getBuiltinSkill', () => {
+      expect(getBuiltinSkill('clear')).toBeUndefined();
     });
   });
 

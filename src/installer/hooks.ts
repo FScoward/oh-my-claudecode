@@ -36,7 +36,6 @@ function getPackageDir(): string {
     // import.meta.url unavailable — fall through to CJS path
   }
   // CJS bundle path: from bridge/ go up 1 level to package root
-  // eslint-disable-next-line no-undef
   if (typeof __dirname !== "undefined") {
     return join(__dirname, "..");
   }
@@ -303,6 +302,9 @@ export const STOP_CONTINUATION_SCRIPT_NODE = loadTemplate(
 /** Node.js persistent mode hook script - loaded from templates/hooks/persistent-mode.mjs */
 export const PERSISTENT_MODE_SCRIPT_NODE = loadTemplate("persistent-mode.mjs");
 
+/** Node.js code simplifier hook script - loaded from templates/hooks/code-simplifier.mjs */
+export const CODE_SIMPLIFIER_SCRIPT_NODE = loadTemplate("code-simplifier.mjs");
+
 /** Node.js session start hook script - loaded from templates/hooks/session-start.mjs */
 export const SESSION_START_SCRIPT_NODE = loadTemplate("session-start.mjs");
 
@@ -392,12 +394,26 @@ export const HOOKS_SETTINGS_CONFIG_NODE = {
           },
         ],
       },
+      {
+        hooks: [
+          {
+            type: "command" as const,
+            command: isWindows()
+              ? 'node "%USERPROFILE%\\.claude\\hooks\\code-simplifier.mjs"'
+              : 'node "$HOME/.claude/hooks/code-simplifier.mjs"',
+          },
+        ],
+      },
     ],
   },
 };
 
 /**
  * Get the hooks settings config (Node.js only).
+ *
+ * @deprecated Hooks are now delivered via the plugin's hooks/hooks.json.
+ * settings.json hook entries are no longer written by the installer.
+ * Kept for test compatibility only.
  */
 export function getHooksSettingsConfig(): typeof HOOKS_SETTINGS_CONFIG_NODE {
   return HOOKS_SETTINGS_CONFIG_NODE;
@@ -410,6 +426,10 @@ export function getHooksSettingsConfig(): typeof HOOKS_SETTINGS_CONFIG_NODE {
 /**
  * Get Node.js hook scripts (Cross-platform)
  * Returns a record of filename -> content for all Node.js hooks
+ *
+ * @deprecated Hook scripts are no longer installed to ~/.claude/hooks/.
+ * All hooks are delivered via the plugin's hooks/hooks.json + scripts/.
+ * Kept for test compatibility only.
  */
 export function getHookScripts(): Record<string, string> {
   return {
@@ -420,6 +440,7 @@ export function getHookScripts(): Record<string, string> {
     "pre-tool-use.mjs": loadTemplate("pre-tool-use.mjs"),
     "post-tool-use.mjs": loadTemplate("post-tool-use.mjs"),
     "post-tool-use-failure.mjs": loadTemplate("post-tool-use-failure.mjs"),
+    "code-simplifier.mjs": loadTemplate("code-simplifier.mjs"),
     // Shared library modules (in lib/ subdirectory)
     "lib/stdin.mjs": loadTemplate("lib/stdin.mjs"),
     "lib/atomic-write.mjs": loadTemplate("lib/atomic-write.mjs"),
