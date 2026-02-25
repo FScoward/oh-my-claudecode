@@ -7,9 +7,14 @@ export interface WorkerPaneConfig {
     teamName: string;
     workerName: string;
     envVars: Record<string, string>;
-    launchCmd: string;
+    launchBinary?: string;
+    launchArgs?: string[];
+    /** @deprecated Prefer launchBinary + launchArgs for safe argv handling */
+    launchCmd?: string;
     cwd: string;
 }
+export declare function getDefaultShell(): string;
+export declare function buildWorkerStartCommand(config: WorkerPaneConfig): string;
 /** Validate tmux is available. Throws with install instructions if not. */
 export declare function validateTmux(): void;
 /** Sanitize name to prevent tmux command injection (alphanum + hyphen only) */

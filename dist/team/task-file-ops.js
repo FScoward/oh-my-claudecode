@@ -3,13 +3,23 @@
  * Task File Operations for MCP Team Bridge
  *
  * Read/write/scan task JSON files with atomic writes (temp + rename).
- * Tasks live at ~/.claude/tasks/{teamName}/{id}.json
+ *
+ * Canonical task storage path:
+ *   {cwd}/.omc/state/team/{teamName}/tasks/{id}.json
+ *
+ * Legacy path (read-only fallback during migration):
+ *   ~/.claude/tasks/{teamName}/{id}.json
+ *
+ * New writes always go to the canonical path. Reads check the canonical
+ * path first; if the file is absent there, the legacy path is tried so
+ * that teams created by older versions continue to work transparently.
  */
 import { readFileSync, readdirSync, existsSync, openSync, closeSync, unlinkSync, writeSync, statSync, constants as fsConstants } from 'fs';
 import { join } from 'path';
 import { getClaudeConfigDir } from '../utils/paths.js';
 import { sanitizeName } from './tmux-session.js';
 import { atomicWriteJson, validateResolvedPath, ensureDirWithMode } from './fs-utils.js';
+import { getTaskStoragePath, getLegacyTaskStoragePath } from './state-paths.js';
 /** Default age (ms) after which a lock file is considered stale. */
 const DEFAULT_STALE_LOCK_MS = 30_000;
 /**
@@ -43,7 +53,7 @@ function isPidAlive(pid) {
  */
 export function acquireTaskLock(teamName, taskId, opts) {
     const staleLockMs = opts?.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
-    const dir = tasksDir(teamName);
+    const dir = canonicalTasksDir(teamName, opts?.cwd);
     ensureDirWithMode(dir);
     const lockPath = join(dir, `${sanitizeTaskId(taskId)}.lock`);
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -139,21 +149,58 @@ function sanitizeTaskId(taskId) {
     }
     return taskId;
 }
-/** Paths helper */
-function tasksDir(teamName) {
-    const result = join(getClaudeConfigDir(), 'tasks', sanitizeName(teamName));
-    validateResolvedPath(result, join(getClaudeConfigDir(), 'tasks'));
-    return result;
+// ─── Path helpers ──────────────────────────────────────────────────────────
+/**
+ * Returns the canonical tasks directory for a team.
+ * All new writes go here: {cwd}/.omc/state/team/{teamName}/tasks/
+ */
+function canonicalTasksDir(teamName, cwd) {
+    const root = cwd ?? process.cwd();
+    const dir = getTaskStoragePath(root, sanitizeName(teamName));
+    validateResolvedPath(dir, join(root, '.omc', 'state', 'team'));
+    return dir;
 }
-function taskPath(teamName, taskId) {
-    return join(tasksDir(teamName), `${sanitizeTaskId(taskId)}.json`);
+/**
+ * Returns the legacy tasks directory for a team.
+ * Used only for read-fallback: ~/.claude/tasks/{teamName}/
+ */
+function legacyTasksDir(teamName) {
+    const claudeConfigDir = getClaudeConfigDir();
+    const dir = getLegacyTaskStoragePath(claudeConfigDir, sanitizeName(teamName));
+    validateResolvedPath(dir, join(claudeConfigDir, 'tasks'));
+    return dir;
 }
-function failureSidecarPath(teamName, taskId) {
-    return join(tasksDir(teamName), `${sanitizeTaskId(taskId)}.failure.json`);
+/**
+ * Resolve the path to a task file for READ operations.
+ *
+ * Compatibility shim: checks canonical path first; if absent, falls back
+ * to the legacy path so that data written by older versions is still readable.
+ * New writes never use the legacy path.
+ */
+function resolveTaskPathForRead(teamName, taskId, cwd) {
+    const canonical = join(canonicalTasksDir(teamName, cwd), `${sanitizeTaskId(taskId)}.json`);
+    if (existsSync(canonical))
+        return canonical;
+    const legacy = join(legacyTasksDir(teamName), `${sanitizeTaskId(taskId)}.json`);
+    if (existsSync(legacy))
+        return legacy;
+    // Neither exists — return canonical so callers get a predictable missing-file path
+    return canonical;
 }
+/**
+ * Resolve the path to a task file for WRITE operations.
+ * Always returns the canonical path regardless of whether legacy data exists.
+ */
+function resolveTaskPathForWrite(teamName, taskId, cwd) {
+    return join(canonicalTasksDir(teamName, cwd), `${sanitizeTaskId(taskId)}.json`);
+}
+function failureSidecarPath(teamName, taskId, cwd) {
+    return join(canonicalTasksDir(teamName, cwd), `${sanitizeTaskId(taskId)}.failure.json`);
+}
+// ─── Public API ────────────────────────────────────────────────────────────
 /** Read a single task file. Returns null if not found or malformed. */
-export function readTask(teamName, taskId) {
-    const filePath = taskPath(teamName, taskId);
+export function readTask(teamName, taskId, opts) {
+    const filePath = resolveTaskPathForRead(teamName, taskId, opts?.cwd);
     if (!existsSync(filePath))
         return null;
     try {
@@ -172,14 +219,18 @@ export function readTask(teamName, taskId) {
  * lock to prevent lost updates from concurrent writers. Falls back to
  * unlocked write if the lock cannot be acquired within a single attempt
  * (backward-compatible degradation with a console warning).
+ *
+ * Always writes to the canonical path. If the task only exists in the legacy
+ * path, it is migrated to canonical on the first update.
  */
 export function updateTask(teamName, taskId, updates, opts) {
     const useLock = opts?.useLock ?? true;
     const doUpdate = () => {
-        const filePath = taskPath(teamName, taskId);
+        // Read from wherever the file currently lives (canonical or legacy)
+        const readPath = resolveTaskPathForRead(teamName, taskId, opts?.cwd);
         let task;
         try {
-            const raw = readFileSync(filePath, 'utf-8');
+            const raw = readFileSync(readPath, 'utf-8');
             task = JSON.parse(raw);
         }
         catch {
@@ -190,13 +241,15 @@ export function updateTask(teamName, taskId, updates, opts) {
                 task[key] = value;
             }
         }
-        atomicWriteJson(filePath, task);
+        // Always write to canonical path (migrates legacy data on first update)
+        const writePath = resolveTaskPathForWrite(teamName, taskId, opts?.cwd);
+        atomicWriteJson(writePath, task);
     };
     if (!useLock) {
         doUpdate();
         return;
     }
-    const handle = acquireTaskLock(teamName, taskId);
+    const handle = acquireTaskLock(teamName, taskId, { cwd: opts?.cwd });
     if (!handle) {
         // Fallback: another worker holds the lock — proceed without lock + warn
         // This maintains backward compatibility while logging the degradation
@@ -224,40 +277,42 @@ export function updateTask(teamName, taskId, updates, opts) {
  * Uses O_EXCL lock files for atomic claiming — no sleep/jitter needed.
  * The kernel guarantees only one worker can create the lock file.
  */
-export async function findNextTask(teamName, workerName) {
-    const dir = tasksDir(teamName);
+export async function findNextTask(teamName, workerName, opts) {
+    const dir = canonicalTasksDir(teamName, opts?.cwd);
     if (!existsSync(dir))
         return null;
-    const taskIds = listTaskIds(teamName);
+    const taskIds = listTaskIds(teamName, opts);
     for (const id of taskIds) {
         // Quick pre-check without lock (avoid lock overhead for obvious skips)
-        const task = readTask(teamName, id);
+        const task = readTask(teamName, id, opts);
         if (!task)
             continue;
         if (task.status !== 'pending')
             continue;
         if (task.owner !== workerName)
             continue;
-        if (!areBlockersResolved(teamName, task.blockedBy))
+        if (!areBlockersResolved(teamName, task.blockedBy, opts))
             continue;
         // Attempt atomic lock
-        const handle = acquireTaskLock(teamName, id, { workerName });
+        const handle = acquireTaskLock(teamName, id, { workerName, cwd: opts?.cwd });
         if (!handle)
             continue; // another worker holds the lock — skip
         try {
             // Re-read under lock to verify state hasn't changed
-            const freshTask = readTask(teamName, id);
+            const freshTask = readTask(teamName, id, opts);
             if (!freshTask ||
                 freshTask.status !== 'pending' ||
                 freshTask.owner !== workerName ||
-                !areBlockersResolved(teamName, freshTask.blockedBy)) {
+                !areBlockersResolved(teamName, freshTask.blockedBy, opts)) {
                 continue; // state changed between pre-check and lock acquisition
             }
-            // Claim the task atomically
-            const filePath = join(tasksDir(teamName), `${sanitizeTaskId(id)}.json`);
+            // Claim the task atomically — always write to canonical path
+            const filePath = resolveTaskPathForWrite(teamName, id, opts?.cwd);
             let taskData;
             try {
-                const raw = readFileSync(filePath, 'utf-8');
+                // Read from wherever the task currently lives
+                const readPath = resolveTaskPathForRead(teamName, id, opts?.cwd);
+                const raw = readFileSync(readPath, 'utf-8');
                 taskData = JSON.parse(raw);
             }
             catch {
@@ -277,11 +332,11 @@ export async function findNextTask(teamName, workerName) {
     return null;
 }
 /** Check if all blocker task IDs have status 'completed' */
-export function areBlockersResolved(teamName, blockedBy) {
+export function areBlockersResolved(teamName, blockedBy, opts) {
     if (!blockedBy || blockedBy.length === 0)
         return true;
     for (const blockerId of blockedBy) {
-        const blocker = readTask(teamName, blockerId);
+        const blocker = readTask(teamName, blockerId, opts);
         if (!blocker || blocker.status !== 'completed')
             return false;
     }
@@ -291,9 +346,9 @@ export function areBlockersResolved(teamName, blockedBy) {
  * Write failure sidecar for a task.
  * If sidecar already exists, increments retryCount.
  */
-export function writeTaskFailure(teamName, taskId, error) {
-    const filePath = failureSidecarPath(teamName, taskId);
-    const existing = readTaskFailure(teamName, taskId);
+export function writeTaskFailure(teamName, taskId, error, opts) {
+    const filePath = failureSidecarPath(teamName, taskId, opts?.cwd);
+    const existing = readTaskFailure(teamName, taskId, opts);
     const sidecar = {
         taskId,
         lastError: error,
@@ -303,8 +358,8 @@ export function writeTaskFailure(teamName, taskId, error) {
     atomicWriteJson(filePath, sidecar);
 }
 /** Read failure sidecar if it exists */
-export function readTaskFailure(teamName, taskId) {
-    const filePath = failureSidecarPath(teamName, taskId);
+export function readTaskFailure(teamName, taskId, opts) {
+    const filePath = failureSidecarPath(teamName, taskId, opts?.cwd);
     if (!existsSync(filePath))
         return null;
     try {
@@ -318,31 +373,37 @@ export function readTaskFailure(teamName, taskId) {
 /** Default maximum retries before a task is permanently failed */
 export const DEFAULT_MAX_TASK_RETRIES = 5;
 /** Check if a task has exhausted its retry budget */
-export function isTaskRetryExhausted(teamName, taskId, maxRetries = DEFAULT_MAX_TASK_RETRIES) {
-    const failure = readTaskFailure(teamName, taskId);
+export function isTaskRetryExhausted(teamName, taskId, maxRetries = DEFAULT_MAX_TASK_RETRIES, opts) {
+    const failure = readTaskFailure(teamName, taskId, opts);
     if (!failure)
         return false;
     return failure.retryCount >= maxRetries;
 }
 /** List all task IDs in a team directory, sorted ascending */
-export function listTaskIds(teamName) {
-    const dir = tasksDir(teamName);
-    if (!existsSync(dir))
-        return [];
-    try {
-        return readdirSync(dir)
-            .filter(f => f.endsWith('.json') && !f.includes('.tmp.') && !f.includes('.failure.'))
-            .map(f => f.replace('.json', ''))
-            .sort((a, b) => {
-            const numA = parseInt(a, 10);
-            const numB = parseInt(b, 10);
-            if (!isNaN(numA) && !isNaN(numB))
-                return numA - numB;
-            return a.localeCompare(b);
-        });
+export function listTaskIds(teamName, opts) {
+    const scanDir = (dir) => {
+        if (!existsSync(dir))
+            return [];
+        try {
+            return readdirSync(dir)
+                .filter(f => f.endsWith('.json') && !f.includes('.tmp.') && !f.includes('.failure.') && !f.endsWith('.lock'))
+                .map(f => f.replace('.json', ''));
+        }
+        catch {
+            return [];
+        }
+    };
+    // Check canonical path first, fall back to legacy if empty
+    let ids = scanDir(canonicalTasksDir(teamName, opts?.cwd));
+    if (ids.length === 0) {
+        ids = scanDir(legacyTasksDir(teamName));
     }
-    catch {
-        return [];
-    }
+    return ids.sort((a, b) => {
+        const numA = parseInt(a, 10);
+        const numB = parseInt(b, 10);
+        if (!isNaN(numA) && !isNaN(numB))
+            return numA - numB;
+        return a.localeCompare(b);
+    });
 }
 //# sourceMappingURL=task-file-ops.js.map

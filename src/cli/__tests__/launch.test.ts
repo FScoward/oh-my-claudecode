@@ -3,8 +3,7 @@
  *
  * Covers:
  * - Exit code propagation (runClaude direct / inside-tmux)
- * - hasHudCommand fix (issue #863): HUD must no longer be permanently
- *   disabled by a hardcoded `false`.
+ * - No OMC HUD pane spawning in tmux launch paths
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -23,9 +22,6 @@ vi.mock('../tmux-utils.js', () => ({
   buildTmuxSessionName: vi.fn(() => 'test-session'),
   buildTmuxShellCommand: vi.fn((cmd: string, args: string[]) => `${cmd} ${args.join(' ')}`),
   quoteShellArg: vi.fn((s: string) => s),
-  listHudWatchPaneIdsInCurrentWindow: vi.fn(() => []),
-  createHudWatchPane: vi.fn(() => '%1'),
-  killTmuxPane: vi.fn(),
   isClaudeAvailable: vi.fn(() => true),
 }));
 
@@ -33,8 +29,6 @@ import { runClaude, extractNotifyFlag, normalizeClaudeLaunchArgs } from '../laun
 import {
   resolveLaunchPolicy,
   buildTmuxShellCommand,
-  createHudWatchPane,
-  listHudWatchPaneIdsInCurrentWindow,
 } from '../tmux-utils.js';
 
 // ---------------------------------------------------------------------------
@@ -212,66 +206,37 @@ describe('runClaude — exit code propagation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// runClaude — HUD integration (issue #863 regression guard)
+// runClaude — OMC HUD pane spawning disabled
 // ---------------------------------------------------------------------------
-describe('runClaude HUD integration', () => {
-  const savedTmuxPane = process.env.TMUX_PANE;
-
+describe('runClaude OMC HUD behavior', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    process.env.TMUX_PANE = '%0';
+    vi.resetAllMocks();
     (execFileSync as ReturnType<typeof vi.fn>).mockReturnValue(Buffer.from(''));
   });
 
-  afterEach(() => {
-    if (savedTmuxPane === undefined) {
-      delete process.env.TMUX_PANE;
-    } else {
-      process.env.TMUX_PANE = savedTmuxPane;
-    }
-  });
-
-  it('builds a non-empty hudCmd when inside tmux (hasHudCommand=true)', () => {
+  it('does not build an omc hud --watch command inside tmux', () => {
     (resolveLaunchPolicy as ReturnType<typeof vi.fn>).mockReturnValue('inside-tmux');
 
     runClaude('/tmp/cwd', [], 'test-session');
 
-    // buildTmuxShellCommand must have been called with 'node' and hud args
     const calls = vi.mocked(buildTmuxShellCommand).mock.calls;
-    const hudCall = calls.find(
+    const omcHudCall = calls.find(
       ([cmd, args]) => cmd === 'node' && Array.isArray(args) && args.includes('hud'),
     );
-    expect(hudCall).toBeDefined();
-    expect(hudCall![1]).toContain('--watch');
+    expect(omcHudCall).toBeUndefined();
   });
 
-  it('creates a HUD pane when inside tmux', () => {
-    (resolveLaunchPolicy as ReturnType<typeof vi.fn>).mockReturnValue('inside-tmux');
+  it('does not add split-window HUD pane args when launching outside tmux', () => {
+    (resolveLaunchPolicy as ReturnType<typeof vi.fn>).mockReturnValue('outside-tmux');
 
     runClaude('/tmp/cwd', [], 'test-session');
 
-    expect(createHudWatchPane).toHaveBeenCalledOnce();
-    // The second argument is the hudCmd string – must be non-empty
-    const hudCmd = vi.mocked(createHudWatchPane).mock.calls[0][1];
-    expect(typeof hudCmd).toBe('string');
-    expect(hudCmd.length).toBeGreaterThan(0);
-  });
+    const calls = vi.mocked(execFileSync).mock.calls;
+    const tmuxCall = calls.find(([cmd]) => cmd === 'tmux');
+    expect(tmuxCall).toBeDefined();
 
-  it('does NOT create a HUD pane when running direct (no tmux)', () => {
-    (resolveLaunchPolicy as ReturnType<typeof vi.fn>).mockReturnValue('direct');
-
-    runClaude('/tmp/cwd', [], 'test-session');
-
-    expect(createHudWatchPane).not.toHaveBeenCalled();
-  });
-
-  it('cleans up stale HUD panes before launching', () => {
-    (resolveLaunchPolicy as ReturnType<typeof vi.fn>).mockReturnValue('inside-tmux');
-    vi.mocked(listHudWatchPaneIdsInCurrentWindow).mockReturnValue(['%5', '%6']);
-
-    runClaude('/tmp/cwd', [], 'test-session');
-
-    expect(listHudWatchPaneIdsInCurrentWindow).toHaveBeenCalled();
+    const tmuxArgs = tmuxCall![1] as string[];
+    expect(tmuxArgs).not.toContain('split-window');
   });
 });
 
@@ -292,7 +257,7 @@ describe('runClaude outside-tmux — mouse scrolling (issue #890)', () => {
     processExitSpy.mockRestore();
   });
 
-  it('enables mouse mode in the new tmux session so scroll works instead of history navigation', () => {
+  it('uses session-targeted mouse option instead of global (-t sessionName, not -g)', () => {
     runClaude('/tmp', [], 'sid');
 
     const calls = vi.mocked(execFileSync).mock.calls;
@@ -300,10 +265,26 @@ describe('runClaude outside-tmux — mouse scrolling (issue #890)', () => {
     expect(tmuxCall).toBeDefined();
 
     const tmuxArgs = tmuxCall![1] as string[];
-    // set-option -g mouse on must appear in the tmux command chain
-    expect(tmuxArgs).toContain('set-option');
-    expect(tmuxArgs).toContain('mouse');
-    expect(tmuxArgs).toContain('on');
+    // Must use -t <sessionName> targeting, not -g (global)
+    const setOptionIdx = tmuxArgs.indexOf('set-option');
+    expect(setOptionIdx).toBeGreaterThanOrEqual(0);
+    expect(tmuxArgs[setOptionIdx + 1]).toBe('-t');
+    expect(tmuxArgs[setOptionIdx + 2]).toBe('test-session');
+    expect(tmuxArgs[setOptionIdx + 3]).toBe('mouse');
+    expect(tmuxArgs[setOptionIdx + 4]).toBe('on');
+    // Must NOT use -g (global)
+    expect(tmuxArgs).not.toContain('-g');
+  });
+
+  it('sets terminal-overrides to disable alternate screen so scroll works in TUI', () => {
+    runClaude('/tmp', [], 'sid');
+
+    const calls = vi.mocked(execFileSync).mock.calls;
+    const tmuxCall = calls.find(([cmd]) => cmd === 'tmux');
+    const tmuxArgs = tmuxCall![1] as string[];
+
+    expect(tmuxArgs).toContain('terminal-overrides');
+    expect(tmuxArgs).toContain('*:smcup@:rmcup@');
   });
 
   it('places mouse mode setup before attach-session', () => {
@@ -318,5 +299,55 @@ describe('runClaude outside-tmux — mouse scrolling (issue #890)', () => {
     expect(mouseIdx).toBeGreaterThanOrEqual(0);
     expect(attachIdx).toBeGreaterThanOrEqual(0);
     expect(mouseIdx).toBeLessThan(attachIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runClaude — inside-tmux mouse configuration (issue #890)
+// ---------------------------------------------------------------------------
+describe('runClaude inside-tmux — mouse configuration (issue #890)', () => {
+  let processExitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    processExitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    (resolveLaunchPolicy as ReturnType<typeof vi.fn>).mockReturnValue('inside-tmux');
+    (execFileSync as ReturnType<typeof vi.fn>).mockReturnValue(Buffer.from(''));
+  });
+
+  afterEach(() => {
+    processExitSpy.mockRestore();
+  });
+
+  it('enables mouse mode and terminal-overrides before launching claude', () => {
+    runClaude('/tmp', [], 'sid');
+
+    const calls = vi.mocked(execFileSync).mock.calls;
+
+    // First two calls should be tmux set-option for mouse config
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(calls[0][0]).toBe('tmux');
+    expect(calls[0][1]).toEqual(['set-option', 'mouse', 'on']);
+    expect(calls[1][0]).toBe('tmux');
+    expect(calls[1][1]).toEqual(['set-option', 'terminal-overrides', '*:smcup@:rmcup@']);
+
+    // Third call should be claude
+    expect(calls[2][0]).toBe('claude');
+  });
+
+  it('still launches claude even if tmux mouse config fails', () => {
+    let callCount = 0;
+    (execFileSync as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      callCount++;
+      if (cmd === 'tmux') throw new Error('tmux set-option failed');
+      return Buffer.from('');
+    });
+
+    runClaude('/tmp', [], 'sid');
+
+    // tmux calls fail but claude should still be called
+    const calls = vi.mocked(execFileSync).mock.calls;
+    const claudeCall = calls.find(([cmd]) => cmd === 'claude');
+    expect(claudeCall).toBeDefined();
   });
 });

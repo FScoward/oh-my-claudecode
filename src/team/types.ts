@@ -30,7 +30,7 @@ export interface BridgeWorkerPermissions {
   maxFileSize: number;      // max bytes per file write
 }
 
-/** Mirrors the JSON structure of ~/.claude/tasks/{team}/{id}.json */
+/** Mirrors the JSON structure of {cwd}/.omc/state/team/{team}/tasks/{id}.json */
 export interface TaskFile {
   id: string;
   subject: string;

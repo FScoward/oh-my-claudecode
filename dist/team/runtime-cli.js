@@ -70,10 +70,9 @@ async function main() {
         process.stderr.write(`[runtime-cli] Missing required fields: ${missing.join(', ')}\n`);
         process.exit(1);
     }
-    const { teamName, agentTypes, tasks, cwd, timeoutSeconds = 0, pollIntervalMs = 5000, } = input;
+    const { teamName, agentTypes, tasks, cwd, pollIntervalMs = 5000, } = input;
     const workerCount = input.workerCount ?? agentTypes.length;
     const stateRoot = join(cwd, `.omc/state/team/${teamName}`);
-    const timeoutMs = timeoutSeconds * 1000;
     const config = {
         teamName,
         workerCount,
@@ -82,10 +81,10 @@ async function main() {
         cwd,
     };
     let runtime = null;
-    let finalStatus = 'timeout';
+    let finalStatus = 'failed';
     let pollActive = true;
     function exitCodeFor(status) {
-        return status === 'completed' ? 0 : status === 'timeout' ? 2 : 1;
+        return status === 'completed' ? 0 : 1;
     }
     async function doShutdown(status) {
         pollActive = false;
@@ -135,7 +134,7 @@ async function main() {
         process.stderr.write(`[runtime-cli] startTeam failed: ${err}\n`);
         process.exit(1);
     }
-    // Persist pane IDs to disk so MCP server can clean up after timeout (Step 1)
+    // Persist pane IDs so MCP server can clean up explicitly via omc_run_team_cleanup.
     const jobId = process.env.OMC_JOB_ID;
     try {
         await writePanesFile(jobId, runtime.workerPaneIds, runtime.leaderPaneId);
@@ -144,13 +143,7 @@ async function main() {
         process.stderr.write(`[runtime-cli] Failed to persist pane IDs: ${err}\n`);
     }
     // Poll loop
-    const deadline = timeoutSeconds > 0 ? Date.now() + timeoutMs : Infinity;
     while (pollActive) {
-        if (Date.now() > deadline) {
-            process.stderr.write(`[runtime-cli] Timeout after ${timeoutSeconds}s\n`);
-            await doShutdown('timeout');
-            return;
-        }
         await new Promise(r => setTimeout(r, pollIntervalMs));
         if (!pollActive)
             break;

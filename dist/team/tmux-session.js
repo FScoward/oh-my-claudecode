@@ -6,10 +6,89 @@
  * Sessions are named "omc-team-{teamName}-{workerName}".
  */
 import { execSync, execFileSync } from 'child_process';
-import { join } from 'path';
+import { join, basename } from 'path';
 import fs from 'fs/promises';
+import { validateTeamName } from './team-name.js';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const TMUX_SESSION_PREFIX = 'omc-team';
+export function getDefaultShell() {
+    if (process.platform === 'win32') {
+        return process.env.COMSPEC || 'cmd.exe';
+    }
+    return process.env.SHELL || '/bin/bash';
+}
+function escapeForCmdSet(value) {
+    return value.replace(/"/g, '""');
+}
+function shellNameFromPath(shellPath) {
+    const shellName = basename(shellPath.replace(/\\/g, '/'));
+    return shellName.replace(/\.(exe|cmd|bat)$/i, '');
+}
+function shellEscape(value) {
+    return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+function assertSafeEnvKey(key) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error(`Invalid environment key: "${key}"`);
+    }
+}
+function getLaunchWords(config) {
+    if (config.launchBinary) {
+        return [config.launchBinary, ...(config.launchArgs ?? [])];
+    }
+    if (config.launchCmd) {
+        return [config.launchCmd];
+    }
+    throw new Error('Missing worker launch command. Provide launchBinary or launchCmd.');
+}
+export function buildWorkerStartCommand(config) {
+    const shell = getDefaultShell();
+    const launchWords = getLaunchWords(config);
+    if (process.platform === 'win32') {
+        const envPrefix = Object.entries(config.envVars)
+            .map(([k, v]) => {
+            assertSafeEnvKey(k);
+            return `set "${k}=${escapeForCmdSet(v)}"`;
+        })
+            .join(' && ');
+        const launch = config.launchBinary
+            ? launchWords.map((part) => `"${escapeForCmdSet(part)}"`).join(' ')
+            : launchWords[0];
+        const cmdBody = envPrefix ? `${envPrefix} && ${launch}` : launch;
+        return `${shell} /d /s /c "${cmdBody}"`;
+    }
+    if (config.launchBinary) {
+        const envAssignments = Object.entries(config.envVars).map(([key, value]) => {
+            assertSafeEnvKey(key);
+            return `${key}=${shellEscape(value)}`;
+        });
+        const shellName = shellNameFromPath(shell) || 'bash';
+        const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
+        const script = rcFile
+            ? `[ -f ${shellEscape(rcFile)} ] && . ${shellEscape(rcFile)}; exec "$@"`
+            : 'exec "$@"';
+        return [
+            'env',
+            ...envAssignments,
+            shell,
+            '-lc',
+            script,
+            '--',
+            ...launchWords,
+        ].map(shellEscape).join(' ');
+    }
+    const envString = Object.entries(config.envVars)
+        .map(([k, v]) => {
+        assertSafeEnvKey(k);
+        return `${k}=${shellEscape(v)}`;
+    })
+        .join(' ');
+    const shellName = shellNameFromPath(shell) || 'bash';
+    const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
+    // Quote rcFile to prevent shell injection if HOME contains metacharacters
+    const sourceCmd = rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
+    return `env ${envString} ${shell} -c "${sourceCmd}exec ${launchWords[0]}"`;
+}
 /** Validate tmux is available. Throws with install instructions if not. */
 export function validateTmux() {
     try {
@@ -118,14 +197,37 @@ export async function createTeamSession(teamName, workerCount, cwd) {
     if (!process.env.TMUX) {
         throw new Error('Team mode requires running inside tmux. Start one: tmux new-session');
     }
-    // Get "session:window" target and leader pane ID in one call
-    const contextResult = await execFileAsync('tmux', [
-        'display-message', '-p', '#S:#I #{pane_id}'
-    ]);
-    const contextLine = contextResult.stdout.trim();
-    const spaceIdx = contextLine.indexOf(' ');
-    const sessionAndWindow = contextLine.slice(0, spaceIdx);
-    const leaderPaneId = contextLine.slice(spaceIdx + 1);
+    // Prefer the invoking pane from environment to avoid focus races when users
+    // switch tmux windows during startup (issue #966).
+    const envPaneIdRaw = (process.env.TMUX_PANE ?? '').trim();
+    const envPaneId = /^%\d+$/.test(envPaneIdRaw) ? envPaneIdRaw : '';
+    let sessionAndWindow = '';
+    let leaderPaneId = envPaneId;
+    if (envPaneId) {
+        try {
+            const targetedContextResult = await execFileAsync('tmux', [
+                'display-message', '-p', '-t', envPaneId, '#S:#I'
+            ]);
+            sessionAndWindow = targetedContextResult.stdout.trim();
+        }
+        catch {
+            sessionAndWindow = '';
+            leaderPaneId = '';
+        }
+    }
+    if (!sessionAndWindow || !leaderPaneId) {
+        // Fallback when TMUX_PANE is unavailable/invalid.
+        const contextResult = await execFileAsync('tmux', [
+            'display-message', '-p', '#S:#I #{pane_id}'
+        ]);
+        const contextLine = contextResult.stdout.trim();
+        const contextMatch = contextLine.match(/^(\S+)\s+(%\d+)$/);
+        if (!contextMatch) {
+            throw new Error(`Failed to resolve tmux context: "${contextLine}"`);
+        }
+        sessionAndWindow = contextMatch[1];
+        leaderPaneId = contextMatch[2];
+    }
     const teamTarget = sessionAndWindow; // "session:window" form
     // Extract bare session name (before ':') for options that don't accept window targets
     const resolvedSessionName = teamTarget.split(':')[0];
@@ -199,16 +301,8 @@ export async function spawnWorkerInPane(sessionName, paneId, config) {
     const { execFile } = await import('child_process');
     const { promisify } = await import('util');
     const execFileAsync = promisify(execFile);
-    // Build env prefix string
-    const envString = Object.entries(config.envVars)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(' ');
-    const shell = process.env.SHELL || '/bin/bash';
-    const shellName = shell.split('/').pop() || 'bash';
-    const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
-    // Quote rcFile to prevent shell injection if HOME contains metacharacters
-    const sourceCmd = rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
-    const startCmd = `env ${envString} ${shell} -c "${sourceCmd}exec ${config.launchCmd}"`;
+    validateTeamName(config.teamName);
+    const startCmd = buildWorkerStartCommand(config);
     // Use -l (literal) flag to prevent tmux key-name parsing of the command string
     await execFileAsync('tmux', [
         'send-keys', '-t', paneId, '-l', startCmd

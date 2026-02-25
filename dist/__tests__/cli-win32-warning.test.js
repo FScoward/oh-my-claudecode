@@ -4,48 +4,41 @@ describe('CLI win32 platform warning (#923)', () => {
     let warnSpy;
     beforeEach(() => {
         warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
+        vi.resetModules();
     });
     afterEach(() => {
-        Object.defineProperty(process, 'platform', { value: originalPlatform });
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
         warnSpy.mockRestore();
+        vi.resetModules();
     });
-    it('should warn on win32 platform', () => {
-        Object.defineProperty(process, 'platform', { value: 'win32' });
-        // Simulate the warning logic from src/cli/index.ts
-        if (process.platform === 'win32') {
-            console.warn('WARNING: Native Windows (win32) detected');
-            console.warn('OMC requires tmux, which is not available on native Windows.');
-            console.warn('Please use WSL2 instead');
-            console.warn('Native win32 support issues will not be accepted.');
-        }
+    it('should warn on win32 platform', async () => {
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        const { warnIfWin32 } = await import('../cli/win32-warning.js');
+        warnIfWin32();
         expect(warnSpy).toHaveBeenCalled();
-        const allOutput = warnSpy.mock.calls.map((c) => c[0]).join('\n');
+        const allOutput = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
         expect(allOutput).toContain('win32');
         expect(allOutput).toContain('tmux');
         expect(allOutput).toContain('WSL2');
-        expect(allOutput).toContain('will not be accepted');
+        expect(allOutput).toContain('experimental');
     });
-    it('should NOT warn on linux platform', () => {
-        Object.defineProperty(process, 'platform', { value: 'linux' });
-        if (process.platform === 'win32') {
-            console.warn('WARNING: Native Windows (win32) detected');
-        }
+    it('should NOT warn on linux platform', async () => {
+        Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+        const { warnIfWin32 } = await import('../cli/win32-warning.js');
+        warnIfWin32();
         expect(warnSpy).not.toHaveBeenCalled();
     });
-    it('should NOT warn on darwin platform', () => {
-        Object.defineProperty(process, 'platform', { value: 'darwin' });
-        if (process.platform === 'win32') {
-            console.warn('WARNING: Native Windows (win32) detected');
-        }
+    it('should NOT warn on darwin platform', async () => {
+        Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+        const { warnIfWin32 } = await import('../cli/win32-warning.js');
+        warnIfWin32();
         expect(warnSpy).not.toHaveBeenCalled();
     });
-    it('should not block execution after warning', () => {
-        Object.defineProperty(process, 'platform', { value: 'win32' });
+    it('should not block execution after warning', async () => {
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        const { warnIfWin32 } = await import('../cli/win32-warning.js');
         let continued = false;
-        if (process.platform === 'win32') {
-            console.warn('WARNING: Native Windows (win32) detected');
-        }
-        // Code continues past the warning
+        warnIfWin32();
         continued = true;
         expect(continued).toBe(true);
     });

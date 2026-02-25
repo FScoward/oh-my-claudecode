@@ -26,6 +26,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { homedir } from 'os';
 import { killWorkerPanes } from '../team/tmux-session.js';
+import { validateTeamName } from '../team/team-name.js';
 
 // ---------------------------------------------------------------------------
 // Job state: in-memory Map (primary) + /tmp backup (survives MCP restart)
@@ -86,7 +87,6 @@ const startSchema = z.object({
     description: z.string().describe('Full task description'),
   })).describe('Tasks to distribute to workers'),
   cwd: z.string().describe('Working directory (absolute path)'),
-  timeoutSeconds: z.number().optional().describe('Timeout in seconds (default: 300)'),
 });
 
 const statusSchema = z.object({
@@ -103,7 +103,18 @@ const waitSchema = z.object({
 // ---------------------------------------------------------------------------
 
 async function handleStart(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  if (
+    typeof args === 'object'
+    && args !== null
+    && Object.prototype.hasOwnProperty.call(args, 'timeoutSeconds')
+  ) {
+    throw new Error(
+      'omc_run_team_start no longer accepts timeoutSeconds. Remove timeoutSeconds and use omc_run_team_wait timeout_ms to limit the wait call only (workers keep running until completion or explicit omc_run_team_cleanup).',
+    );
+  }
+
   const input = startSchema.parse(args);
+  validateTeamName(input.teamName);
   const jobId = `omc-${Date.now().toString(36)}`;
   const runtimeCliPath = join(__dirname, 'runtime-cli.cjs');
 
@@ -133,7 +144,7 @@ async function handleStart(args: unknown): Promise<{ content: Array<{ type: 'tex
         const parsed = JSON.parse(stdout) as { status?: string };
         const s = parsed.status;
         if (job.status === 'running') {
-          job.status = (s === 'completed' || s === 'failed' || s === 'timeout') ? s : 'failed';
+          job.status = (s === 'completed' || s === 'failed') ? s : 'failed';
         }
       } catch {
         if (job.status === 'running') job.status = 'failed';
@@ -143,7 +154,6 @@ async function handleStart(args: unknown): Promise<{ content: Array<{ type: 'tex
     // Only fall back to exit-code when stdout parsing did not set a status
     if (job.status === 'running') {
       if (code === 0) job.status = 'completed';
-      else if (code === 2) job.status = 'timeout';
       else job.status = 'failed';
     }
     if (stderr) job.stderr = stderr;
@@ -163,6 +173,7 @@ async function handleStart(args: unknown): Promise<{ content: Array<{ type: 'tex
 
 async function handleStatus(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { job_id } = statusSchema.parse(args);
+  validateJobId(job_id);
   const job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
   if (!job) {
     return { content: [{ type: 'text', text: JSON.stringify({ error: `No job found: ${job_id}` }) }] };
@@ -176,6 +187,7 @@ async function handleStatus(args: unknown): Promise<{ content: Array<{ type: 'te
 
 async function handleWait(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { job_id, timeout_ms = 300_000 } = waitSchema.parse(args);
+  validateJobId(job_id);
   // Cap at 1 hour — matches Codex/Gemini wait_for_job behaviour
   const deadline = Date.now() + Math.min(timeout_ms, 3_600_000);
   let pollDelay = 500; // ms; grows to 2000ms via 1.5× backoff
@@ -247,7 +259,6 @@ const TOOLS = [
           description: 'Tasks to distribute to workers',
         },
         cwd: { type: 'string', description: 'Working directory (absolute path)' },
-        timeoutSeconds: { type: 'number', description: 'Timeout in seconds (default: 300)' },
       },
       required: ['teamName', 'agentTypes', 'tasks', 'cwd'],
     },
@@ -265,7 +276,7 @@ const TOOLS = [
   },
   {
     name: 'omc_run_team_wait',
-    description: 'Block (poll internally) until a background omc_run_team job reaches a terminal state (completed, failed, timeout). Returns the result when done. One call instead of N polling calls. Uses exponential backoff (500ms → 2000ms). On timeout, workers are left running — call omc_run_team_wait again to keep waiting, or omc_run_team_cleanup to stop them explicitly.',
+    description: 'Block (poll internally) until a background omc_run_team job reaches a terminal state (completed or failed). Returns the result when done. One call instead of N polling calls. Uses exponential backoff (500ms → 2000ms). If this wait call times out, workers are left running — call omc_run_team_wait again to keep waiting, or omc_run_team_cleanup to stop them explicitly.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -277,7 +288,7 @@ const TOOLS = [
   },
   {
     name: 'omc_run_team_cleanup',
-    description: 'Explicitly clean up worker panes for a completed or timed-out team job. Kills all worker panes recorded for the job without touching the leader pane or the user session.',
+    description: 'Explicitly clean up worker panes when you want to stop workers. Kills all worker panes recorded for the job without touching the leader pane or the user session.',
     inputSchema: {
       type: 'object' as const,
       properties: {

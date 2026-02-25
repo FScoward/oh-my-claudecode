@@ -18,6 +18,7 @@ export interface LockHandle {
 export declare function acquireTaskLock(teamName: string, taskId: string, opts?: {
     staleLockMs?: number;
     workerName?: string;
+    cwd?: string;
 }): LockHandle | null;
 /**
  * Release a previously acquired task lock.
@@ -31,9 +32,12 @@ export declare function releaseTaskLock(handle: LockHandle): void;
 export declare function withTaskLock<T>(teamName: string, taskId: string, fn: () => T | Promise<T>, opts?: {
     staleLockMs?: number;
     workerName?: string;
+    cwd?: string;
 }): Promise<T | null>;
 /** Read a single task file. Returns null if not found or malformed. */
-export declare function readTask(teamName: string, taskId: string): TaskFile | null;
+export declare function readTask(teamName: string, taskId: string, opts?: {
+    cwd?: string;
+}): TaskFile | null;
 /**
  * Atomic update: reads full task JSON, patches specified fields, writes back.
  * Preserves unknown fields to avoid data loss.
@@ -42,9 +46,13 @@ export declare function readTask(teamName: string, taskId: string): TaskFile | n
  * lock to prevent lost updates from concurrent writers. Falls back to
  * unlocked write if the lock cannot be acquired within a single attempt
  * (backward-compatible degradation with a console warning).
+ *
+ * Always writes to the canonical path. If the task only exists in the legacy
+ * path, it is migrated to canonical on the first update.
  */
 export declare function updateTask(teamName: string, taskId: string, updates: TaskFileUpdate, opts?: {
     useLock?: boolean;
+    cwd?: string;
 }): void;
 /**
  * Find next executable task for this worker.
@@ -57,20 +65,32 @@ export declare function updateTask(teamName: string, taskId: string, updates: Ta
  * Uses O_EXCL lock files for atomic claiming — no sleep/jitter needed.
  * The kernel guarantees only one worker can create the lock file.
  */
-export declare function findNextTask(teamName: string, workerName: string): Promise<TaskFile | null>;
+export declare function findNextTask(teamName: string, workerName: string, opts?: {
+    cwd?: string;
+}): Promise<TaskFile | null>;
 /** Check if all blocker task IDs have status 'completed' */
-export declare function areBlockersResolved(teamName: string, blockedBy: string[]): boolean;
+export declare function areBlockersResolved(teamName: string, blockedBy: string[], opts?: {
+    cwd?: string;
+}): boolean;
 /**
  * Write failure sidecar for a task.
  * If sidecar already exists, increments retryCount.
  */
-export declare function writeTaskFailure(teamName: string, taskId: string, error: string): void;
+export declare function writeTaskFailure(teamName: string, taskId: string, error: string, opts?: {
+    cwd?: string;
+}): void;
 /** Read failure sidecar if it exists */
-export declare function readTaskFailure(teamName: string, taskId: string): TaskFailureSidecar | null;
+export declare function readTaskFailure(teamName: string, taskId: string, opts?: {
+    cwd?: string;
+}): TaskFailureSidecar | null;
 /** Default maximum retries before a task is permanently failed */
 export declare const DEFAULT_MAX_TASK_RETRIES = 5;
 /** Check if a task has exhausted its retry budget */
-export declare function isTaskRetryExhausted(teamName: string, taskId: string, maxRetries?: number): boolean;
+export declare function isTaskRetryExhausted(teamName: string, taskId: string, maxRetries?: number, opts?: {
+    cwd?: string;
+}): boolean;
 /** List all task IDs in a team directory, sorted ascending */
-export declare function listTaskIds(teamName: string): string[];
+export declare function listTaskIds(teamName: string, opts?: {
+    cwd?: string;
+}): string[];
 //# sourceMappingURL=task-file-ops.d.ts.map

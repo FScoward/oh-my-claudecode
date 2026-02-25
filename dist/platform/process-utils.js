@@ -96,15 +96,61 @@ async function getProcessStartTimeWindows(pid) {
             'process', 'where', `ProcessId=${pid}`,
             'get', 'CreationDate', '/format:csv'
         ], { timeout: 5000, windowsHide: true });
-        const lines = stdout.trim().split(/\r?\n/).filter(l => l.trim());
-        if (lines.length < 2)
-            return undefined;
-        const match = lines[1].match(/,(\d{14})/);
-        if (!match)
-            return undefined;
-        const d = match[1];
-        const date = new Date(parseInt(d.slice(0, 4)), parseInt(d.slice(4, 6)) - 1, parseInt(d.slice(6, 8)), parseInt(d.slice(8, 10)), parseInt(d.slice(10, 12)), parseInt(d.slice(12, 14)));
-        return date.getTime();
+        const wmicTime = parseWmicCreationDate(stdout);
+        if (wmicTime !== undefined)
+            return wmicTime;
+    }
+    catch {
+        // WMIC is deprecated on newer Windows builds; fall back to PowerShell.
+    }
+    const cimTime = await getProcessStartTimeWindowsPowerShellCim(pid);
+    if (cimTime !== undefined)
+        return cimTime;
+    return getProcessStartTimeWindowsPowerShellProcess(pid);
+}
+function parseWmicCreationDate(stdout) {
+    const lines = stdout.trim().split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2)
+        return undefined;
+    const candidate = lines.find(line => /,\d{14}/.test(line)) ?? lines[1];
+    const match = candidate.match(/,(\d{14})/);
+    if (!match)
+        return undefined;
+    const d = match[1];
+    const date = new Date(parseInt(d.slice(0, 4), 10), parseInt(d.slice(4, 6), 10) - 1, parseInt(d.slice(6, 8), 10), parseInt(d.slice(8, 10), 10), parseInt(d.slice(10, 12), 10), parseInt(d.slice(12, 14), 10));
+    const value = date.getTime();
+    return Number.isNaN(value) ? undefined : value;
+}
+function parseWindowsEpochMilliseconds(stdout) {
+    const match = stdout.trim().match(/-?\d+/);
+    if (!match)
+        return undefined;
+    const value = parseInt(match[0], 10);
+    return Number.isFinite(value) ? value : undefined;
+}
+async function getProcessStartTimeWindowsPowerShellCim(pid) {
+    try {
+        const { stdout } = await execFileAsync('powershell', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop; if ($p -and $p.CreationDate) { [DateTimeOffset]$p.CreationDate | ForEach-Object { $_.ToUnixTimeMilliseconds() } }`
+        ], { timeout: 5000, windowsHide: true });
+        return parseWindowsEpochMilliseconds(stdout);
+    }
+    catch {
+        return undefined;
+    }
+}
+async function getProcessStartTimeWindowsPowerShellProcess(pid) {
+    try {
+        const { stdout } = await execFileAsync('powershell', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p -and $p.StartTime) { [DateTimeOffset]$p.StartTime | ForEach-Object { $_.ToUnixTimeMilliseconds() } }`
+        ], { timeout: 5000, windowsHide: true });
+        return parseWindowsEpochMilliseconds(stdout);
     }
     catch {
         return undefined;

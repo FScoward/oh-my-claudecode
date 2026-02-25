@@ -106,10 +106,10 @@ export function getTeamStatus(
 
   // Get all tasks for the team
   const taskScanStartedAt = Date.now();
-  const taskIds = listTaskIds(teamName);
+  const taskIds = listTaskIds(teamName, { cwd: workingDirectory });
   const tasks: TaskFile[] = [];
   for (const id of taskIds) {
-    const task = readTask(teamName, id);
+    const task = readTask(teamName, id, { cwd: workingDirectory });
     if (task) tasks.push(task);
   }
   const taskScanMs = Date.now() - taskScanStartedAt;

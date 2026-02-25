@@ -395,13 +395,39 @@ export function clearModeState(mode, cwd, sessionId) {
             }
         }
     }
-    // Delete marker file if applicable
+    // Delete marker file if applicable, but respect ownership when session-scoped.
     if (markerFile && existsSync(markerFile)) {
-        try {
-            unlinkSync(markerFile);
+        if (isSessionScopedClear) {
+            // Only delete if the marker is unowned or owned by this session.
+            try {
+                const markerRaw = JSON.parse(readFileSync(markerFile, 'utf-8'));
+                const markerSessionId = markerRaw.session_id ?? markerRaw.sessionId;
+                if (!markerSessionId || markerSessionId === sessionId) {
+                    try {
+                        unlinkSync(markerFile);
+                    }
+                    catch {
+                        success = false;
+                    }
+                }
+            }
+            catch {
+                // Marker is not valid JSON or unreadable — best-effort delete for cleanup.
+                try {
+                    unlinkSync(markerFile);
+                }
+                catch {
+                    success = false;
+                }
+            }
         }
-        catch {
-            success = false;
+        else {
+            try {
+                unlinkSync(markerFile);
+            }
+            catch {
+                success = false;
+            }
         }
     }
     // Note: Global state files are no longer used (local-only state migration)

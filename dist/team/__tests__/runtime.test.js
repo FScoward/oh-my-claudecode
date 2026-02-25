@@ -30,5 +30,8 @@ describe('runtime types', () => {
         expect(snapshot.monitorPerformance.totalMs).toBeGreaterThanOrEqual(snapshot.monitorPerformance.listTasksMs);
         rmSync(cwd, { recursive: true, force: true });
     });
+    it('monitorTeam rejects invalid team names before path usage', async () => {
+        await expect(monitorTeam('Bad-Team', '/tmp', [])).rejects.toThrow('Invalid team name');
+    });
 });
 //# sourceMappingURL=runtime.test.js.map

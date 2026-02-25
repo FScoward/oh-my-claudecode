@@ -54,10 +54,10 @@ export function getTeamStatus(teamName, workingDirectory, heartbeatMaxAgeMs = 30
     const mcpWorkers = listMcpWorkers(teamName, workingDirectory);
     // Get all tasks for the team
     const taskScanStartedAt = Date.now();
-    const taskIds = listTaskIds(teamName);
+    const taskIds = listTaskIds(teamName, { cwd: workingDirectory });
     const tasks = [];
     for (const id of taskIds) {
-        const task = readTask(teamName, id);
+        const task = readTask(teamName, id, { cwd: workingDirectory });
         if (task)
             tasks.push(task);
     }

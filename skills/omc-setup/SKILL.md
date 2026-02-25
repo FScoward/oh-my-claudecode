@@ -585,25 +585,62 @@ echo "Default execution mode set to: USER_CHOICE"
 **Note**: This preference ONLY affects generic keywords ("fast", "parallel"). Explicit keywords ("ulw") always override this preference.
 
 
-## Step 3.8: Install CLI Analytics Tools (Optional)
+## Step 3.8: Install OMC CLI Tool
 
-The OMC CLI provides standalone token analytics commands (`omc stats`, `omc agents`, `omc tui`).
+The OMC CLI (`omc` command) provides standalone token analytics and management commands (`omc stats`, `omc agents`, `omc tui`).
 
-Ask user: "Would you like to install the OMC CLI for standalone analytics? (Recommended for tracking token usage and costs)"
+First, check if the CLI is already installed:
+
+```bash
+# Check if omc CLI is already available
+if command -v omc &>/dev/null; then
+  OMC_CLI_VERSION=$(omc --version 2>/dev/null | head -1 || echo "installed")
+  echo "OMC CLI already installed: $OMC_CLI_VERSION"
+  OMC_CLI_INSTALLED="true"
+else
+  OMC_CLI_INSTALLED="false"
+fi
+```
+
+If `OMC_CLI_INSTALLED` is `"true"`, skip the rest of this step.
+
+If `OMC_CLI_INSTALLED` is `"false"`, use the AskUserQuestion tool to prompt the user:
+
+**Question:** "Would you like to install the OMC CLI globally for standalone analytics? (`omc stats`, `omc agents`, `omc tui`)"
 
 **Options:**
-1. **Yes (Recommended)** - Install CLI tools globally for `omc stats`, `omc agents`, etc.
-2. **No** - Skip CLI installation, use only plugin skills
+1. **Yes (Recommended)** - Install `oh-my-claude-sisyphus` via `npm install -g`
+2. **No - Skip** - Skip installation (can install manually later with `npm install -g oh-my-claude-sisyphus`)
 
-### CLI Installation Note
+If user chooses **Yes**:
 
-The CLI (`omc` command) is **no longer supported** via npm/bun global install.
+```bash
+# Check if npm is available
+if ! command -v npm &>/dev/null; then
+  echo "WARNING: npm not found. Cannot install OMC CLI automatically."
+  echo "Install Node.js/npm first, then run: npm install -g oh-my-claude-sisyphus"
+else
+  # Install the CLI globally
+  if npm install -g oh-my-claude-sisyphus 2>&1; then
+    echo "OMC CLI installed successfully."
+    # Verify installation
+    if command -v omc &>/dev/null; then
+      OMC_CLI_VERSION=$(omc --version 2>/dev/null | head -1 || echo "installed")
+      echo "Verified: omc $OMC_CLI_VERSION"
+    else
+      echo "Installed but 'omc' not on PATH. You may need to restart your shell."
+    fi
+  else
+    echo "WARNING: Failed to install OMC CLI (permission issue or network error)."
+    echo "You can install manually later: npm install -g oh-my-claude-sisyphus"
+    echo "Or with sudo: sudo npm install -g oh-my-claude-sisyphus"
+  fi
+fi
+```
 
-All functionality is available through the plugin system:
-- Use `/oh-my-claudecode:omc-help` for guidance
-- Use `/oh-my-claudecode:omc-doctor` for diagnostics
+If user chooses **No - Skip**, continue to the next step without installing.
 
-Skip this step - the plugin provides all features.
+**Note**: The CLI is optional. All core functionality is also available through the plugin system (`/oh-my-claudecode:omc-help`, `/oh-my-claudecode:omc-doctor`). The CLI adds standalone terminal commands for analytics outside of Claude Code sessions.
 
 ## Step 3.8.5: Select Task Management Tool
 

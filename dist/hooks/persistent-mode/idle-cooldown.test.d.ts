@@ -1,7 +1,6 @@
 /**
- * Tests for per-session idle notification cooldown (issue #842).
- * Verifies that the TS hook path in bridge.ts uses the same cooldown logic
- * as scripts/persistent-mode.cjs.
+ * Tests for session-scoped idle notification cooldown.
+ * Verifies each session has independent cooldown state.
  */
 export {};
 //# sourceMappingURL=idle-cooldown.test.d.ts.map

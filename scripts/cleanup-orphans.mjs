@@ -48,11 +48,8 @@ function findOrphanProcesses(filterTeam) {
 
   try {
     if (process.platform === 'win32') {
-      // Windows: use WMIC to find node/claude processes
-      const output = execSync(
-        'wmic process where "name like \'%node%\' or name like \'%claude%\'" get processid,commandline /format:csv',
-        { encoding: 'utf-8', timeout: 10000 }
-      ).trim();
+      const output = getWindowsProcessListOutput();
+      if (!output) return orphans;
 
       for (const line of output.split('\n')) {
         if (line.includes('--team-name') || line.includes('team_name')) {
@@ -98,6 +95,26 @@ function findOrphanProcesses(filterTeam) {
   }
 
   return orphans;
+}
+
+function getWindowsProcessListOutput() {
+  try {
+    // Primary path: WMIC (legacy but still available on some systems).
+    return execSync(
+      'wmic process where "name like \'%node%\' or name like \'%claude%\'" get processid,commandline /format:csv',
+      { encoding: 'utf-8', timeout: 10000 }
+    ).trim();
+  } catch {
+    // Fallback: PowerShell CIM query for command line + PID.
+    try {
+      return execSync(
+        'powershell -NoProfile -NonInteractive -Command "$procs = Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.Name -like \'*node*\' -or $_.Name -like \'*claude*\' }; $procs | ForEach-Object { [string]$_.CommandLine + \',\' + [string]$_.ProcessId }"',
+        { encoding: 'utf-8', timeout: 10000 }
+      ).trim();
+    } catch {
+      return '';
+    }
+  }
 }
 
 /**

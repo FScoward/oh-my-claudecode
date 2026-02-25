@@ -143,28 +143,53 @@ export async function isProcessAlive(pid: number, recordedStartTime?: number): P
       return false;
     }
   } else if (process.platform === 'win32') {
-    // On Windows, check if process exists and optionally verify start time
-    try {
-      process.kill(pid, 0);
-
-      if (recordedStartTime !== undefined) {
-        const currentStartTime = await getProcessStartTime(pid);
-        if (currentStartTime === undefined) {
-          return false;
-        }
-        if (currentStartTime !== recordedStartTime) {
-          return false;
-        }
-      }
-
-      return true;
-    } catch {
+    // On Windows, check process existence first and then verify start time when available.
+    const exists = await isWindowsProcessAlive(pid);
+    if (!exists) {
       return false;
     }
+
+    if (recordedStartTime !== undefined) {
+      const currentStartTime = await getProcessStartTime(pid);
+      // If start-time metadata is unavailable, avoid misclassifying a live process as dead.
+      if (currentStartTime !== undefined && currentStartTime !== recordedStartTime) {
+        return false; // PID reuse detected
+      }
+    }
+
+    return true;
   }
 
   // Unknown platform: conservative assumption that process is alive
   return true;
+}
+
+async function isWindowsProcessAlive(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    // Fallback for environments where signal probing is restricted/unreliable.
+    return isWindowsProcessAlivePowerShell(pid);
+  }
+}
+
+async function isWindowsProcessAlivePowerShell(pid: number): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction SilentlyContinue; if (-not $p) { $p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue }; if ($p) { '1' }`
+      ],
+      { timeout: 5000, windowsHide: true }
+    );
+    return stdout.trim() === '1';
+  } catch {
+    return false;
+  }
 }
 
 // =============================================================================

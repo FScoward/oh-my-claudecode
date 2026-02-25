@@ -1,27 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { tmpdir } from 'os';
 import { getTeamStatus } from '../team-status.js';
 import { atomicWriteJson } from '../fs-utils.js';
 import { appendOutbox } from '../inbox-outbox.js';
 import { recordTaskUsage } from '../usage-tracker.js';
+import { getClaudeConfigDir } from '../../utils/paths.js';
 const TEST_TEAM = 'test-team-status';
-const TEAMS_DIR = join(homedir(), '.claude', 'teams', TEST_TEAM);
-const TASKS_DIR = join(homedir(), '.claude', 'tasks', TEST_TEAM);
 let WORK_DIR;
+// Canonical tasks dir: {WORK_DIR}/.omc/state/team/{TEST_TEAM}/tasks/
+let TASKS_DIR;
 beforeEach(() => {
     WORK_DIR = join(tmpdir(), `omc-team-status-test-${Date.now()}`);
-    mkdirSync(join(TEAMS_DIR, 'outbox'), { recursive: true });
+    TASKS_DIR = join(WORK_DIR, '.omc', 'state', 'team', TEST_TEAM, 'tasks');
     mkdirSync(TASKS_DIR, { recursive: true });
     mkdirSync(join(WORK_DIR, '.omc', 'state', 'team-bridge', TEST_TEAM), { recursive: true });
     mkdirSync(join(WORK_DIR, '.omc', 'state'), { recursive: true });
 });
 afterEach(() => {
-    rmSync(TEAMS_DIR, { recursive: true, force: true });
-    rmSync(TASKS_DIR, { recursive: true, force: true });
     rmSync(WORK_DIR, { recursive: true, force: true });
+    // Clean up outbox files written to ~/.claude/teams/ by appendOutbox
+    rmSync(join(getClaudeConfigDir(), 'teams', TEST_TEAM), { recursive: true, force: true });
 });
 function writeWorkerRegistry(workers) {
     const registryPath = join(WORK_DIR, '.omc', 'state', 'team-mcp-workers.json');

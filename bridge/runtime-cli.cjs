@@ -34,6 +34,19 @@ var import_fs3 = require("fs");
 
 // src/team/model-contract.ts
 var import_child_process = require("child_process");
+
+// src/team/team-name.ts
+var TEAM_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/;
+function validateTeamName(teamName) {
+  if (!TEAM_NAME_PATTERN.test(teamName)) {
+    throw new Error(
+      `Invalid team name: "${teamName}". Team name must match /^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/.`
+    );
+  }
+  return teamName;
+}
+
+// src/team/model-contract.ts
 var CONTRACTS = {
   claude: {
     agentType: "claude",
@@ -53,7 +66,7 @@ var CONTRACTS = {
     binary: "codex",
     installInstructions: "Install Codex CLI: npm install -g @openai/codex",
     buildLaunchArgs(model, extraFlags = []) {
-      const args = ["--full-auto"];
+      const args = ["--dangerously-bypass-approvals-and-sandbox"];
       if (model) args.push("--model", model);
       return [...args, ...extraFlags];
     },
@@ -78,6 +91,8 @@ var CONTRACTS = {
     agentType: "gemini",
     binary: "gemini",
     installInstructions: "Install Gemini CLI: npm install -g @google/gemini-cli",
+    supportsPromptMode: true,
+    promptModeFlag: "-p",
     buildLaunchArgs(model, extraFlags = []) {
       const args = ["--yolo"];
       if (model) args.push("--model", model);
@@ -115,23 +130,105 @@ function validateCliAvailable(agentType) {
 function buildLaunchArgs(agentType, config) {
   return getContract(agentType).buildLaunchArgs(config.model, config.extraFlags);
 }
-function buildWorkerCommand(agentType, config) {
+function buildWorkerArgv(agentType, config) {
+  validateTeamName(config.teamName);
   const contract = getContract(agentType);
   const args = buildLaunchArgs(agentType, config);
-  return `${contract.binary} ${args.join(" ")}`;
+  return [contract.binary, ...args];
 }
 function getWorkerEnv(teamName, workerName2, agentType) {
+  validateTeamName(teamName);
   return {
     OMC_TEAM_WORKER: `${teamName}/${workerName2}`,
     OMC_TEAM_NAME: teamName,
     OMC_WORKER_AGENT_TYPE: agentType
   };
 }
+function isPromptModeAgent(agentType) {
+  const contract = getContract(agentType);
+  return !!(contract.supportsPromptMode && contract.promptModeFlag);
+}
+function getPromptModeArgs(agentType, instruction) {
+  const contract = getContract(agentType);
+  if (contract.supportsPromptMode && contract.promptModeFlag) {
+    return [contract.promptModeFlag, instruction];
+  }
+  return [];
+}
 
 // src/team/tmux-session.ts
 var import_child_process2 = require("child_process");
 var import_path = require("path");
 var import_promises = __toESM(require("fs/promises"), 1);
+function getDefaultShell() {
+  if (process.platform === "win32") {
+    return process.env.COMSPEC || "cmd.exe";
+  }
+  return process.env.SHELL || "/bin/bash";
+}
+function escapeForCmdSet(value) {
+  return value.replace(/"/g, '""');
+}
+function shellNameFromPath(shellPath) {
+  const shellName = (0, import_path.basename)(shellPath.replace(/\\/g, "/"));
+  return shellName.replace(/\.(exe|cmd|bat)$/i, "");
+}
+function shellEscape(value) {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+function assertSafeEnvKey(key) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    throw new Error(`Invalid environment key: "${key}"`);
+  }
+}
+function getLaunchWords(config) {
+  if (config.launchBinary) {
+    return [config.launchBinary, ...config.launchArgs ?? []];
+  }
+  if (config.launchCmd) {
+    return [config.launchCmd];
+  }
+  throw new Error("Missing worker launch command. Provide launchBinary or launchCmd.");
+}
+function buildWorkerStartCommand(config) {
+  const shell = getDefaultShell();
+  const launchWords = getLaunchWords(config);
+  if (process.platform === "win32") {
+    const envPrefix = Object.entries(config.envVars).map(([k, v]) => {
+      assertSafeEnvKey(k);
+      return `set "${k}=${escapeForCmdSet(v)}"`;
+    }).join(" && ");
+    const launch = config.launchBinary ? launchWords.map((part) => `"${escapeForCmdSet(part)}"`).join(" ") : launchWords[0];
+    const cmdBody = envPrefix ? `${envPrefix} && ${launch}` : launch;
+    return `${shell} /d /s /c "${cmdBody}"`;
+  }
+  if (config.launchBinary) {
+    const envAssignments = Object.entries(config.envVars).map(([key, value]) => {
+      assertSafeEnvKey(key);
+      return `${key}=${shellEscape(value)}`;
+    });
+    const shellName2 = shellNameFromPath(shell) || "bash";
+    const rcFile2 = process.env.HOME ? `${process.env.HOME}/.${shellName2}rc` : "";
+    const script = rcFile2 ? `[ -f ${shellEscape(rcFile2)} ] && . ${shellEscape(rcFile2)}; exec "$@"` : 'exec "$@"';
+    return [
+      "env",
+      ...envAssignments,
+      shell,
+      "-lc",
+      script,
+      "--",
+      ...launchWords
+    ].map(shellEscape).join(" ");
+  }
+  const envString = Object.entries(config.envVars).map(([k, v]) => {
+    assertSafeEnvKey(k);
+    return `${k}=${shellEscape(v)}`;
+  }).join(" ");
+  const shellName = shellNameFromPath(shell) || "bash";
+  const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : "";
+  const sourceCmd = rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : "";
+  return `env ${envString} ${shell} -c "${sourceCmd}exec ${launchWords[0]}"`;
+}
 async function createTeamSession(teamName, workerCount, cwd) {
   const { execFile } = await import("child_process");
   const { promisify } = await import("util");
@@ -139,15 +236,39 @@ async function createTeamSession(teamName, workerCount, cwd) {
   if (!process.env.TMUX) {
     throw new Error("Team mode requires running inside tmux. Start one: tmux new-session");
   }
-  const contextResult = await execFileAsync("tmux", [
-    "display-message",
-    "-p",
-    "#S:#I #{pane_id}"
-  ]);
-  const contextLine = contextResult.stdout.trim();
-  const spaceIdx = contextLine.indexOf(" ");
-  const sessionAndWindow = contextLine.slice(0, spaceIdx);
-  const leaderPaneId = contextLine.slice(spaceIdx + 1);
+  const envPaneIdRaw = (process.env.TMUX_PANE ?? "").trim();
+  const envPaneId = /^%\d+$/.test(envPaneIdRaw) ? envPaneIdRaw : "";
+  let sessionAndWindow = "";
+  let leaderPaneId = envPaneId;
+  if (envPaneId) {
+    try {
+      const targetedContextResult = await execFileAsync("tmux", [
+        "display-message",
+        "-p",
+        "-t",
+        envPaneId,
+        "#S:#I"
+      ]);
+      sessionAndWindow = targetedContextResult.stdout.trim();
+    } catch {
+      sessionAndWindow = "";
+      leaderPaneId = "";
+    }
+  }
+  if (!sessionAndWindow || !leaderPaneId) {
+    const contextResult = await execFileAsync("tmux", [
+      "display-message",
+      "-p",
+      "#S:#I #{pane_id}"
+    ]);
+    const contextLine = contextResult.stdout.trim();
+    const contextMatch = contextLine.match(/^(\S+)\s+(%\d+)$/);
+    if (!contextMatch) {
+      throw new Error(`Failed to resolve tmux context: "${contextLine}"`);
+    }
+    sessionAndWindow = contextMatch[1];
+    leaderPaneId = contextMatch[2];
+  }
   const teamTarget = sessionAndWindow;
   const resolvedSessionName = teamTarget.split(":")[0];
   const workerPaneIds = [];
@@ -218,12 +339,8 @@ async function spawnWorkerInPane(sessionName, paneId, config) {
   const { execFile } = await import("child_process");
   const { promisify } = await import("util");
   const execFileAsync = promisify(execFile);
-  const envString = Object.entries(config.envVars).map(([k, v]) => `${k}=${v}`).join(" ");
-  const shell = process.env.SHELL || "/bin/bash";
-  const shellName = shell.split("/").pop() || "bash";
-  const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : "";
-  const sourceCmd = rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : "";
-  const startCmd = `env ${envString} ${shell} -c "${sourceCmd}exec ${config.launchCmd}"`;
+  validateTeamName(config.teamName);
+  const startCmd = buildWorkerStartCommand(config);
   await execFileAsync("tmux", [
     "send-keys",
     "-t",
@@ -573,6 +690,7 @@ function workerName(index) {
   return `worker-${index + 1}`;
 }
 function stateRoot(cwd, teamName) {
+  validateTeamName(teamName);
   return (0, import_path5.join)(cwd, `.omc/state/team/${teamName}`);
 }
 async function writeJson(filePath, data) {
@@ -701,6 +819,7 @@ function buildInitialTaskInstruction(teamName, workerName2, task, taskId) {
 }
 async function startTeam(config) {
   const { teamName, agentTypes, tasks, cwd } = config;
+  validateTeamName(teamName);
   for (const agentType of [...new Set(agentTypes)]) {
     validateCliAvailable(agentType);
   }
@@ -756,6 +875,7 @@ async function startTeam(config) {
   return runtime;
 }
 async function monitorTeam(teamName, cwd, workerPaneIds) {
+  validateTeamName(teamName);
   const monitorStartedAt = Date.now();
   const root = stateRoot(cwd, teamName);
   const taskScanStartedAt = Date.now();
@@ -895,17 +1015,26 @@ async function spawnWorkerForTask(runtime, workerNameValue, taskIndex) {
   if (!paneId) return "";
   const workerIndex = parseWorkerIndex(workerNameValue);
   const agentType = runtime.config.agentTypes[workerIndex % runtime.config.agentTypes.length] ?? runtime.config.agentTypes[0] ?? "claude";
+  const usePromptMode = isPromptModeAgent(agentType);
+  const instruction = buildInitialTaskInstruction(runtime.teamName, workerNameValue, task, taskId);
+  await composeInitialInbox(runtime.teamName, workerNameValue, instruction, runtime.cwd);
+  const relInboxPath = `.omc/state/team/${runtime.teamName}/workers/${workerNameValue}/inbox.md`;
   const envVars = getWorkerEnv(runtime.teamName, workerNameValue, agentType);
-  const launchCmd = buildWorkerCommand(agentType, {
+  const [launchBinary, ...launchArgs] = buildWorkerArgv(agentType, {
     teamName: runtime.teamName,
     workerName: workerNameValue,
     cwd: runtime.cwd
   });
+  if (usePromptMode) {
+    const promptArgs = getPromptModeArgs(agentType, `Read and execute your task from: ${relInboxPath}`);
+    launchArgs.push(...promptArgs);
+  }
   const paneConfig = {
     teamName: runtime.teamName,
     workerName: workerNameValue,
     envVars,
-    launchCmd,
+    launchBinary,
+    launchArgs,
     cwd: runtime.cwd
   };
   await spawnWorkerInPane(runtime.sessionName, paneId, paneConfig);
@@ -919,28 +1048,27 @@ async function spawnWorkerForTask(runtime, workerNameValue, taskIndex) {
     await writePanesTrackingFileIfPresent(runtime);
   } catch {
   }
-  await new Promise((r) => setTimeout(r, 4e3));
-  if (agentType === "gemini") {
-    const confirmed = await notifyPaneWithRetry(runtime.sessionName, paneId, "1");
-    if (!confirmed) {
+  if (!usePromptMode) {
+    await new Promise((r) => setTimeout(r, 4e3));
+    if (agentType === "gemini") {
+      const confirmed = await notifyPaneWithRetry(runtime.sessionName, paneId, "1");
+      if (!confirmed) {
+        await killWorkerPane(runtime, workerNameValue, paneId);
+        await resetTaskToPending(root, taskId);
+        throw new Error(`worker_notify_failed:${workerNameValue}:trust-confirm`);
+      }
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    const notified = await notifyPaneWithRetry(
+      runtime.sessionName,
+      paneId,
+      `Read and execute your task from: ${relInboxPath}`
+    );
+    if (!notified) {
       await killWorkerPane(runtime, workerNameValue, paneId);
       await resetTaskToPending(root, taskId);
-      throw new Error(`worker_notify_failed:${workerNameValue}:trust-confirm`);
+      throw new Error(`worker_notify_failed:${workerNameValue}:initial-inbox`);
     }
-    await new Promise((r) => setTimeout(r, 800));
-  }
-  const instruction = buildInitialTaskInstruction(runtime.teamName, workerNameValue, task, taskId);
-  await composeInitialInbox(runtime.teamName, workerNameValue, instruction, runtime.cwd);
-  const relInboxPath = `.omc/state/team/${runtime.teamName}/workers/${workerNameValue}/inbox.md`;
-  const notified = await notifyPaneWithRetry(
-    runtime.sessionName,
-    paneId,
-    `Read and execute your task from: ${relInboxPath}`
-  );
-  if (!notified) {
-    await killWorkerPane(runtime, workerNameValue, paneId);
-    await resetTaskToPending(root, taskId);
-    throw new Error(`worker_notify_failed:${workerNameValue}:initial-inbox`);
   }
   return paneId;
 }
@@ -1052,12 +1180,10 @@ async function main() {
     agentTypes,
     tasks,
     cwd,
-    timeoutSeconds = 0,
     pollIntervalMs = 5e3
   } = input;
   const workerCount = input.workerCount ?? agentTypes.length;
   const stateRoot2 = (0, import_path6.join)(cwd, `.omc/state/team/${teamName}`);
-  const timeoutMs = timeoutSeconds * 1e3;
   const config = {
     teamName,
     workerCount,
@@ -1066,10 +1192,10 @@ async function main() {
     cwd
   };
   let runtime = null;
-  let finalStatus = "timeout";
+  let finalStatus = "failed";
   let pollActive = true;
   function exitCodeFor(status) {
-    return status === "completed" ? 0 : status === "timeout" ? 2 : 1;
+    return status === "completed" ? 0 : 1;
   }
   async function doShutdown(status) {
     pollActive = false;
@@ -1126,14 +1252,7 @@ async function main() {
     process.stderr.write(`[runtime-cli] Failed to persist pane IDs: ${err}
 `);
   }
-  const deadline = timeoutSeconds > 0 ? Date.now() + timeoutMs : Infinity;
   while (pollActive) {
-    if (Date.now() > deadline) {
-      process.stderr.write(`[runtime-cli] Timeout after ${timeoutSeconds}s
-`);
-      await doShutdown("timeout");
-      return;
-    }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
     if (!pollActive) break;
     let snap;

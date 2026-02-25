@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { sanitizeName, sessionName, createSession, killSession, shouldAttemptAdaptiveRetry } from '../tmux-session.js';
+import { sanitizeName, sessionName, createSession, killSession, shouldAttemptAdaptiveRetry, getDefaultShell, buildWorkerStartCommand } from '../tmux-session.js';
+afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+});
 describe('sanitizeName', () => {
     it('passes alphanumeric names', () => {
         expect(sanitizeName('worker1')).toBe('worker1');
@@ -32,6 +36,63 @@ describe('sessionName', () => {
     });
     it('sanitizes both parts', () => {
         expect(sessionName('my team!', 'work@er')).toBe('omc-team-myteam-worker');
+    });
+});
+describe('getDefaultShell', () => {
+    it('uses COMSPEC on win32', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+        vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+        expect(getDefaultShell()).toBe('C:\\Windows\\System32\\cmd.exe');
+    });
+    it('uses SHELL on non-win32', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+        vi.stubEnv('SHELL', '/bin/zsh');
+        expect(getDefaultShell()).toBe('/bin/zsh');
+    });
+});
+describe('buildWorkerStartCommand', () => {
+    it('builds a POSIX startup command with rc sourcing', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+        vi.stubEnv('SHELL', '/bin/zsh');
+        vi.stubEnv('HOME', '/home/tester');
+        const cmd = buildWorkerStartCommand({
+            teamName: 't',
+            workerName: 'w',
+            envVars: { A: '1' },
+            launchCmd: 'node app.js',
+            cwd: '/tmp'
+        });
+        expect(cmd).toContain("env A='1' /bin/zsh -c");
+        expect(cmd).toContain('[ -f "/home/tester/.zshrc" ] && source "/home/tester/.zshrc";');
+    });
+    it('builds a Windows startup command without POSIX constructs', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+        vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+        const cmd = buildWorkerStartCommand({
+            teamName: 't',
+            workerName: 'w',
+            envVars: { A: '1' },
+            launchCmd: 'node app.js',
+            cwd: 'C:\\repo'
+        });
+        expect(cmd).toContain('C:\\Windows\\System32\\cmd.exe /d /s /c');
+        expect(cmd).toContain(' /c "set "A=1" && node app.js"');
+        expect(cmd).not.toContain('env ');
+        expect(cmd).not.toContain('[ -f ');
+        expect(cmd).not.toContain('source ');
+    });
+    it('uses basename-style shell name extraction for windows-style shell path', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+        vi.stubEnv('SHELL', 'C:\\Program Files\\Git\\bin\\bash.exe');
+        vi.stubEnv('HOME', '/home/tester');
+        const cmd = buildWorkerStartCommand({
+            teamName: 't',
+            workerName: 'w',
+            envVars: {},
+            launchCmd: 'node app.js',
+            cwd: '/tmp'
+        });
+        expect(cmd).toContain('/home/tester/.bashrc');
     });
 });
 describe('shouldAttemptAdaptiveRetry', () => {

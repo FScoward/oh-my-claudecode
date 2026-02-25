@@ -31,6 +31,8 @@ export interface OmcHudState {
   sessionStartTimestamp?: string;
   /** Session ID that owns the persisted sessionStartTimestamp */
   sessionId?: string;
+  /** Timestamp of last user prompt submission (ISO 8601) */
+  lastPromptTimestamp?: string;
 }
 
 // ============================================================================
@@ -103,16 +105,6 @@ export interface SessionHealth {
   durationMinutes: number;
   messageCount: number;
   health: 'healthy' | 'warning' | 'critical';
-
-  // Analytics fields
-  sessionCost?: number;
-  totalTokens?: number;
-  cacheHitRate?: number;
-  topAgents?: Array<{ agent: string; cost: number }>;
-
-  // NEW: Additional analytics fields
-  costPerHour?: number;
-  isEstimated?: boolean;  // True when costs are estimated (always for now)
 }
 
 export interface TranscriptData {
@@ -313,13 +305,16 @@ export interface HudRenderContext {
 
   /** Total Skill/proxy_Skill calls seen in transcript */
   skillCallCount: number;
+
+  /** Last prompt submission time (from HUD state) */
+  promptTime: Date | null;
 }
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-export type HudPreset = 'minimal' | 'focused' | 'full' | 'opencode' | 'dense' | 'analytics';
+export type HudPreset = 'minimal' | 'focused' | 'full' | 'opencode' | 'dense';
 
 /**
  * Agent display format options:
@@ -381,15 +376,12 @@ export interface HudElementConfig {
   permissionStatus: boolean;  // Show pending permission indicator
   thinking: boolean;          // Show extended thinking indicator
   thinkingFormat: ThinkingFormat;  // Thinking indicator format
+  promptTime: boolean;        // Show last prompt submission time (HH:MM:SS)
   sessionHealth: boolean;     // Show session health/duration
   showSessionDuration?: boolean;  // Show session:19m duration display (default: true if sessionHealth is true)
   showHealthIndicator?: boolean;  // Show 🟢/🟡/🔴 health indicator (default: true if sessionHealth is true)
   showTokens?: boolean;           // Show token count like 79.3k (default: true if sessionHealth is true)
-  showCostPerHour?: boolean;      // Show $X.XX/h cost per hour (default: true if sessionHealth is true)
-  showBudgetWarning?: boolean;    // Show ⚡ Budget notice warning (default: true if sessionHealth is true)
   useBars: boolean;           // Show visual progress bars instead of/alongside percentages
-  showCache: boolean;         // Show cache hit rate in analytics displays
-  showCost: boolean;          // Show cost/dollar amounts in analytics displays
   showCallCounts?: boolean;   // Show tool/agent/skill call counts on the right of the status line (default: true)
   maxOutputLines: number;     // Max total output lines to prevent input field shrinkage
   safeMode: boolean;          // Strip ANSI codes and use ASCII-only output to prevent terminal rendering corruption (Issue #346)
@@ -405,9 +397,6 @@ export interface HudThresholds {
   /** Ralph iteration that triggers warning color (default: 7) */
   ralphWarning: number;
   /** Session cost ($) that triggers budget warning (default: 2.0) */
-  budgetWarning: number;
-  /** Session cost ($) that triggers budget critical alert (default: 5.0) */
-  budgetCritical: number;
 }
 
 export interface ContextLimitWarningConfig {
@@ -452,11 +441,9 @@ export const DEFAULT_HUD_CONFIG: HudConfig = {
     permissionStatus: false,  // Disabled: heuristic-based, causes false positives
     thinking: true,
     thinkingFormat: 'text',   // Text format for backward compatibility
+    promptTime: true,  // Show last prompt time by default
     sessionHealth: true,
-    // showSessionDuration, showCostPerHour, showBudgetWarning: undefined = default to true
     useBars: false,  // Disabled by default for backwards compatibility
-    showCache: true,
-    showCost: true,
     showCallCounts: true,  // Show tool/agent/skill call counts by default (Issue #710)
     maxOutputLines: 4,
     safeMode: true,  // Enabled by default to prevent terminal rendering corruption (Issue #346)
@@ -466,8 +453,6 @@ export const DEFAULT_HUD_CONFIG: HudConfig = {
     contextCompactSuggestion: 80,
     contextCritical: 85,
     ralphWarning: 7,
-    budgetWarning: 2.0,
-    budgetCritical: 5.0,
   },
   staleTaskThresholdMinutes: 30,
   contextLimitWarning: {
@@ -500,43 +485,11 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     permissionStatus: false,
     thinking: false,
     thinkingFormat: 'text',
+    promptTime: false,
     sessionHealth: false,
     useBars: false,
-    showCache: false,
-    showCost: false,
     showCallCounts: false,
     maxOutputLines: 2,
-    safeMode: true,
-  },
-  analytics: {
-    cwd: false,
-    cwdFormat: 'folder',
-    gitRepo: false,
-    gitBranch: false,
-    model: false,
-    modelFormat: 'short',
-    omcLabel: false,
-    rateLimits: false,
-    ralph: false,
-    autopilot: false,
-    prdStory: false,
-    activeSkills: false,
-    lastSkill: false,
-    contextBar: false,
-    agents: true,
-    agentsFormat: 'codes',
-    agentsMaxLines: 0,
-    backgroundTasks: false,
-    todos: true,
-    permissionStatus: false,
-    thinking: false,
-    thinkingFormat: 'text',
-    sessionHealth: false,
-    useBars: false,
-    showCache: true,
-    showCost: true,
-    showCallCounts: true,
-    maxOutputLines: 4,
     safeMode: true,
   },
   focused: {
@@ -562,10 +515,9 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     permissionStatus: false,
     thinking: true,
     thinkingFormat: 'text',
+    promptTime: true,
     sessionHealth: true,
     useBars: true,
-    showCache: true,
-    showCost: true,
     showCallCounts: true,
     maxOutputLines: 4,
     safeMode: true,
@@ -593,10 +545,9 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     permissionStatus: false,
     thinking: true,
     thinkingFormat: 'text',
+    promptTime: true,
     sessionHealth: true,
     useBars: true,
-    showCache: true,
-    showCost: true,
     showCallCounts: true,
     maxOutputLines: 12,
     safeMode: true,
@@ -624,10 +575,9 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     permissionStatus: false,
     thinking: true,
     thinkingFormat: 'text',
+    promptTime: true,
     sessionHealth: true,
     useBars: false,
-    showCache: true,
-    showCost: true,
     showCallCounts: true,
     maxOutputLines: 4,
     safeMode: true,
@@ -655,10 +605,9 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     permissionStatus: false,
     thinking: true,
     thinkingFormat: 'text',
+    promptTime: true,
     sessionHealth: true,
     useBars: true,
-    showCache: true,
-    showCost: true,
     showCallCounts: true,
     maxOutputLines: 6,
     safeMode: true,

@@ -133,8 +133,10 @@ function stripTrailing(p: string): string {
   return toForwardSlash(p).replace(/\/+$/, '');
 }
 
-/** Default grace period: skip directories modified within the last hour. */
-const STALE_THRESHOLD_MS = 60 * 60 * 1000;
+/** Default grace period: skip directories modified within the last 24 hours.
+ * Extended from 1 hour to 24 hours to avoid deleting cache directories that
+ * are still referenced by long-running sessions via CLAUDE_PLUGIN_ROOT. */
+const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 export function purgeStalePluginCacheVersions(): PurgeCacheResult {
   const result: PurgeCacheResult = { removed: 0, removedPaths: [], errors: [] };

@@ -54,7 +54,7 @@ This integrates directly with Claude Code's plugin system and uses Node.js hooks
 Configure omc for the current project only:
 
 ```
-/oh-my-claudecode:omc-setup
+/oh-my-claudecode:omc-setup --local
 ```
 
 - Creates `./.claude/CLAUDE.md` in your current project
@@ -421,7 +421,7 @@ Just include these words anywhere in your prompt to activate enhanced modes:
 | Keyword | Effect |
 |---------|--------|
 | `ultrawork`, `ulw`, `uw` | Activates parallel agent orchestration |
-| ``, `eco`, `efficient`, `save-tokens`, `budget` | Token-efficient parallel execution |
+| `eco`, `efficient`, `save-tokens`, `budget` | Token-efficient parallel execution |
 | `autopilot`, `build me`, `I want a` | Full autonomous execution |
 | `ultrapilot`, `parallel build`, `swarm build` | Parallel autopilot (3-5x faster) |
 | `ralph`, `don't stop`, `must complete` | Persistence until verified complete |
@@ -482,11 +482,13 @@ pipeline: analyze → fix → test this bug
 
 | Platform | Install Method | Hook Type |
 |----------|---------------|-----------|
-| **Windows** | `npm install -g` | Node.js (.mjs) |
+| **Windows** | WSL2 recommended (see note) | Node.js (.mjs) |
 | **macOS** | curl or npm | Bash (.sh) |
 | **Linux** | curl or npm | Bash (.sh) |
 
 > **Note**: Bash hooks are fully portable across macOS and Linux (no GNU-specific dependencies).
+
+> **Windows**: Native Windows (win32) support is experimental. OMC requires tmux, which is not available on native Windows. **WSL2 is strongly recommended** for Windows users. See the [WSL2 installation guide](https://learn.microsoft.com/en-us/windows/wsl/install). Native Windows issues may have limited support.
 
 > **Advanced**: Set `OMC_USE_NODE_HOOKS=1` to use Node.js hooks on macOS/Linux.
 

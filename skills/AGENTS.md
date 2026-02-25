@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-01-28 | Updated: 2026-02-19 -->
+<!-- Generated: 2026-01-28 | Updated: 2026-02-24 -->
 
 # skills
 
@@ -196,4 +196,7 @@ Some skills activate automatically based on context:
 | git-master | Git operations detected |
 | cancel | "stop", "cancel", "abort" |
 
-<!-- MANUAL: -->
+<!-- MANUAL:
+- Team runtime wait semantics: `omc_run_team_wait.timeout_ms` only limits the wait call and does not stop workers.
+- `timeoutSeconds` is removed from `omc_run_team_start`; use explicit `omc_run_team_cleanup` for intentional worker pane termination.
+-->

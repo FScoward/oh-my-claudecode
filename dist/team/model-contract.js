@@ -1,4 +1,5 @@
 import { spawnSync } from 'child_process';
+import { validateTeamName } from './team-name.js';
 const CONTRACTS = {
     claude: {
         agentType: 'claude',
@@ -19,7 +20,7 @@ const CONTRACTS = {
         binary: 'codex',
         installInstructions: 'Install Codex CLI: npm install -g @openai/codex',
         buildLaunchArgs(model, extraFlags = []) {
-            const args = ['--full-auto'];
+            const args = ['--dangerously-bypass-approvals-and-sandbox'];
             if (model)
                 args.push('--model', model);
             return [...args, ...extraFlags];
@@ -48,6 +49,8 @@ const CONTRACTS = {
         agentType: 'gemini',
         binary: 'gemini',
         installInstructions: 'Install Gemini CLI: npm install -g @google/gemini-cli',
+        supportsPromptMode: true,
+        promptModeFlag: '-p',
         buildLaunchArgs(model, extraFlags = []) {
             const args = ['--yolo'];
             if (model)
@@ -85,12 +88,19 @@ export function validateCliAvailable(agentType) {
 export function buildLaunchArgs(agentType, config) {
     return getContract(agentType).buildLaunchArgs(config.model, config.extraFlags);
 }
-export function buildWorkerCommand(agentType, config) {
+export function buildWorkerArgv(agentType, config) {
+    validateTeamName(config.teamName);
     const contract = getContract(agentType);
     const args = buildLaunchArgs(agentType, config);
-    return `${contract.binary} ${args.join(' ')}`;
+    return [contract.binary, ...args];
+}
+export function buildWorkerCommand(agentType, config) {
+    return buildWorkerArgv(agentType, config)
+        .map((part) => `'${part.replace(/'/g, `'\"'\"'`)}'`)
+        .join(' ');
 }
 export function getWorkerEnv(teamName, workerName, agentType) {
+    validateTeamName(teamName);
     return {
         OMC_TEAM_WORKER: `${teamName}/${workerName}`,
         OMC_TEAM_NAME: teamName,
@@ -99,5 +109,23 @@ export function getWorkerEnv(teamName, workerName, agentType) {
 }
 export function parseCliOutput(agentType, rawOutput) {
     return getContract(agentType).parseOutput(rawOutput);
+}
+/**
+ * Check if an agent type supports prompt/headless mode (bypasses TUI).
+ */
+export function isPromptModeAgent(agentType) {
+    const contract = getContract(agentType);
+    return !!(contract.supportsPromptMode && contract.promptModeFlag);
+}
+/**
+ * Get the extra CLI args needed to pass an instruction in prompt mode.
+ * Returns empty array if the agent does not support prompt mode.
+ */
+export function getPromptModeArgs(agentType, instruction) {
+    const contract = getContract(agentType);
+    if (contract.supportsPromptMode && contract.promptModeFlag) {
+        return [contract.promptModeFlag, instruction];
+    }
+    return [];
 }
 //# sourceMappingURL=model-contract.js.map

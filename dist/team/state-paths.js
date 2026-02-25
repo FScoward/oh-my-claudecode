@@ -49,4 +49,39 @@ export function absPath(cwd, relativePath) {
 export function teamStateRoot(cwd, teamName) {
     return join(cwd, TeamPaths.root(teamName));
 }
+/**
+ * Canonical task storage path builder.
+ *
+ * All task files live at:
+ *   {cwd}/.omc/state/team/{teamName}/tasks/{taskId}.json
+ *
+ * When taskId is omitted, returns the tasks directory:
+ *   {cwd}/.omc/state/team/{teamName}/tasks/
+ *
+ * Use this as the single source of truth for task file locations.
+ * New writes always use this canonical path.
+ */
+export function getTaskStoragePath(cwd, teamName, taskId) {
+    if (taskId !== undefined) {
+        return join(cwd, TeamPaths.taskFile(teamName, taskId));
+    }
+    return join(cwd, TeamPaths.tasks(teamName));
+}
+/**
+ * Legacy task storage path builder (deprecated).
+ *
+ * Old location: ~/.claude/tasks/{teamName}/{taskId}.json
+ *
+ * Used only by the compatibility shim in task-file-ops.ts to check
+ * for data written by older versions during reads. New code must not
+ * write to this path.
+ *
+ * @deprecated Use getTaskStoragePath instead.
+ */
+export function getLegacyTaskStoragePath(claudeConfigDir, teamName, taskId) {
+    if (taskId !== undefined) {
+        return join(claudeConfigDir, 'tasks', teamName, `${taskId}.json`);
+    }
+    return join(claudeConfigDir, 'tasks', teamName);
+}
 //# sourceMappingURL=state-paths.js.map

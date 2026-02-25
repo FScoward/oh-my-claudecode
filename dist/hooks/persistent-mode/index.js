@@ -171,23 +171,30 @@ export function getIdleNotificationCooldownSeconds() {
         const config = JSON.parse(readFileSync(configPath, 'utf-8'));
         const cooldown = config?.notificationCooldown;
         const val = cooldown?.sessionIdleSeconds;
-        if (typeof val === 'number')
-            return val;
+        if (typeof val === 'number' && Number.isFinite(val))
+            return Math.max(0, val);
     }
     catch {
         // ignore parse errors
     }
     return 60;
 }
+function getIdleNotificationCooldownPath(stateDir, sessionId) {
+    // Keep session segments filesystem-safe; fall back to legacy global path otherwise.
+    if (sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) {
+        return join(stateDir, 'sessions', sessionId, 'idle-notif-cooldown.json');
+    }
+    return join(stateDir, 'idle-notif-cooldown.json');
+}
 /**
  * Check whether the session-idle notification cooldown has elapsed.
  * Returns true if the notification should be sent.
  */
-export function shouldSendIdleNotification(stateDir) {
+export function shouldSendIdleNotification(stateDir, sessionId) {
     const cooldownSecs = getIdleNotificationCooldownSeconds();
     if (cooldownSecs === 0)
         return true; // cooldown disabled
-    const cooldownPath = join(stateDir, 'idle-notif-cooldown.json');
+    const cooldownPath = getIdleNotificationCooldownPath(stateDir, sessionId);
     try {
         if (!existsSync(cooldownPath))
             return true;
@@ -206,8 +213,8 @@ export function shouldSendIdleNotification(stateDir) {
 /**
  * Record that the session-idle notification was sent at the current timestamp.
  */
-export function recordIdleNotificationSent(stateDir) {
-    const cooldownPath = join(stateDir, 'idle-notif-cooldown.json');
+export function recordIdleNotificationSent(stateDir, sessionId) {
+    const cooldownPath = getIdleNotificationCooldownPath(stateDir, sessionId);
     try {
         const dir = dirname(cooldownPath);
         if (!existsSync(dir)) {

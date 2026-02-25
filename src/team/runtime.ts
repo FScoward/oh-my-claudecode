@@ -2,7 +2,8 @@ import { mkdir, writeFile, readFile, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import type { CliAgentType } from './model-contract.js';
-import { buildWorkerCommand, validateCliAvailable, getWorkerEnv as getModelWorkerEnv } from './model-contract.js';
+import { buildWorkerArgv, validateCliAvailable, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs } from './model-contract.js';
+import { validateTeamName } from './team-name.js';
 import {
   createTeamSession, spawnWorkerInPane, sendToWorker,
   isWorkerAlive, killTeamSession,
@@ -93,6 +94,7 @@ function workerName(index: number): string {
 }
 
 function stateRoot(cwd: string, teamName: string): string {
+  validateTeamName(teamName);
   return join(cwd, `.omc/state/team/${teamName}`);
 }
 
@@ -261,6 +263,7 @@ function buildInitialTaskInstruction(
  */
 export async function startTeam(config: TeamConfig): Promise<TeamRuntime> {
   const { teamName, agentTypes, tasks, cwd } = config;
+  validateTeamName(teamName);
 
   // Validate CLIs are available
   for (const agentType of [...new Set(agentTypes)]) {
@@ -332,6 +335,7 @@ export async function startTeam(config: TeamConfig): Promise<TeamRuntime> {
  * Monitor team: poll worker health, detect stalls, return snapshot.
  */
 export async function monitorTeam(teamName: string, cwd: string, workerPaneIds: string[]): Promise<TeamSnapshot> {
+  validateTeamName(teamName);
   const monitorStartedAt = Date.now();
   const root = stateRoot(cwd, teamName);
 
@@ -502,17 +506,35 @@ export async function spawnWorkerForTask(
   const agentType = runtime.config.agentTypes[workerIndex % runtime.config.agentTypes.length]
     ?? runtime.config.agentTypes[0]
     ?? 'claude';
+  const usePromptMode = isPromptModeAgent(agentType);
+
+  // Build the initial task instruction and write inbox before spawn.
+  // For prompt-mode agents the instruction is passed via CLI flag;
+  // for interactive agents it is sent via tmux send-keys after startup.
+  const instruction = buildInitialTaskInstruction(runtime.teamName, workerNameValue, task, taskId);
+  await composeInitialInbox(runtime.teamName, workerNameValue, instruction, runtime.cwd);
+  const relInboxPath = `.omc/state/team/${runtime.teamName}/workers/${workerNameValue}/inbox.md`;
+
   const envVars = getModelWorkerEnv(runtime.teamName, workerNameValue, agentType);
-  const launchCmd = buildWorkerCommand(agentType, {
+  const [launchBinary, ...launchArgs] = buildWorkerArgv(agentType, {
     teamName: runtime.teamName,
     workerName: workerNameValue,
     cwd: runtime.cwd,
   });
+
+  // For prompt-mode agents (e.g. Gemini Ink TUI), pass instruction via CLI
+  // flag so tmux send-keys never needs to interact with the TUI input widget.
+  if (usePromptMode) {
+    const promptArgs = getPromptModeArgs(agentType, `Read and execute your task from: ${relInboxPath}`);
+    launchArgs.push(...promptArgs);
+  }
+
   const paneConfig: WorkerPaneConfig = {
     teamName: runtime.teamName,
     workerName: workerNameValue,
     envVars,
-    launchCmd,
+    launchBinary,
+    launchArgs,
     cwd: runtime.cwd,
   };
 
@@ -533,31 +555,33 @@ export async function spawnWorkerForTask(
     // panes tracking is best-effort
   }
 
-  // Allow agent CLI startup before sending instruction trigger.
-  await new Promise(r => setTimeout(r, 4000));
-  if (agentType === 'gemini') {
-    const confirmed = await notifyPaneWithRetry(runtime.sessionName, paneId, '1');
-    if (!confirmed) {
+  if (!usePromptMode) {
+    // Interactive mode: wait for CLI startup, handle trust-confirm, then
+    // send instruction via tmux send-keys.
+    await new Promise(r => setTimeout(r, 4000));
+    if (agentType === 'gemini') {
+      const confirmed = await notifyPaneWithRetry(runtime.sessionName, paneId, '1');
+      if (!confirmed) {
+        await killWorkerPane(runtime, workerNameValue, paneId);
+        await resetTaskToPending(root, taskId);
+        throw new Error(`worker_notify_failed:${workerNameValue}:trust-confirm`);
+      }
+      await new Promise(r => setTimeout(r, 800));
+    }
+
+    const notified = await notifyPaneWithRetry(
+      runtime.sessionName,
+      paneId,
+      `Read and execute your task from: ${relInboxPath}`
+    );
+    if (!notified) {
       await killWorkerPane(runtime, workerNameValue, paneId);
       await resetTaskToPending(root, taskId);
-      throw new Error(`worker_notify_failed:${workerNameValue}:trust-confirm`);
+      throw new Error(`worker_notify_failed:${workerNameValue}:initial-inbox`);
     }
-    await new Promise(r => setTimeout(r, 800));
   }
-
-  const instruction = buildInitialTaskInstruction(runtime.teamName, workerNameValue, task, taskId);
-  await composeInitialInbox(runtime.teamName, workerNameValue, instruction, runtime.cwd);
-  const relInboxPath = `.omc/state/team/${runtime.teamName}/workers/${workerNameValue}/inbox.md`;
-  const notified = await notifyPaneWithRetry(
-    runtime.sessionName,
-    paneId,
-    `Read and execute your task from: ${relInboxPath}`
-  );
-  if (!notified) {
-    await killWorkerPane(runtime, workerNameValue, paneId);
-    await resetTaskToPending(root, taskId);
-    throw new Error(`worker_notify_failed:${workerNameValue}:initial-inbox`);
-  }
+  // Prompt-mode agents: instruction already passed via CLI flag at spawn.
+  // No trust-confirm or tmux send-keys interaction needed.
 
   return paneId;
 }

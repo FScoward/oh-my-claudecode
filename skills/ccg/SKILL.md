@@ -65,8 +65,7 @@ mcp__team__omc_run_team_start({
     {"subject": "Codex task: ...", "description": "Full description of analytical work..."},
     {"subject": "Gemini task: ...", "description": "Full description of design/UI work..."}
   ],
-  "cwd": "{cwd}",
-  "timeoutSeconds": 300
+  "cwd": "{cwd}"
 })
 ```
 
@@ -83,13 +82,14 @@ mcp__team__omc_run_team_wait({
 })
 ```
 
-> **Timeout guidance:** Use `60000` (60 s) as default. On timeout, workers keep running.
-> Call `omc_run_team_wait` again to keep waiting, or `omc_run_team_cleanup` to cancel.
+> **Timeout guidance:** `timeout_ms` is optional; the default wait timeout is fine.
+> If wait times out, workers/panes keep running. Call `omc_run_team_wait` again to keep
+> waiting. Use `omc_run_team_cleanup` only for explicit cancel intent.
 
 Returns when done:
 ```json
 {
-  "status": "completed|failed|timeout",
+  "status": "completed|failed",
   "result": {
     "taskResults": [
       {"taskId": "1", "status": "completed", "summary": "..."},

@@ -31,7 +31,11 @@ import { readProbeResult, writeProbeResult, registerMcpWorker, unregisterMcpWork
 // ============================================================
 const EDGE_TEAM_TASKS = 'test-edge-tasks';
 const EDGE_TEAM_IO = 'test-edge-io';
-const TASKS_DIR = join(homedir(), '.claude', 'tasks', EDGE_TEAM_TASKS);
+// task-file-ops tests use canonical path via cwd
+let TASK_TEST_CWD;
+let TASKS_DIR;
+// inbox-outbox tests still use the legacy ~/.claude/teams path (inbox-outbox.ts
+// was not changed in this refactor and still uses getClaudeConfigDir internally)
 const TEAMS_IO_DIR = join(homedir(), '.claude', 'teams', EDGE_TEAM_IO);
 const HB_DIR = join(tmpdir(), 'test-edge-hb');
 const REG_DIR = join(tmpdir(), 'test-edge-reg');
@@ -58,15 +62,17 @@ function makeHeartbeat(overrides) {
 // ============================================================
 describe('task-file-ops edge cases', () => {
     beforeEach(() => {
+        TASK_TEST_CWD = join(tmpdir(), `omc-edge-tasks-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        TASKS_DIR = join(TASK_TEST_CWD, '.omc', 'state', 'team', EDGE_TEAM_TASKS, 'tasks');
         mkdirSync(TASKS_DIR, { recursive: true });
     });
     afterEach(() => {
-        rmSync(TASKS_DIR, { recursive: true, force: true });
+        rmSync(TASK_TEST_CWD, { recursive: true, force: true });
     });
     describe('updateTask on non-existent file', () => {
         it('throws when task file does not exist', () => {
             // updateTask calls readFileSync directly without existsSync guard
-            expect(() => updateTask(EDGE_TEAM_TASKS, 'nonexistent', { status: 'completed' }))
+            expect(() => updateTask(EDGE_TEAM_TASKS, 'nonexistent', { status: 'completed' }, { cwd: TASK_TEST_CWD }))
                 .toThrow();
         });
     });
@@ -77,8 +83,8 @@ describe('task-file-ops edge cases', () => {
                 owner: 'w1', blocks: [], blockedBy: [],
             };
             writeTaskHelper(task);
-            updateTask(EDGE_TEAM_TASKS, '1', {});
-            const result = readTask(EDGE_TEAM_TASKS, '1');
+            updateTask(EDGE_TEAM_TASKS, '1', {}, { cwd: TASK_TEST_CWD });
+            const result = readTask(EDGE_TEAM_TASKS, '1', { cwd: TASK_TEST_CWD });
             expect(result).toEqual(task);
         });
     });
@@ -90,8 +96,8 @@ describe('task-file-ops edge cases', () => {
             };
             writeTaskHelper(task);
             // Passing an update with owner set to undefined should not wipe the owner
-            updateTask(EDGE_TEAM_TASKS, '1', { owner: undefined, status: 'in_progress' });
-            const result = readTask(EDGE_TEAM_TASKS, '1');
+            updateTask(EDGE_TEAM_TASKS, '1', { owner: undefined, status: 'in_progress' }, { cwd: TASK_TEST_CWD });
+            const result = readTask(EDGE_TEAM_TASKS, '1', { cwd: TASK_TEST_CWD });
             expect(result?.owner).toBe('w1');
             expect(result?.status).toBe('in_progress');
         });
@@ -102,7 +108,7 @@ describe('task-file-ops edge cases', () => {
             writeTaskHelper({ id: '2', subject: 'T', description: 'D', status: 'pending', owner: 'w', blocks: [], blockedBy: [] });
             writeTaskHelper({ id: 'abc', subject: 'T', description: 'D', status: 'pending', owner: 'w', blocks: [], blockedBy: [] });
             writeTaskHelper({ id: '1', subject: 'T', description: 'D', status: 'pending', owner: 'w', blocks: [], blockedBy: [] });
-            const ids = listTaskIds(EDGE_TEAM_TASKS);
+            const ids = listTaskIds(EDGE_TEAM_TASKS, { cwd: TASK_TEST_CWD });
             // Numeric ones should be sorted numerically; alpha falls to localeCompare
             // The sort function: if both parse as number, numeric sort; else localeCompare
             // Since '1','2','10' are numeric and 'abc' is NaN, mixed comparison uses localeCompare
@@ -119,13 +125,13 @@ describe('task-file-ops edge cases', () => {
         it('returns empty when directory has no .json files', () => {
             writeFileSync(join(TASKS_DIR, 'README.md'), 'not a task');
             writeFileSync(join(TASKS_DIR, 'notes.txt'), 'not a task');
-            expect(listTaskIds(EDGE_TEAM_TASKS)).toEqual([]);
+            expect(listTaskIds(EDGE_TEAM_TASKS, { cwd: TASK_TEST_CWD })).toEqual([]);
         });
     });
     describe('areBlockersResolved with nonexistent blocker', () => {
         it('returns false when blocker task file does not exist', () => {
             // Blocker ID references a task that was never created
-            expect(areBlockersResolved(EDGE_TEAM_TASKS, ['does-not-exist'])).toBe(false);
+            expect(areBlockersResolved(EDGE_TEAM_TASKS, ['does-not-exist'], { cwd: TASK_TEST_CWD })).toBe(false);
         });
     });
     describe('areBlockersResolved with in_progress blocker', () => {
@@ -134,12 +140,12 @@ describe('task-file-ops edge cases', () => {
                 id: 'blocker', subject: 'B', description: 'D',
                 status: 'in_progress', owner: 'w', blocks: [], blockedBy: [],
             });
-            expect(areBlockersResolved(EDGE_TEAM_TASKS, ['blocker'])).toBe(false);
+            expect(areBlockersResolved(EDGE_TEAM_TASKS, ['blocker'], { cwd: TASK_TEST_CWD })).toBe(false);
         });
     });
     describe('findNextTask returns null for nonexistent team', () => {
         it('returns null gracefully when team directory missing', async () => {
-            expect(await findNextTask('completely_nonexistent_team_xyz', 'w1')).toBeNull();
+            expect(await findNextTask('completely_nonexistent_team_xyz', 'w1', { cwd: TASK_TEST_CWD })).toBeNull();
         });
     });
     describe('findNextTask with in_progress task', () => {
@@ -148,20 +154,20 @@ describe('task-file-ops edge cases', () => {
                 id: '1', subject: 'T', description: 'D',
                 status: 'in_progress', owner: 'w1', blocks: [], blockedBy: [],
             });
-            expect(await findNextTask(EDGE_TEAM_TASKS, 'w1')).toBeNull();
+            expect(await findNextTask(EDGE_TEAM_TASKS, 'w1', { cwd: TASK_TEST_CWD })).toBeNull();
         });
     });
     describe('readTask with empty file', () => {
         it('returns null for empty JSON file', () => {
             writeFileSync(join(TASKS_DIR, 'empty.json'), '');
-            expect(readTask(EDGE_TEAM_TASKS, 'empty')).toBeNull();
+            expect(readTask(EDGE_TEAM_TASKS, 'empty', { cwd: TASK_TEST_CWD })).toBeNull();
         });
     });
     describe('readTask with valid JSON but non-object', () => {
         it('returns the parsed value (no schema validation)', () => {
             writeFileSync(join(TASKS_DIR, 'array.json'), '[]');
             // readTask just does JSON.parse and casts, so an array would be returned
-            const result = readTask(EDGE_TEAM_TASKS, 'array');
+            const result = readTask(EDGE_TEAM_TASKS, 'array', { cwd: TASK_TEST_CWD });
             expect(result).toEqual([]);
         });
     });
@@ -171,8 +177,8 @@ describe('task-file-ops edge cases', () => {
             mkdirSync(TASKS_DIR, { recursive: true });
             writeFileSync(join(TASKS_DIR, 'corrupt.failure.json'), '{not valid json');
             // readTaskFailure returns null for corrupt -> retryCount starts at 1
-            writeTaskFailure(EDGE_TEAM_TASKS, 'corrupt', 'new error');
-            const failure = readTaskFailure(EDGE_TEAM_TASKS, 'corrupt');
+            writeTaskFailure(EDGE_TEAM_TASKS, 'corrupt', 'new error', { cwd: TASK_TEST_CWD });
+            const failure = readTaskFailure(EDGE_TEAM_TASKS, 'corrupt', { cwd: TASK_TEST_CWD });
             expect(failure?.retryCount).toBe(1);
             expect(failure?.lastError).toBe('new error');
         });
@@ -181,7 +187,7 @@ describe('task-file-ops edge cases', () => {
         it('returns null for corrupt failure sidecar', () => {
             mkdirSync(TASKS_DIR, { recursive: true });
             writeFileSync(join(TASKS_DIR, 'bad.failure.json'), 'not json at all');
-            expect(readTaskFailure(EDGE_TEAM_TASKS, 'bad')).toBeNull();
+            expect(readTaskFailure(EDGE_TEAM_TASKS, 'bad', { cwd: TASK_TEST_CWD })).toBeNull();
         });
     });
     describe('task ID with special characters', () => {
@@ -192,7 +198,7 @@ describe('task-file-ops edge cases', () => {
                 status: 'pending', owner: 'w1', blocks: [], blockedBy: [],
             };
             writeTaskHelper(task);
-            const result = readTask(EDGE_TEAM_TASKS, 'v1.2.3');
+            const result = readTask(EDGE_TEAM_TASKS, 'v1.2.3', { cwd: TASK_TEST_CWD });
             expect(result?.id).toBe('v1.2.3');
         });
     });
@@ -201,7 +207,7 @@ describe('task-file-ops edge cases', () => {
             writeTaskHelper({ id: '1', subject: 'T', description: 'D', status: 'pending', owner: 'w', blocks: [], blockedBy: [] });
             writeFileSync(join(TASKS_DIR, '1.json.tmp.99999'), '{}');
             writeFileSync(join(TASKS_DIR, '2.json.tmp.1'), '{}');
-            const ids = listTaskIds(EDGE_TEAM_TASKS);
+            const ids = listTaskIds(EDGE_TEAM_TASKS, { cwd: TASK_TEST_CWD });
             expect(ids).toEqual(['1']);
         });
     });
@@ -214,8 +220,8 @@ describe('task-file-ops edge cases', () => {
                 id: '1', subject: 'T', description: 'D',
                 status: 'completed', owner: 'w1', blocks: [], blockedBy: [],
             });
-            updateTask(EDGE_TEAM_TASKS, '1', { status: 'pending' });
-            const result = readTask(EDGE_TEAM_TASKS, '1');
+            updateTask(EDGE_TEAM_TASKS, '1', { status: 'pending' }, { cwd: TASK_TEST_CWD });
+            const result = readTask(EDGE_TEAM_TASKS, '1', { cwd: TASK_TEST_CWD });
             expect(result?.status).toBe('pending');
         });
     });
@@ -224,7 +230,7 @@ describe('task-file-ops edge cases', () => {
             writeTaskHelper({ id: '3', subject: 'T3', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
             writeTaskHelper({ id: '1', subject: 'T1', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
             writeTaskHelper({ id: '2', subject: 'T2', description: 'D', status: 'pending', owner: 'w1', blocks: [], blockedBy: [] });
-            const result = await findNextTask(EDGE_TEAM_TASKS, 'w1');
+            const result = await findNextTask(EDGE_TEAM_TASKS, 'w1', { cwd: TASK_TEST_CWD });
             expect(result?.id).toBe('1');
         });
     });
@@ -345,8 +351,8 @@ describe('inbox-outbox edge cases', () => {
             rotateOutboxIfNeeded(EDGE_TEAM_IO, 'w1', 0);
             const lines = readFileSync(join(TEAMS_IO_DIR, 'outbox', 'w1.jsonl'), 'utf-8')
                 .trim().split('\n').filter(l => l.trim());
-            // slice(-0) === slice(0) === full array, so 1 line is preserved
-            expect(lines).toHaveLength(1);
+            // keepCount === 0 clears the outbox
+            expect(lines).toHaveLength(0);
         });
     });
     describe('clearInbox when files do not exist', () => {

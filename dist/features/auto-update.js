@@ -44,11 +44,21 @@ function syncMarketplaceClone(verbose = false) {
         execSync(`git -C "${marketplacePath}" checkout main`, { ...execOpts, timeout: 15000 });
     }
     catch { /* ignore checkout errors on older clones */ }
+    // Reset to upstream state -- the marketplace clone is a managed read-only
+    // checkout, so any local modifications (e.g. regenerated dist files) can be
+    // safely discarded.  This avoids the "dirty worktree" failure that
+    // `git pull --ff-only` would hit when untracked/modified files exist (#978).
     try {
-        execSync(`git -C "${marketplacePath}" pull --ff-only origin main`, execOpts);
+        execSync(`git -C "${marketplacePath}" reset --hard origin/main`, execOpts);
     }
     catch (err) {
-        return { ok: false, message: `Failed to update marketplace clone: ${err instanceof Error ? err.message : err}` };
+        return { ok: false, message: `Failed to reset marketplace clone: ${err instanceof Error ? err.message : err}` };
+    }
+    try {
+        execSync(`git -C "${marketplacePath}" clean -fd`, execOpts);
+    }
+    catch {
+        // clean is best-effort; untracked leftovers won't break anything
     }
     return { ok: true, message: 'Marketplace clone updated' };
 }

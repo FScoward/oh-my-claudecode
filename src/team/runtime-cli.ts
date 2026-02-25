@@ -18,7 +18,6 @@ interface CliInput {
   agentTypes: string[];
   tasks: Array<{ subject: string; description: string }>;
   cwd: string;
-  timeoutSeconds?: number;
   pollIntervalMs?: number;
 }
 
@@ -29,7 +28,7 @@ interface TaskResult {
 }
 
 interface CliOutput {
-  status: 'completed' | 'failed' | 'timeout';
+  status: 'completed' | 'failed';
   teamName: string;
   taskResults: TaskResult[];
   duration: number;
@@ -108,13 +107,11 @@ async function main(): Promise<void> {
     agentTypes,
     tasks,
     cwd,
-    timeoutSeconds = 0,
     pollIntervalMs = 5000,
   } = input;
 
   const workerCount = input.workerCount ?? agentTypes.length;
   const stateRoot = join(cwd, `.omc/state/team/${teamName}`);
-  const timeoutMs = timeoutSeconds * 1000;
 
   const config: TeamConfig = {
     teamName,
@@ -125,14 +122,14 @@ async function main(): Promise<void> {
   };
 
   let runtime: TeamRuntime | null = null;
-  let finalStatus: 'completed' | 'failed' | 'timeout' = 'timeout';
+  let finalStatus: 'completed' | 'failed' = 'failed';
   let pollActive = true;
 
-  function exitCodeFor(status: 'completed' | 'failed' | 'timeout'): number {
-    return status === 'completed' ? 0 : status === 'timeout' ? 2 : 1;
+  function exitCodeFor(status: 'completed' | 'failed'): number {
+    return status === 'completed' ? 0 : 1;
   }
 
-  async function doShutdown(status: 'completed' | 'failed' | 'timeout'): Promise<void> {
+  async function doShutdown(status: 'completed' | 'failed'): Promise<void> {
     pollActive = false;
     finalStatus = status;
 
@@ -194,7 +191,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Persist pane IDs to disk so MCP server can clean up after timeout (Step 1)
+  // Persist pane IDs so MCP server can clean up explicitly via omc_run_team_cleanup.
   const jobId = process.env.OMC_JOB_ID;
   try {
     await writePanesFile(jobId, runtime.workerPaneIds, runtime.leaderPaneId);
@@ -203,15 +200,7 @@ async function main(): Promise<void> {
   }
 
   // Poll loop
-  const deadline = timeoutSeconds > 0 ? Date.now() + timeoutMs : Infinity;
-
   while (pollActive) {
-    if (Date.now() > deadline) {
-      process.stderr.write(`[runtime-cli] Timeout after ${timeoutSeconds}s\n`);
-      await doShutdown('timeout');
-      return;
-    }
-
     await new Promise(r => setTimeout(r, pollIntervalMs));
 
     if (!pollActive) break;

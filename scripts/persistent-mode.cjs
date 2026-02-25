@@ -18,7 +18,7 @@ const {
 const { join, dirname, resolve, normalize } = require("path");
 const { homedir } = require("os");
 
-async function readStdin(timeoutMs = 5000) {
+async function readStdin(timeoutMs = 2000) {
   return new Promise((resolve) => {
     const chunks = [];
     let settled = false;

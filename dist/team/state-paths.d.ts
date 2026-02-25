@@ -44,4 +44,29 @@ export declare function absPath(cwd: string, relativePath: string): string;
  * Get absolute root path for a team's state directory.
  */
 export declare function teamStateRoot(cwd: string, teamName: string): string;
+/**
+ * Canonical task storage path builder.
+ *
+ * All task files live at:
+ *   {cwd}/.omc/state/team/{teamName}/tasks/{taskId}.json
+ *
+ * When taskId is omitted, returns the tasks directory:
+ *   {cwd}/.omc/state/team/{teamName}/tasks/
+ *
+ * Use this as the single source of truth for task file locations.
+ * New writes always use this canonical path.
+ */
+export declare function getTaskStoragePath(cwd: string, teamName: string, taskId?: string): string;
+/**
+ * Legacy task storage path builder (deprecated).
+ *
+ * Old location: ~/.claude/tasks/{teamName}/{taskId}.json
+ *
+ * Used only by the compatibility shim in task-file-ops.ts to check
+ * for data written by older versions during reads. New code must not
+ * write to this path.
+ *
+ * @deprecated Use getTaskStoragePath instead.
+ */
+export declare function getLegacyTaskStoragePath(claudeConfigDir: string, teamName: string, taskId?: string): string;
 //# sourceMappingURL=state-paths.d.ts.map

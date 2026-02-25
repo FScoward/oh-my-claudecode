@@ -1,13 +1,12 @@
 /**
- * Tests for per-session idle notification cooldown (issue #842).
- * Verifies that the TS hook path in bridge.ts uses the same cooldown logic
- * as scripts/persistent-mode.cjs.
+ * Tests for session-scoped idle notification cooldown.
+ * Verifies each session has independent cooldown state.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 import {
   shouldSendIdleNotification,
   recordIdleNotificationSent,
@@ -61,6 +60,24 @@ describe("idle notification cooldown (issue #842)", () => {
       writeFileSync(cooldownPath, JSON.stringify({ other: "field" }));
       expect(shouldSendIdleNotification(stateDir)).toBe(true);
     });
+
+    it("uses session-scoped cooldown path when sessionId is provided", () => {
+      const sessionId = "session-abc";
+      const cooldownPath = join(
+        stateDir,
+        "sessions",
+        sessionId,
+        "idle-notif-cooldown.json"
+      );
+      mkdirSync(dirname(cooldownPath), { recursive: true });
+      writeFileSync(
+        cooldownPath,
+        JSON.stringify({ lastSentAt: new Date().toISOString() })
+      );
+
+      expect(shouldSendIdleNotification(stateDir, sessionId)).toBe(false);
+      expect(shouldSendIdleNotification(stateDir, "different-session")).toBe(true);
+    });
   });
 
   describe("recordIdleNotificationSent", () => {
@@ -98,6 +115,22 @@ describe("idle notification cooldown (issue #842)", () => {
       recordIdleNotificationSent(deepStateDir);
 
       expect(existsSync(join(deepStateDir, "idle-notif-cooldown.json"))).toBe(true);
+    });
+
+    it("writes to session-scoped path when sessionId is provided", () => {
+      const sessionId = "session-xyz";
+      const cooldownPath = join(
+        stateDir,
+        "sessions",
+        sessionId,
+        "idle-notif-cooldown.json"
+      );
+      expect(existsSync(cooldownPath)).toBe(false);
+
+      recordIdleNotificationSent(stateDir, sessionId);
+
+      expect(existsSync(cooldownPath)).toBe(true);
+      expect(existsSync(join(stateDir, "idle-notif-cooldown.json"))).toBe(false);
     });
   });
 

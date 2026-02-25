@@ -5,12 +5,12 @@
  * - killWorkerPanes: leader-pane guard, empty no-op, shutdown sentinel write
  * - killTeamSession: never kill-session on split-pane (':'), leader-pane skip
  * - validateJobId regex logic (inline, since function is internal to team-server.ts)
- * - exit-code mapping: exitCodeFor logic
+ * - exit-code mapping: runtime-cli exitCodeFor logic (no dedicated timeout exit code)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdirSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 // ─── killWorkerPanes + killTeamSession ───────────────────────────────────────
 // Mock child_process so tmux calls don't require a real tmux install
@@ -157,15 +157,72 @@ describe('validateJobId regex (/^omc-[a-z0-9]{1,12}$/)', () => {
         expect(JOB_ID_RE.test('omc-')).toBe(false);
     });
 });
+describe('team start validation wiring', () => {
+    it('validates teamName at omc_run_team_start API boundary', () => {
+        const source = readFileSync(join(__dirname, '..', 'team-server.ts'), 'utf-8');
+        expect(source).toContain("import { validateTeamName } from '../team/team-name.js'");
+        expect(source).toContain('validateTeamName(input.teamName);');
+    });
+    it('contains timeoutSeconds deprecation guard in omc_run_team_start', () => {
+        const source = readFileSync(join(__dirname, '..', 'team-server.ts'), 'utf-8');
+        expect(source).toContain("hasOwnProperty.call(args, 'timeoutSeconds')");
+        expect(source).toContain('no longer accepts timeoutSeconds');
+    });
+});
+// ─── timeoutSeconds rejection (runtime) ──────────────────────────────────────
+// Import handleStart indirectly by re-implementing the guard inline, matching
+// the exact logic in team-server.ts. This avoids ESM/CJS import complexity
+// while still testing the runtime rejection path as a unit.
+function handleStartGuard(args) {
+    if (typeof args === 'object'
+        && args !== null
+        && Object.prototype.hasOwnProperty.call(args, 'timeoutSeconds')) {
+        throw new Error('omc_run_team_start no longer accepts timeoutSeconds. Remove timeoutSeconds and use omc_run_team_wait timeout_ms to limit the wait call only (workers keep running until completion or explicit omc_run_team_cleanup).');
+    }
+}
+describe('omc_run_team_start timeoutSeconds rejection', () => {
+    it('throws when timeoutSeconds is present', () => {
+        expect(() => handleStartGuard({
+            teamName: 'test',
+            agentTypes: ['claude'],
+            tasks: [{ subject: 'x', description: 'y' }],
+            cwd: '/tmp',
+            timeoutSeconds: 60,
+        })).toThrow('no longer accepts timeoutSeconds');
+    });
+    it('error message includes migration guidance (omc_run_team_wait + omc_run_team_cleanup)', () => {
+        expect(() => handleStartGuard({
+            teamName: 'test',
+            agentTypes: ['claude'],
+            tasks: [],
+            cwd: '/tmp',
+            timeoutSeconds: 30,
+        })).toThrow('omc_run_team_wait timeout_ms');
+    });
+    it('does not throw when timeoutSeconds is absent', () => {
+        // Should not throw — the guard passes for well-formed input
+        expect(() => handleStartGuard({
+            teamName: 'test',
+            agentTypes: ['claude'],
+            tasks: [],
+            cwd: '/tmp',
+        })).not.toThrow();
+    });
+    it('does not throw when args is null or non-object', () => {
+        expect(() => handleStartGuard(null)).not.toThrow();
+        expect(() => handleStartGuard('string')).not.toThrow();
+        expect(() => handleStartGuard(42)).not.toThrow();
+    });
+});
 // ─── exit code mapping ────────────────────────────────────────────────────────
 // Re-test the exitCodeFor logic from runtime-cli.ts (spec from Step 8)
 function exitCodeFor(status) {
-    return status === 'completed' ? 0 : status === 'timeout' ? 2 : 1;
+    return status === 'completed' ? 0 : 1;
 }
 describe('exitCodeFor (runtime-cli doShutdown exit codes)', () => {
     it('returns 0 for completed', () => expect(exitCodeFor('completed')).toBe(0));
     it('returns 1 for failed', () => expect(exitCodeFor('failed')).toBe(1));
-    it('returns 2 for timeout', () => expect(exitCodeFor('timeout')).toBe(2));
+    it('returns 1 for timeout (no dedicated timeout exit code)', () => expect(exitCodeFor('timeout')).toBe(1));
     it('returns 1 for unknown status', () => expect(exitCodeFor('unknown')).toBe(1));
 });
 //# sourceMappingURL=team-cleanup.test.js.map

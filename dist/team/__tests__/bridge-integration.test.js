@@ -8,9 +8,11 @@ import { writeHeartbeat, readHeartbeat } from '../heartbeat.js';
 import { sanitizeName } from '../tmux-session.js';
 import { logAuditEvent, readAuditLog } from '../audit-log.js';
 const TEST_TEAM = 'test-bridge-int';
-const TASKS_DIR = join(homedir(), '.claude', 'tasks', TEST_TEAM);
+// Task files now live in the canonical .omc/state/team path (relative to WORK_DIR)
 const TEAMS_DIR = join(homedir(), '.claude', 'teams', TEST_TEAM);
 const WORK_DIR = join(tmpdir(), '__test_bridge_work__');
+// Canonical tasks dir for this team
+const TASKS_DIR = join(WORK_DIR, '.omc', 'state', 'team', TEST_TEAM, 'tasks');
 function writeTask(task) {
     mkdirSync(TASKS_DIR, { recursive: true });
     writeFileSync(join(TASKS_DIR, `${task.id}.json`), JSON.stringify(task, null, 2));
@@ -74,11 +76,11 @@ describe('Bridge Integration', () => {
                 id: '1', subject: 'Test task', description: 'Do something',
                 status: 'pending', owner: 'worker1', blocks: [], blockedBy: [],
             });
-            updateTask(TEST_TEAM, '1', { status: 'in_progress' });
-            let task = readTask(TEST_TEAM, '1');
+            updateTask(TEST_TEAM, '1', { status: 'in_progress' }, { cwd: WORK_DIR });
+            let task = readTask(TEST_TEAM, '1', { cwd: WORK_DIR });
             expect(task?.status).toBe('in_progress');
-            updateTask(TEST_TEAM, '1', { status: 'completed' });
-            task = readTask(TEST_TEAM, '1');
+            updateTask(TEST_TEAM, '1', { status: 'completed' }, { cwd: WORK_DIR });
+            task = readTask(TEST_TEAM, '1', { cwd: WORK_DIR });
             expect(task?.status).toBe('completed');
         });
     });
@@ -124,10 +126,10 @@ describe('Bridge Integration', () => {
             });
             // Task 2 should not be found — blocker is pending
             const { findNextTask } = await import('../task-file-ops.js');
-            expect(await findNextTask(TEST_TEAM, 'worker1')).toBeNull();
+            expect(await findNextTask(TEST_TEAM, 'worker1', { cwd: WORK_DIR })).toBeNull();
             // Complete blocker
-            updateTask(TEST_TEAM, '1', { status: 'completed' });
-            const next = await findNextTask(TEST_TEAM, 'worker1');
+            updateTask(TEST_TEAM, '1', { status: 'completed' }, { cwd: WORK_DIR });
+            const next = await findNextTask(TEST_TEAM, 'worker1', { cwd: WORK_DIR });
             expect(next?.id).toBe('2');
         });
     });

@@ -1,5 +1,5 @@
-import { execSync, spawnSync } from 'child_process';
-import * as path from 'path';
+import { spawnSync } from 'child_process';
+import { validateTeamName } from './team-name.js';
 
 export type CliAgentType = 'claude' | 'codex' | 'gemini';
 
@@ -9,6 +9,10 @@ export interface CliAgentContract {
   installInstructions: string;
   buildLaunchArgs(model?: string, extraFlags?: string[]): string[];
   parseOutput(rawOutput: string): string;
+  /** Whether this agent supports a prompt/headless mode that bypasses TUI input */
+  supportsPromptMode?: boolean;
+  /** CLI flag for prompt mode (e.g., '-p' for gemini) */
+  promptModeFlag?: string;
 }
 
 export interface WorkerLaunchConfig {
@@ -38,7 +42,7 @@ const CONTRACTS: Record<CliAgentType, CliAgentContract> = {
     binary: 'codex',
     installInstructions: 'Install Codex CLI: npm install -g @openai/codex',
     buildLaunchArgs(model?: string, extraFlags: string[] = []): string[] {
-      const args = ['--full-auto'];
+      const args = ['--dangerously-bypass-approvals-and-sandbox'];
       if (model) args.push('--model', model);
       return [...args, ...extraFlags];
     },
@@ -65,6 +69,8 @@ const CONTRACTS: Record<CliAgentType, CliAgentContract> = {
     agentType: 'gemini',
     binary: 'gemini',
     installInstructions: 'Install Gemini CLI: npm install -g @google/gemini-cli',
+    supportsPromptMode: true,
+    promptModeFlag: '-p',
     buildLaunchArgs(model?: string, extraFlags: string[] = []): string[] {
       const args = ['--yolo'];
       if (model) args.push('--model', model);
@@ -107,13 +113,21 @@ export function buildLaunchArgs(agentType: CliAgentType, config: WorkerLaunchCon
   return getContract(agentType).buildLaunchArgs(config.model, config.extraFlags);
 }
 
-export function buildWorkerCommand(agentType: CliAgentType, config: WorkerLaunchConfig): string {
+export function buildWorkerArgv(agentType: CliAgentType, config: WorkerLaunchConfig): string[] {
+  validateTeamName(config.teamName);
   const contract = getContract(agentType);
   const args = buildLaunchArgs(agentType, config);
-  return `${contract.binary} ${args.join(' ')}`;
+  return [contract.binary, ...args];
+}
+
+export function buildWorkerCommand(agentType: CliAgentType, config: WorkerLaunchConfig): string {
+  return buildWorkerArgv(agentType, config)
+    .map((part) => `'${part.replace(/'/g, `'\"'\"'`)}'`)
+    .join(' ');
 }
 
 export function getWorkerEnv(teamName: string, workerName: string, agentType: CliAgentType): Record<string, string> {
+  validateTeamName(teamName);
   return {
     OMC_TEAM_WORKER: `${teamName}/${workerName}`,
     OMC_TEAM_NAME: teamName,
@@ -123,4 +137,24 @@ export function getWorkerEnv(teamName: string, workerName: string, agentType: Cl
 
 export function parseCliOutput(agentType: CliAgentType, rawOutput: string): string {
   return getContract(agentType).parseOutput(rawOutput);
+}
+
+/**
+ * Check if an agent type supports prompt/headless mode (bypasses TUI).
+ */
+export function isPromptModeAgent(agentType: CliAgentType): boolean {
+  const contract = getContract(agentType);
+  return !!(contract.supportsPromptMode && contract.promptModeFlag);
+}
+
+/**
+ * Get the extra CLI args needed to pass an instruction in prompt mode.
+ * Returns empty array if the agent does not support prompt mode.
+ */
+export function getPromptModeArgs(agentType: CliAgentType, instruction: string): string[] {
+  const contract = getContract(agentType);
+  if (contract.supportsPromptMode && contract.promptModeFlag) {
+    return [contract.promptModeFlag, instruction];
+  }
+  return [];
 }

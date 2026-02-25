@@ -6,7 +6,7 @@
  * Cross-platform: Windows, macOS, Linux
  */
 
-import { existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -414,7 +414,10 @@ ${cleanContent}
       }
     }
 
-    // Cleanup old plugin cache versions (keep latest 2)
+    // Cleanup old plugin cache versions (keep latest 2, symlink the rest)
+    // Instead of deleting old versions, replace them with symlinks to the latest.
+    // This prevents "Cannot find module" errors for sessions started before a
+    // plugin update whose CLAUDE_PLUGIN_ROOT still points to the old version.
     try {
       const cacheBase = join(configDir, 'plugins', 'cache', 'omc', 'oh-my-claudecode');
       if (existsSync(cacheBase)) {
@@ -422,11 +425,57 @@ ${cleanContent}
           .filter(v => /^\d+\.\d+\.\d+/.test(v))
           .sort(semverCompare)
           .reverse();
-        const toRemove = versions.slice(2);
-        for (const version of toRemove) {
-          try {
-            rmSync(join(cacheBase, version), { recursive: true, force: true });
-          } catch {}
+
+        if (versions.length > 2) {
+          const latest = versions[0];
+          const toSymlink = versions.slice(2);
+          for (const version of toSymlink) {
+            try {
+              const versionPath = join(cacheBase, version);
+              const stat = lstatSync(versionPath);
+
+              const isWin = process.platform === 'win32';
+              const symlinkTarget = isWin ? join(cacheBase, latest) : latest;
+
+              if (stat.isSymbolicLink()) {
+                // Already a symlink — update only if pointing to wrong target.
+                // Use atomic temp-symlink + rename to avoid a window where
+                // the path doesn't exist (fixes race in issue #1007).
+                const target = readlinkSync(versionPath);
+                if (target === latest || target === join(cacheBase, latest)) continue;
+                try {
+                  const tmpLink = versionPath + '.tmp.' + process.pid;
+                  symlinkSync(symlinkTarget, tmpLink, isWin ? 'junction' : undefined);
+                  try {
+                    renameSync(tmpLink, versionPath);
+                  } catch {
+                    // rename failed (e.g. cross-device) — fall back to unlink+symlink
+                    try { unlinkSync(tmpLink); } catch {}
+                    unlinkSync(versionPath);
+                    symlinkSync(symlinkTarget, versionPath, isWin ? 'junction' : undefined);
+                  }
+                } catch (swapErr) {
+                  if (swapErr?.code !== 'EEXIST') {
+                    // Leave as-is rather than losing it
+                  }
+                }
+              } else if (stat.isDirectory()) {
+                // Directory → symlink: cannot be atomic, but run.cjs now
+                // handles missing targets gracefully (issue #1007).
+                rmSync(versionPath, { recursive: true, force: true });
+                try {
+                  symlinkSync(symlinkTarget, versionPath, isWin ? 'junction' : undefined);
+                } catch (symlinkErr) {
+                  // EEXIST: another session raced us — safe to ignore.
+                  if (symlinkErr?.code !== 'EEXIST') {
+                    // Symlink genuinely failed. Leave the path as-is.
+                  }
+                }
+              }
+            } catch {
+              // lstatSync / rmSync / unlinkSync failure — leave old directory as-is.
+            }
+          }
         }
       }
     } catch {}
