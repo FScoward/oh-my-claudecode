@@ -69,8 +69,6 @@ export type PlatformConfig = DiscordNotificationConfig | DiscordBotNotificationC
 export interface EventNotificationConfig {
     /** Whether this event triggers notifications */
     enabled: boolean;
-    /** Custom message template (optional, uses default if not set) */
-    messageTemplate?: string;
     /** Platform overrides for this event (inherits from top-level if not set) */
     discord?: DiscordNotificationConfig;
     "discord-bot"?: DiscordBotNotificationConfig;

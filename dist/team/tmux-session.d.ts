@@ -1,3 +1,8 @@
+/**
+ * True when running on Windows under MSYS2/Git Bash.
+ * Tmux panes run bash in this environment, not cmd.exe.
+ */
+export declare function isUnixLikeOnWindows(): boolean;
 export interface TeamSession {
     sessionName: string;
     leaderPaneId: string;
@@ -56,6 +61,8 @@ export declare function createTeamSession(teamName: string, workerCount: number,
  * Worker startup: env OMC_TEAM_WORKER={teamName}/workerName shell -lc "exec agentCmd"
  */
 export declare function spawnWorkerInPane(sessionName: string, paneId: string, config: WorkerPaneConfig): Promise<void>;
+export declare function paneHasActiveTask(captured: string): boolean;
+export declare function paneLooksReady(captured: string): boolean;
 export declare function shouldAttemptAdaptiveRetry(args: {
     paneBusy: boolean;
     latestCapture: string | null;

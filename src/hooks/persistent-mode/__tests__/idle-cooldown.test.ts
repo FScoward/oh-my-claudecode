@@ -4,26 +4,31 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
   getIdleNotificationCooldownSeconds,
   shouldSendIdleNotification,
   recordIdleNotificationSent,
 } from '../index.js';
+import { atomicWriteJsonSync } from '../../../lib/atomic-write.js';
 
-// Mock fs and os modules
+// Mock fs and os modules (hoisted before all imports)
 vi.mock('fs', async () => {
-  const actual = await vi.importActual('fs');
+  const actual = await vi.importActual<typeof import('fs')>('fs');
   return {
     ...actual,
     existsSync: vi.fn(),
     readFileSync: vi.fn(),
-    writeFileSync: vi.fn(),
     mkdirSync: vi.fn(),
     unlinkSync: vi.fn(),
   };
 });
+
+// Mock atomic-write module
+vi.mock('../../../lib/atomic-write.js', () => ({
+  atomicWriteJsonSync: vi.fn(),
+}));
 
 vi.mock('os', async () => {
   const actual = await vi.importActual('os');
@@ -306,44 +311,38 @@ describe('recordIdleNotificationSent', () => {
   });
 
   it('writes cooldown file with current timestamp', () => {
-    (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true); // dir exists
-
     const before = Date.now();
     recordIdleNotificationSent(TEST_STATE_DIR);
     const after = Date.now();
 
-    expect(writeFileSync).toHaveBeenCalledOnce();
-    const [calledPath, calledContent] = (writeFileSync as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(atomicWriteJsonSync).toHaveBeenCalledOnce();
+    const [calledPath, calledData] = (atomicWriteJsonSync as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(calledPath).toBe(COOLDOWN_PATH);
 
-    const written = JSON.parse(calledContent as string) as { lastSentAt: string };
+    const written = calledData as { lastSentAt: string };
     const ts = new Date(written.lastSentAt).getTime();
     expect(ts).toBeGreaterThanOrEqual(before);
     expect(ts).toBeLessThanOrEqual(after);
   });
 
   it('writes session-scoped cooldown file when sessionId is provided', () => {
-    (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(false);
-
     recordIdleNotificationSent(TEST_STATE_DIR, TEST_SESSION_ID);
 
-    expect(mkdirSync).toHaveBeenCalledWith(join(TEST_STATE_DIR, 'sessions', TEST_SESSION_ID), { recursive: true });
-    const [calledPath] = (writeFileSync as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(atomicWriteJsonSync).toHaveBeenCalledOnce();
+    const [calledPath] = (atomicWriteJsonSync as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(calledPath).toBe(SESSION_COOLDOWN_PATH);
   });
 
   it('creates state directory if it does not exist', () => {
-    (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(false);
-
     recordIdleNotificationSent(TEST_STATE_DIR);
 
-    expect(mkdirSync).toHaveBeenCalledWith(TEST_STATE_DIR, { recursive: true });
-    expect(writeFileSync).toHaveBeenCalledOnce();
+    expect(atomicWriteJsonSync).toHaveBeenCalledOnce();
+    const [calledPath] = (atomicWriteJsonSync as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(calledPath).toBe(COOLDOWN_PATH);
   });
 
-  it('does not throw when writeFileSync fails', () => {
-    (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
-    (writeFileSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
+  it('does not throw when atomicWriteJsonSync fails', () => {
+    (atomicWriteJsonSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error('EACCES: permission denied');
     });
 

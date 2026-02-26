@@ -1,5 +1,5 @@
 <!-- OMC:START -->
-<!-- OMC:VERSION:4.4.5 -->
+<!-- OMC:VERSION:4.5.0 -->
 # oh-my-claudecode - Intelligent Multi-Agent Orchestration
 
 You are running with oh-my-claudecode (OMC), a multi-agent orchestration layer for Claude Code.
@@ -138,8 +138,8 @@ Workflow Skills:
 - `ccg` ("ccg", "tri-model", "claude codex gemini"): Fan out backend/analytical tasks to Codex + frontend/UI tasks to Gemini in parallel tmux panes, then Claude synthesizes; requires codex and gemini CLIs. Priority: matches when all three model names appear together, overriding bare "codex"/"gemini" routing to omc-teams
 - `pipeline` ("pipeline", "chain agents"): sequential agent chaining with data passing
 - `ultraqa` (activated by autopilot): QA cycling -- test, verify, fix, repeat
-- `plan` ("plan this", "plan the"): strategic planning; supports `--consensus` and `--review` modes
-- `ralplan` ("ralplan", "consensus plan"): alias for `/plan --consensus` -- iterative planning with Planner, Architect, Critic until consensus
+- `plan` ("plan this", "plan the"): strategic planning; supports `--consensus` and `--review` modes, with RALPLAN-DR structured deliberation in consensus mode
+- `ralplan` ("ralplan", "consensus plan"): alias for `/plan --consensus` -- iterative planning with Planner, Architect, Critic until consensus; short deliberation by default, `--deliberate` for high-risk work (adds pre-mortem + expanded unit/integration/e2e/observability test planning)
 - `sciomc` ("sciomc"): parallel scientist agents for comprehensive analysis
 - `external-context`: invoke parallel document-specialist agents for web searches
 - `deepinit` ("deepinit"): deep codebase init with hierarchical AGENTS.md

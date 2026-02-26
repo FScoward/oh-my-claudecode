@@ -6,6 +6,10 @@
  */
 import type { ParsedTokenLimitError, RecoveryResult, RecoveryConfig } from './types.js';
 /**
+ * Remove session state for a given session ID (call on context window exhaustion).
+ */
+export declare function clearSessionState(sessionId: string): void;
+/**
  * Parse an error to detect if it's a token limit error
  */
 export declare function parseTokenLimitError(err: unknown): ParsedTokenLimitError | null;

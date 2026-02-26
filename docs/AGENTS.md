@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-01-31 | Updated: 2026-01-31 -->
+<!-- Generated: 2026-01-31 | Updated: 2026-02-24 -->
 
 # docs
 
@@ -97,4 +97,6 @@ Use consistent version heading format with blank line after heading:
 
 None - pure markdown files.
 
-<!-- MANUAL: -->
+<!-- MANUAL:
+- When documenting `plan`/`ralplan`, include consensus structured deliberation (RALPLAN-DR) and note `--deliberate` high-risk mode behavior.
+-->

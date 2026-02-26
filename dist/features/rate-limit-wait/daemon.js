@@ -96,8 +96,11 @@ function writeSecureFile(filePath, content) {
     try {
         chmodSync(filePath, SECURE_FILE_MODE);
     }
-    catch {
-        // Ignore permission errors (e.g., on Windows)
+    catch (err) {
+        // chmod is not supported on Windows; warn on other platforms
+        if (process.platform !== 'win32') {
+            console.warn(`[RateLimitDaemon] Failed to set permissions on ${filePath}:`, err);
+        }
     }
 }
 /**
@@ -266,18 +269,51 @@ function createInitialState() {
     };
 }
 /**
+ * Register cleanup handlers for the daemon process.
+ * Ensures PID file and state are cleaned up on exit signals.
+ */
+function registerDaemonCleanup(config) {
+    const cleanup = () => {
+        try {
+            removePidFile(config);
+        }
+        catch {
+            // Ignore cleanup errors
+        }
+        try {
+            const state = readDaemonState(config);
+            if (state) {
+                state.isRunning = false;
+                state.pid = null;
+                writeDaemonState(state, config);
+            }
+        }
+        catch {
+            // Ignore cleanup errors
+        }
+    };
+    process.once('SIGINT', () => { cleanup(); process.exit(0); });
+    process.once('SIGTERM', () => { cleanup(); process.exit(0); });
+    process.once('exit', cleanup);
+}
+/**
  * Main daemon polling loop
  */
 async function pollLoop(config) {
     const state = readDaemonState(config) || createInitialState();
     state.isRunning = true;
     state.pid = process.pid;
+    // Register cleanup handlers so PID/state files are cleaned up on exit
+    registerDaemonCleanup(config);
     log('Starting poll loop', config);
     while (state.isRunning) {
         try {
             state.lastPollAt = new Date();
-            // Check rate limit status
-            const rateLimitStatus = await checkRateLimitStatus();
+            // Check rate limit status with a 30s timeout to prevent poll loop stalls
+            const rateLimitStatus = await Promise.race([
+                checkRateLimitStatus(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('checkRateLimitStatus timed out after 30s')), 30_000)),
+            ]);
             const wasLimited = state.rateLimitStatus?.isLimited ?? false;
             const isNowLimited = rateLimitStatus?.isLimited ?? false;
             state.rateLimitStatus = rateLimitStatus;

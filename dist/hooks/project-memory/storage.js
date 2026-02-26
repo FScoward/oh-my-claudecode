@@ -5,6 +5,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { MEMORY_FILE, MEMORY_DIR, CACHE_EXPIRY_MS } from './constants.js';
+import { atomicWriteJson } from '../../lib/atomic-write.js';
 /**
  * Get the path to the project memory file
  */
@@ -41,8 +42,8 @@ export async function saveProjectMemory(projectRoot, memory) {
     try {
         // Ensure .omc directory exists
         await fs.mkdir(omcDir, { recursive: true });
-        // Write memory file with pretty formatting
-        await fs.writeFile(memoryPath, JSON.stringify(memory, null, 2), 'utf-8');
+        // Write memory file atomically to prevent corruption on crash
+        await atomicWriteJson(memoryPath, memory);
     }
     catch (error) {
         // Silently fail - we don't want to break the session

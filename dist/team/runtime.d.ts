@@ -88,6 +88,8 @@ export declare function assignTask(teamName: string, taskId: string, targetWorke
 export declare function shutdownTeam(teamName: string, sessionName: string, cwd: string, timeoutMs?: number, workerPaneIds?: string[], leaderPaneId?: string): Promise<void>;
 /**
  * Resume an existing team from persisted state.
+ * Reconstructs activeWorkers by scanning task files for in_progress tasks
+ * so the watchdog loop can continue processing without stalling.
  */
 export declare function resumeTeam(teamName: string, cwd: string): Promise<TeamRuntime | null>;
 //# sourceMappingURL=runtime.d.ts.map

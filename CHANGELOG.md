@@ -1,3 +1,88 @@
+# oh-my-claudecode v4.5.0: Notifications Engine, OpenClaw Gateway & Reliability Hardening
+
+## Patch Notes
+
+This release introduces a full notifications infrastructure (hook config, template engine, platform gating), the OpenClaw webhook gateway for external automation, i18n prompt translation, and extensive reliability hardening across team coordination, project memory, LSP tooling, and hook lifecycle management. Dead code from the legacy compatibility subsystem has been removed.
+
+**35 commits, 181 files changed, +9712 -5927 lines**
+
+---
+
+### Features
+
+- **Notifications engine** (#1022): New hook config system (`hook-config.ts`), template engine (`template-engine.ts`), and platform gating (`platform-gating`) for structured notification delivery across Telegram, Discord, Slack, and webhooks.
+- **CLI platform flags** (#1024): Added `--telegram`, `--discord`, `--slack`, and `--webhook` CLI flags for configuring notification destinations at launch.
+- **OpenClaw webhook gateway** (#1023): New `openclaw` module (`config.ts`, `dispatcher.ts`, `index.ts`, `types.ts`) enables waking external automations and AI agents on hook events via configurable webhook endpoints.
+- **i18n prompt translation** (#1017): Keyword-detector hook now dynamically injects prompt translations, enabling localized skill invocations.
+- **Configurable state directory** (#1015): New `OMC_STATE_DIR` environment variable allows overriding the default `.omc/state/` path for custom state directory layouts.
+- **RALPLAN-DR structured deliberation**: Added structured deliberation format to the ralplan consensus planning workflow.
+- **Auto-nudge idle teammate panes** (#1047, #1048): `omc_run_team_wait` now automatically nudges idle tmux worker panes with configurable delay, max count, and custom messages.
+
+---
+
+### Bug Fixes
+
+- **LSP Content-Length byte counting** (#1026, #1028): `handleData` in the LSP client now uses `Buffer.byteLength` instead of `String.length` for Content-Length, fixing multi-byte character parsing errors.
+- **Project memory atomic writes** (#1073): Project memory storage now uses atomic writes with async mutex and session cache cleanup, preventing data corruption under concurrent access.
+- **Team worker reconstruction on resume** (#1078): Team runtime now reconstructs worker state on resume, handles malformed inbox files gracefully, and adds a parallel watchdog for worker health monitoring.
+- **Ralph loop deduplication** (#1079): Persistent-mode hook deduplicates Ralph loop re-entry, caches cancel signals, and extracts mode constants to prevent redundant iterations.
+- **Frontmatter parser deduplication** (#1081): Extracted shared `parseFrontmatter()` utility to `src/utils/frontmatter.ts`, eliminating duplicate implementations in builtin-skills loader and auto-slash-command executor. Fixes CC command shadowing.
+- **Session state GC** (#1082): Error handling now garbage-collects stale session state, rejects pending LSP requests on exit, and escalates watchdog errors appropriately.
+- **LSP error responses** (#1075): LSP tool errors now include `isError: true` in MCP responses. Also fixes bridge exit handling and AST `replaceAll` mode.
+- **Config type unification** (#1072): Unified config types with Zod schema validation, filling gaps in MODES constant coverage.
+- **Team CLI worker ACK poll** (#1071): Skips unnecessary ACK polling for CLI workers and adds a task claiming lock to prevent race conditions.
+- **Agent routing gaps** (#1070): Fixes vision enforcer, task decomposer thresholds, and routing gaps for edge-case agent delegations.
+- **Recovery stub** (#1054, #1069): Non-functional recovery stub now returns failure instead of silently succeeding.
+- **Notification lock deadline** (#1068): Added cumulative deadline to the notification lock acquisition loop, preventing indefinite blocking.
+- **Portable omc-setup** (#1051): Replaced BSD-incompatible `sed` with portable `awk` in the setup script for cross-platform compatibility.
+- **Platform flag defaults** (#1046): CLI platform flags now use `undefined` defaults instead of `false` to preserve existing environment variable values.
+- **Null guard in template engine** (#1045): Added null guard to `resolveEventTemplate` preventing crashes on undefined event templates.
+- **Terminal-overrides regression** (#1044): Removed `smcup@/rmcup@` terminal overrides re-introduced by #1024 that caused Ink rendering corruption.
+- **Skill-active-state lifecycle** (#1033, #1036): New `skill-state` module tracks active skill execution, preventing the persistent-mode Stop hook from prematurely terminating skills that don't write mode state files (e.g., code-review, plan, tdd).
+- **Team-state stop hook** (#1032): Persistent-mode Stop hook now checks `team-state.json` in addition to other mode states.
+- **Codex prompt-mode support** (#1030): omc-teams now passes prompt-mode flags to Codex CLI workers.
+- **Model ID hardcoding** (#1025, #1027): Team and sub-agent creation no longer hardcodes model IDs, respecting user configuration.
+- **Windows tmux compatibility** (#1019, #1021): Team tmux sessions now work on MSYS2/Git Bash with Windows-specific path and shell adjustments.
+- **Ink rendering corruption** (#1020): Removed `terminal-overrides smcup@/rmcup@` from tmux config that caused Ink-based UI corruption.
+- **Notification denoising** (#1016): Session idle notifications are denoised to reduce spurious output.
+
+---
+
+### Performance
+
+- **State read cache** (#1083): Hook state reads are now cached to avoid redundant filesystem I/O. Diagnostics are notification-driven instead of polled. Parallel watchdog added for multi-mode monitoring.
+
+---
+
+### Security
+
+- **Shell interpolation removal** (#1076): Replaced shell string interpolation with array-form `spawn()` across the codebase, eliminating a class of command injection vulnerabilities.
+
+---
+
+### Testing
+
+- **Skill-state lifecycle tests** (`skill-state.test.ts`): Validates protection levels, state read/write/clear, staleness detection, and stop-hook blocking logic.
+- **OpenClaw tests** (`config.test.ts`, `dispatcher.test.ts`, `index.test.ts`): Full coverage for webhook gateway configuration, event dispatching, and module integration.
+- **Notification tests** (`hook-config.test.ts`, `template-engine.test.ts`, `platform-gating.test.ts`, `formatter.test.ts`): Validates hook config loading, template resolution, platform-specific gating, and message formatting.
+- **LSP byte counting** (`client-handle-data.test.ts`): Regression test for multi-byte Content-Length parsing.
+- **Team tests** (`idle-nudge.test.ts`, `runtime-prompt-mode.test.ts`, `model-contract.test.ts`): New coverage for idle nudging, prompt-mode passthrough, and model contract validation.
+- **Bridge routing** (`bridge-openclaw.test.ts`): OpenClaw hook routing integration test.
+- **Launch tests** (`launch.test.ts`): Terminal-overrides regression coverage.
+- **Frontmatter tests** (`frontmatter.test.ts`): Coverage for shared frontmatter parsing utilities.
+
+---
+
+### Internal
+
+- **Dead code removal** (#1074): Removed the legacy compatibility subsystem (`src/compatibility/`), orphan agent files, and unused utilities. Net deletion of ~5900 lines.
+- **Codex `buildLaunchArgs` reverted** (#1039 → #1040): The `exec` subcommand addition was reverted due to compatibility issues.
+- **Mode constants extracted**: `MODES` constant map centralized in `src/lib/mode-names.ts` for consistent mode name references.
+- **Session isolation improvements**: `resolveSessionStatePath` used consistently across skill-state, project-memory, and notification modules.
+- **Worktree path utilities** (`worktree-paths.ts`): Extended with session-scoped state path resolution.
+
+---
+
 # oh-my-claudecode v4.4.2: Cross-Platform Hardening & Cancel Race Fix
 
 ## Patch Notes

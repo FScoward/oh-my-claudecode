@@ -20,7 +20,7 @@ describe('omc-tools-server interop gating', () => {
     it('does not register interop tools by default', async () => {
         const mod = await importFresh();
         expect(mod.omcToolNames.some((name) => name.includes('interop_'))).toBe(false);
-    });
+    }, 15000);
     it('registers interop tools when OMC_INTEROP_TOOLS_ENABLED=1', async () => {
         process.env.OMC_INTEROP_TOOLS_ENABLED = '1';
         const mod = await importFresh();

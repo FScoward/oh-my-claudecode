@@ -9,8 +9,9 @@
  *
  * Priority order: Ralph > Ultrawork > Todo Continuation
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, readFileSync, unlinkSync, statSync, openSync, readSync, closeSync } from 'fs';
+import { atomicWriteJsonSync } from '../../lib/atomic-write.js';
+import { join } from 'path';
 import { homedir } from 'os';
 import { getClaudeConfigDir } from '../../utils/paths.js';
 import { readUltraworkState, writeUltraworkState, incrementReinforcement, deactivateUltrawork, getUltraworkPersistenceMessage } from '../ultrawork/index.js';
@@ -216,14 +217,33 @@ export function shouldSendIdleNotification(stateDir, sessionId) {
 export function recordIdleNotificationSent(stateDir, sessionId) {
     const cooldownPath = getIdleNotificationCooldownPath(stateDir, sessionId);
     try {
-        const dir = dirname(cooldownPath);
-        if (!existsSync(dir)) {
-            mkdirSync(dir, { recursive: true });
-        }
-        writeFileSync(cooldownPath, JSON.stringify({ lastSentAt: new Date().toISOString() }, null, 2));
+        atomicWriteJsonSync(cooldownPath, { lastSentAt: new Date().toISOString() });
     }
     catch {
         // ignore write errors
+    }
+}
+/** Max bytes to read from the tail of a transcript for architect approval detection. */
+const TRANSCRIPT_TAIL_BYTES = 32 * 1024; // 32 KB
+/**
+ * Read the tail of a potentially large transcript file.
+ * Architect approval/rejection markers appear near the end of the conversation,
+ * so reading only the last N bytes avoids loading megabyte-sized transcripts.
+ */
+function readTranscriptTail(transcriptPath) {
+    const size = statSync(transcriptPath).size;
+    if (size <= TRANSCRIPT_TAIL_BYTES) {
+        return readFileSync(transcriptPath, 'utf-8');
+    }
+    const fd = openSync(transcriptPath, 'r');
+    try {
+        const offset = size - TRANSCRIPT_TAIL_BYTES;
+        const buf = Buffer.allocUnsafe(TRANSCRIPT_TAIL_BYTES);
+        const bytesRead = readSync(fd, buf, 0, TRANSCRIPT_TAIL_BYTES, offset);
+        return buf.subarray(0, bytesRead).toString('utf-8');
+    }
+    finally {
+        closeSync(fd);
     }
 }
 /**
@@ -239,7 +259,7 @@ function checkArchitectApprovalInTranscript(sessionId) {
     for (const transcriptPath of possiblePaths) {
         if (existsSync(transcriptPath)) {
             try {
-                const content = readFileSync(transcriptPath, 'utf-8');
+                const content = readTranscriptTail(transcriptPath);
                 if (detectArchitectApproval(content)) {
                     return true;
                 }
@@ -264,7 +284,7 @@ function checkArchitectRejectionInTranscript(sessionId) {
     for (const transcriptPath of possiblePaths) {
         if (existsSync(transcriptPath)) {
             try {
-                const content = readFileSync(transcriptPath, 'utf-8');
+                const content = readTranscriptTail(transcriptPath);
                 const result = detectArchitectRejection(content);
                 if (result.rejected) {
                     return result;
@@ -281,7 +301,7 @@ function checkArchitectRejectionInTranscript(sessionId) {
  * Check Ralph Loop state and determine if it should continue
  * Now includes Architect verification for completion claims
  */
-async function checkRalphLoop(sessionId, directory) {
+async function checkRalphLoop(sessionId, directory, cancelInProgress) {
     const workingDir = resolveToWorktreeRoot(directory);
     const state = readRalphState(workingDir, sessionId);
     if (!state || !state.active) {
@@ -292,7 +312,8 @@ async function checkRalphLoop(sessionId, directory) {
         return null;
     }
     // Explicit cancellation window: never re-arm Ralph internals while cancel is in progress.
-    if (isSessionCancelInProgress(workingDir, sessionId)) {
+    // Uses cached cancel signal from checkPersistentModes to avoid TOCTOU re-reads.
+    if (cancelInProgress) {
         return {
             shouldBlock: false,
             message: '',
@@ -418,14 +439,7 @@ async function checkRalphLoop(sessionId, directory) {
             }
         };
     }
-    // Check max iterations
-    if (isSessionCancelInProgress(workingDir, sessionId)) {
-        return {
-            shouldBlock: false,
-            message: '',
-            mode: 'none'
-        };
-    }
+    // Check max iterations (cancel already checked at function entry via cached flag)
     if (state.iteration >= state.max_iterations) {
         // Do not silently stop Ralph with unfinished work.
         // Extend the limit and continue enforcement so user-visible cancellation
@@ -480,7 +494,7 @@ ${newState.prompt ? `Original task: ${newState.prompt}` : ''}
 /**
  * Check Ultrawork state and determine if it should reinforce
  */
-async function checkUltrawork(sessionId, directory, _hasIncompleteTodos) {
+async function checkUltrawork(sessionId, directory, _hasIncompleteTodos, cancelInProgress) {
     const workingDir = resolveToWorktreeRoot(directory);
     const state = readUltraworkState(workingDir, sessionId);
     if (!state || !state.active) {
@@ -490,7 +504,8 @@ async function checkUltrawork(sessionId, directory, _hasIncompleteTodos) {
     if (state.session_id !== sessionId) {
         return null;
     }
-    if (isSessionCancelInProgress(workingDir, sessionId)) {
+    // Uses cached cancel signal from checkPersistentModes to avoid TOCTOU re-reads.
+    if (cancelInProgress) {
         return {
             shouldBlock: false,
             message: '',
@@ -599,8 +614,9 @@ export async function checkPersistentModes(sessionId, directory, stopContext // 
         };
     }
     // Session-scoped cancel signal from state_clear during /cancel flow.
-    // Ensures stop-hook does not re-arm Ralph/Ultrawork while cancellation is in progress.
-    if (isSessionCancelInProgress(workingDir, sessionId)) {
+    // Cache once and pass to sub-functions to avoid TOCTOU re-reads (issue #1058).
+    const cancelInProgress = isSessionCancelInProgress(workingDir, sessionId);
+    if (cancelInProgress) {
         return {
             shouldBlock: false,
             message: '',
@@ -632,7 +648,7 @@ export async function checkPersistentModes(sessionId, directory, stopContext // 
     const todoResult = await checkIncompleteTodos(sessionId, workingDir, stopContext);
     const hasIncompleteTodos = todoResult.count > 0;
     // Priority 1: Ralph (explicit loop mode)
-    const ralphResult = await checkRalphLoop(sessionId, workingDir);
+    const ralphResult = await checkRalphLoop(sessionId, workingDir, cancelInProgress);
     if (ralphResult) {
         return ralphResult;
     }
@@ -656,12 +672,30 @@ export async function checkPersistentModes(sessionId, directory, stopContext // 
         }
     }
     // Priority 2: Ultrawork Mode (performance mode with persistence)
-    const ultraworkResult = await checkUltrawork(sessionId, workingDir, hasIncompleteTodos);
+    const ultraworkResult = await checkUltrawork(sessionId, workingDir, hasIncompleteTodos, cancelInProgress);
     if (ultraworkResult?.shouldBlock) {
         return ultraworkResult;
     }
-    // NOTE: Priority 3 (Todo Continuation) removed to prevent false positives.
-    // Only explicit modes (ralph, autopilot, ultrawork, etc.) trigger continuation enforcement.
+    // Priority 3: Skill Active State (issue #1033)
+    // Skills like code-review, plan, tdd, etc. write skill-active-state.json
+    // when invoked via the Skill tool. This prevents premature stops mid-skill.
+    try {
+        const { checkSkillActiveState } = await import('../skill-state/index.js');
+        const skillResult = checkSkillActiveState(workingDir, sessionId);
+        if (skillResult.shouldBlock) {
+            return {
+                shouldBlock: true,
+                message: skillResult.message,
+                mode: 'ultrawork', // Reuse ultrawork mode type for compatibility
+                metadata: {
+                    phase: `skill:${skillResult.skillName || 'unknown'}`,
+                }
+            };
+        }
+    }
+    catch {
+        // If skill-state module is unavailable, skip gracefully
+    }
     // No blocking needed
     return {
         shouldBlock: false,

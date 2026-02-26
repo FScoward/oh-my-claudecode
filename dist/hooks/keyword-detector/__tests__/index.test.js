@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { removeCodeBlocks, sanitizeForKeywordDetection, extractPromptText, detectKeywordsWithType, hasKeyword, getPrimaryKeyword, getAllKeywords, } from '../index.js';
+import { removeCodeBlocks, sanitizeForKeywordDetection, extractPromptText, detectKeywordsWithType, hasKeyword, getPrimaryKeyword, getAllKeywords, getAllKeywordsWithSizeCheck, isUnderspecifiedForExecution, applyRalplanGate, NON_LATIN_SCRIPT_PATTERN, } from '../index.js';
 // Mock isTeamEnabled
 vi.mock('../../../features/auto-update.js', () => ({
     isTeamEnabled: vi.fn(() => true),
@@ -861,6 +861,353 @@ World`);
                 const result = getAllKeywords('team autopilot build');
                 expect(result).toContain('autopilot');
                 expect(result).not.toContain('team');
+            });
+        });
+    });
+    describe('isUnderspecifiedForExecution (issue #997)', () => {
+        it('should flag vague prompt with just mode keyword', () => {
+            expect(isUnderspecifiedForExecution('ralph fix this')).toBe(true);
+        });
+        it('should flag prompt with no file or function references', () => {
+            expect(isUnderspecifiedForExecution('ralph improve the performance')).toBe(true);
+        });
+        it('should flag short vague prompt', () => {
+            expect(isUnderspecifiedForExecution('autopilot build the app')).toBe(true);
+        });
+        it('should flag empty prompt', () => {
+            expect(isUnderspecifiedForExecution('')).toBe(true);
+        });
+        it('should pass prompt with specific file reference', () => {
+            expect(isUnderspecifiedForExecution('ralph fix the bug in src/hooks/bridge.ts')).toBe(false);
+        });
+        it('should pass prompt with function reference', () => {
+            expect(isUnderspecifiedForExecution('ralph fix function processKeywordDetector')).toBe(false);
+        });
+        it('should pass prompt with issue reference', () => {
+            expect(isUnderspecifiedForExecution('ralph implement issue #42')).toBe(false);
+        });
+        it('should pass prompt with numbered steps', () => {
+            expect(isUnderspecifiedForExecution('ralph do:\n1. Add validation\n2. Add tests\n3. Update docs')).toBe(false);
+        });
+        it('should pass prompt with code block', () => {
+            const prompt = 'ralph add this function:\n```typescript\nfunction hello() { return "world"; }\n```';
+            expect(isUnderspecifiedForExecution(prompt)).toBe(false);
+        });
+        it('should pass prompt with force: escape hatch', () => {
+            expect(isUnderspecifiedForExecution('force: ralph fix this')).toBe(false);
+        });
+        it('should pass prompt with ! escape hatch', () => {
+            expect(isUnderspecifiedForExecution('! ralph improve it')).toBe(false);
+        });
+        it('should pass prompt with path reference', () => {
+            expect(isUnderspecifiedForExecution('ralph add logging to src/api/server.ts')).toBe(false);
+        });
+        it('should pass prompt with PR reference', () => {
+            expect(isUnderspecifiedForExecution('ralph fix PR #123')).toBe(false);
+        });
+        it('should pass prompt with directory path', () => {
+            expect(isUnderspecifiedForExecution('ralph refactor the hooks in src/hooks')).toBe(false);
+        });
+        it('should pass long detailed prompt without file refs', () => {
+            expect(isUnderspecifiedForExecution('ralph add a new API endpoint for user registration that accepts email and password, validates the input, hashes the password with bcrypt, stores in the users table, and returns a JWT token')).toBe(false);
+        });
+        it('should pass prompt with acceptance criteria', () => {
+            expect(isUnderspecifiedForExecution('ralph add login - acceptance criteria: user can log in with email')).toBe(false);
+        });
+        it('should pass prompt with error reference', () => {
+            expect(isUnderspecifiedForExecution('ralph fix TypeError in the auth module')).toBe(false);
+        });
+        it('should pass prompt with bullet list', () => {
+            expect(isUnderspecifiedForExecution('ralph implement:\n- Add user model\n- Add API routes')).toBe(false);
+        });
+        // False-positive prevention: concrete signals auto-pass
+        describe('false-positive prevention', () => {
+            it('should pass with camelCase symbol name', () => {
+                expect(isUnderspecifiedForExecution('ralph fix processKeywordDetector')).toBe(false);
+            });
+            it('should pass with PascalCase class name', () => {
+                expect(isUnderspecifiedForExecution('ralph update KeywordDetector')).toBe(false);
+            });
+            it('should pass with snake_case identifier', () => {
+                expect(isUnderspecifiedForExecution('team fix user_model')).toBe(false);
+            });
+            it('should pass with bare issue number #123', () => {
+                expect(isUnderspecifiedForExecution('ralph implement #42')).toBe(false);
+            });
+            it('should pass with test runner command', () => {
+                expect(isUnderspecifiedForExecution('ralph npm test && fix failures')).toBe(false);
+            });
+            it('should pass with vitest target', () => {
+                expect(isUnderspecifiedForExecution('ralph npx vitest run and fix')).toBe(false);
+            });
+            it('should pass with pytest command', () => {
+                expect(isUnderspecifiedForExecution('ralph pytest and fix failures')).toBe(false);
+            });
+            it('should pass with should return assertion', () => {
+                expect(isUnderspecifiedForExecution('ralph fix so it should return 200')).toBe(false);
+            });
+            it('should pass with stack trace reference', () => {
+                expect(isUnderspecifiedForExecution('ralph fix the stack trace error')).toBe(false);
+            });
+            it('should still gate truly vague prompts', () => {
+                expect(isUnderspecifiedForExecution('ralph fix the code')).toBe(true);
+            });
+            it('should still gate prompts with only stop words', () => {
+                expect(isUnderspecifiedForExecution('autopilot make it work')).toBe(true);
+            });
+        });
+    });
+    describe('applyRalplanGate (issue #997)', () => {
+        it('should redirect underspecified ralph to ralplan', () => {
+            const result = applyRalplanGate(['ralph'], 'ralph fix this');
+            expect(result.gateApplied).toBe(true);
+            expect(result.keywords).toContain('ralplan');
+            expect(result.keywords).not.toContain('ralph');
+            expect(result.gatedKeywords).toEqual(['ralph']);
+        });
+        it('should redirect underspecified autopilot to ralplan', () => {
+            const result = applyRalplanGate(['autopilot'], 'autopilot build the app');
+            expect(result.gateApplied).toBe(true);
+            expect(result.keywords).toContain('ralplan');
+            expect(result.keywords).not.toContain('autopilot');
+        });
+        it('should redirect underspecified team to ralplan', () => {
+            const result = applyRalplanGate(['team'], 'team improve performance');
+            expect(result.gateApplied).toBe(true);
+            expect(result.keywords).toContain('ralplan');
+            expect(result.keywords).not.toContain('team');
+        });
+        it('should not gate well-specified ralph prompt', () => {
+            const result = applyRalplanGate(['ralph'], 'ralph fix the bug in src/hooks/bridge.ts');
+            expect(result.gateApplied).toBe(false);
+            expect(result.keywords).toContain('ralph');
+        });
+        it('should not gate when cancel is present', () => {
+            const result = applyRalplanGate(['cancel'], 'cancelomc ralph fix this');
+            expect(result.gateApplied).toBe(false);
+        });
+        it('should not gate when ralplan is already present', () => {
+            const result = applyRalplanGate(['ralplan'], 'ralplan fix this');
+            expect(result.gateApplied).toBe(false);
+        });
+        it('should not gate non-execution keywords', () => {
+            const result = applyRalplanGate(['tdd', 'ultrathink'], 'tdd improve it');
+            expect(result.gateApplied).toBe(false);
+        });
+        it('should preserve non-execution keywords when gating', () => {
+            const result = applyRalplanGate(['ralph', 'tdd'], 'ralph tdd fix this');
+            expect(result.gateApplied).toBe(true);
+            expect(result.keywords).toContain('tdd');
+            expect(result.keywords).toContain('ralplan');
+            expect(result.keywords).not.toContain('ralph');
+        });
+        it('should return empty gatedKeywords when no gate applied', () => {
+            const result = applyRalplanGate([], 'regular text');
+            expect(result.gateApplied).toBe(false);
+            expect(result.gatedKeywords).toEqual([]);
+        });
+        it('should gate multiple execution keywords at once', () => {
+            const result = applyRalplanGate(['ralph', 'ultrawork'], 'ralph ultrawork fix it');
+            expect(result.gateApplied).toBe(true);
+            expect(result.keywords).toContain('ralplan');
+            expect(result.keywords).not.toContain('ralph');
+            expect(result.keywords).not.toContain('ultrawork');
+            expect(result.gatedKeywords).toContain('ralph');
+            expect(result.gatedKeywords).toContain('ultrawork');
+        });
+        it('should not gate with force: escape hatch', () => {
+            const result = applyRalplanGate(['ralph'], 'force: ralph fix this');
+            expect(result.gateApplied).toBe(false);
+            expect(result.keywords).toContain('ralph');
+        });
+    });
+    describe('bridge pipeline regression: task-size + ralplan gate ordering', () => {
+        it('should gate "ralph fix this" to ralplan even when task-size suppresses heavy modes', () => {
+            // Simulate the bridge pipeline:
+            // 1. getAllKeywordsWithSizeCheck suppresses ralph for small tasks
+            const sizeResult = getAllKeywordsWithSizeCheck('ralph fix this', {
+                enabled: true,
+                smallWordLimit: 50,
+                largeWordLimit: 200,
+                suppressHeavyModesForSmallTasks: true,
+            });
+            // ralph is suppressed because "ralph fix this" is a small task
+            expect(sizeResult.suppressedKeywords).toContain('ralph');
+            expect(sizeResult.keywords).not.toContain('ralph');
+            // 2. Reconstruct full keyword set (bridge fix: gate sees unsuppressed keywords)
+            const fullKeywords = [...sizeResult.keywords, ...sizeResult.suppressedKeywords];
+            expect(fullKeywords).toContain('ralph');
+            // 3. Gate evaluates on full set — should redirect to ralplan
+            const gateResult = applyRalplanGate(fullKeywords, 'ralph fix this');
+            expect(gateResult.gateApplied).toBe(true);
+            expect(gateResult.keywords).toContain('ralplan');
+            expect(gateResult.keywords).not.toContain('ralph');
+        });
+        it('should NOT gate well-specified small ralph prompt', () => {
+            const sizeResult = getAllKeywordsWithSizeCheck('ralph fix src/hooks/bridge.ts', {
+                enabled: true,
+                smallWordLimit: 50,
+                largeWordLimit: 200,
+                suppressHeavyModesForSmallTasks: true,
+            });
+            const fullKeywords = [...sizeResult.keywords, ...sizeResult.suppressedKeywords];
+            const gateResult = applyRalplanGate(fullKeywords, 'ralph fix src/hooks/bridge.ts');
+            // Well-specified: gate should NOT fire, ralph passes through
+            expect(gateResult.gateApplied).toBe(false);
+        });
+        it('should suppress heavy mode normally when gate does not apply and task is small', () => {
+            const sizeResult = getAllKeywordsWithSizeCheck('ralph fix src/hooks/bridge.ts', {
+                enabled: true,
+                smallWordLimit: 50,
+                largeWordLimit: 200,
+                suppressHeavyModesForSmallTasks: true,
+            });
+            const fullKeywords = [...sizeResult.keywords, ...sizeResult.suppressedKeywords];
+            const gateResult = applyRalplanGate(fullKeywords, 'ralph fix src/hooks/bridge.ts');
+            // Gate did not fire, so use task-size-suppressed result
+            expect(gateResult.gateApplied).toBe(false);
+            // Task-size suppression should still apply
+            expect(sizeResult.suppressedKeywords).toContain('ralph');
+        });
+        it('should gate correctly when keywords are NOT suppressed by size-check', () => {
+            // When size-check suppression is disabled, execution keywords flow through
+            // unsuppressed — the gate should still catch underspecified prompts.
+            const prompt = 'ralph fix this';
+            const sizeResult = getAllKeywordsWithSizeCheck(prompt, {
+                enabled: true,
+                smallWordLimit: 50,
+                largeWordLimit: 200,
+                suppressHeavyModesForSmallTasks: false, // size-check won't suppress
+            });
+            // ralph is NOT suppressed (suppression disabled)
+            expect(sizeResult.suppressedKeywords).toHaveLength(0);
+            expect(sizeResult.keywords).toContain('ralph');
+            // Gate should still fire because the prompt is underspecified
+            const fullKeywords = [...sizeResult.keywords, ...sizeResult.suppressedKeywords];
+            const gateResult = applyRalplanGate(fullKeywords, prompt);
+            expect(gateResult.gateApplied).toBe(true);
+            expect(gateResult.keywords).toContain('ralplan');
+            expect(gateResult.keywords).not.toContain('ralph');
+        });
+        it('should let well-specified large prompt pass through both size-check and gate', () => {
+            const prompt = 'ralph fix the TypeError in src/hooks/bridge.ts function processKeywordDetector';
+            const sizeResult = getAllKeywordsWithSizeCheck(prompt, {
+                enabled: true,
+                smallWordLimit: 50,
+                largeWordLimit: 200,
+                suppressHeavyModesForSmallTasks: true,
+            });
+            const fullKeywords = [...sizeResult.keywords, ...sizeResult.suppressedKeywords];
+            const gateResult = applyRalplanGate(fullKeywords, prompt);
+            // Well-specified: gate should NOT fire
+            expect(gateResult.gateApplied).toBe(false);
+            // ralph should be in the final keyword list (either direct or via fullKeywords)
+            expect(fullKeywords).toContain('ralph');
+        });
+        it('should gate autopilot on short vague prompt even when suppressed by size-check', () => {
+            const prompt = 'autopilot make it better';
+            const sizeResult = getAllKeywordsWithSizeCheck(prompt, {
+                enabled: true,
+                smallWordLimit: 50,
+                largeWordLimit: 200,
+                suppressHeavyModesForSmallTasks: true,
+            });
+            // autopilot is suppressed by size-check (small task)
+            expect(sizeResult.suppressedKeywords).toContain('autopilot');
+            expect(sizeResult.keywords).not.toContain('autopilot');
+            // Reconstruct full keywords (as bridge.ts does) and gate
+            const fullKeywords = [...sizeResult.keywords, ...sizeResult.suppressedKeywords];
+            const gateResult = applyRalplanGate(fullKeywords, prompt);
+            // Gate should fire: redirect to ralplan
+            expect(gateResult.gateApplied).toBe(true);
+            expect(gateResult.keywords).toContain('ralplan');
+            expect(gateResult.keywords).not.toContain('autopilot');
+        });
+        it('should preserve non-execution keywords through the full pipeline', () => {
+            const prompt = 'ralph tdd fix this';
+            const sizeResult = getAllKeywordsWithSizeCheck(prompt, {
+                enabled: true,
+                smallWordLimit: 50,
+                largeWordLimit: 200,
+                suppressHeavyModesForSmallTasks: true,
+            });
+            const fullKeywords = [...sizeResult.keywords, ...sizeResult.suppressedKeywords];
+            const gateResult = applyRalplanGate(fullKeywords, prompt);
+            // Gate fires for ralph, tdd is preserved
+            expect(gateResult.gateApplied).toBe(true);
+            expect(gateResult.keywords).toContain('ralplan');
+            expect(gateResult.keywords).toContain('tdd');
+            expect(gateResult.keywords).not.toContain('ralph');
+        });
+    });
+    describe('non-ASCII prompt translation detection', () => {
+        describe('NON_LATIN_SCRIPT_PATTERN - should trigger', () => {
+            it('detects Japanese hiragana', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('UIコンポーネントを修正して')).toBe(true);
+            });
+            it('detects Japanese katakana', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('バグを修正してください')).toBe(true);
+            });
+            it('detects Chinese characters', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('修复这个错误')).toBe(true);
+            });
+            it('detects Korean Hangul', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('버그를 수정해주세요')).toBe(true);
+            });
+            it('detects Cyrillic (Russian)', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('исправь эту ошибку')).toBe(true);
+            });
+            it('detects Arabic', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('أصلح هذا الخطأ')).toBe(true);
+            });
+            it('detects Devanagari (Hindi)', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('इस बग को ठीक करें')).toBe(true);
+            });
+            it('detects mixed non-ASCII with English', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('ralph バグを修正して')).toBe(true);
+            });
+        });
+        describe('NON_LATIN_SCRIPT_PATTERN - should NOT trigger', () => {
+            it('does not trigger on pure ASCII', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('Fix the UI components')).toBe(false);
+            });
+            it('does not trigger on emoji only', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('👍 fix this bug')).toBe(false);
+            });
+            it('does not trigger on accented Latin (café)', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('café résumé naïve')).toBe(false);
+            });
+            it('does not trigger on accented Latin (Spanish)', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('arregla el error por favor')).toBe(false);
+            });
+            it('does not trigger on empty string', () => {
+                expect(NON_LATIN_SCRIPT_PATTERN.test('')).toBe(false);
+            });
+        });
+        describe('sanitizeForKeywordDetection strips non-ASCII from structural noise', () => {
+            it('strips non-ASCII from code blocks before detection', () => {
+                const text = 'Fix this: ```const x = "日本語";```';
+                const sanitized = sanitizeForKeywordDetection(text);
+                // After sanitization, code block content is removed
+                expect(NON_LATIN_SCRIPT_PATTERN.test(sanitized)).toBe(false);
+            });
+            it('strips non-ASCII from URLs before detection', () => {
+                const text = 'See https://example.com/path for details';
+                const sanitized = sanitizeForKeywordDetection(text);
+                // After sanitization, URL is removed - plain text remains
+                expect(sanitized).not.toContain('https://');
+            });
+            it('preserves non-ASCII in plain human-language text', () => {
+                const text = 'UIコンポーネントを修正して';
+                const sanitized = sanitizeForKeywordDetection(text);
+                // Plain Japanese text is preserved after sanitization
+                expect(NON_LATIN_SCRIPT_PATTERN.test(sanitized)).toBe(true);
+            });
+            it('preserves non-ASCII when mixed with English keywords', () => {
+                const text = 'ralph バグを修正して';
+                const sanitized = sanitizeForKeywordDetection(text);
+                // Japanese text preserved, English keyword also preserved
+                expect(NON_LATIN_SCRIPT_PATTERN.test(sanitized)).toBe(true);
             });
         });
     });

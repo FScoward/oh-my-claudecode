@@ -5,7 +5,7 @@
  * All sends are non-blocking with timeouts. Failures are swallowed to avoid
  * blocking hooks.
  */
-import type { DiscordNotificationConfig, DiscordBotNotificationConfig, TelegramNotificationConfig, SlackNotificationConfig, WebhookNotificationConfig, NotificationPayload, NotificationResult, DispatchResult, NotificationConfig, NotificationEvent } from "./types.js";
+import type { DiscordNotificationConfig, DiscordBotNotificationConfig, TelegramNotificationConfig, SlackNotificationConfig, WebhookNotificationConfig, NotificationPayload, NotificationResult, NotificationPlatform, DispatchResult, NotificationConfig, NotificationEvent } from "./types.js";
 /**
  * Send notification via Discord webhook.
  */
@@ -34,5 +34,5 @@ export declare function sendWebhook(config: WebhookNotificationConfig, payload: 
  * Runs all sends in parallel with an overall timeout.
  * Individual failures don't block other platforms.
  */
-export declare function dispatchNotifications(config: NotificationConfig, event: NotificationEvent, payload: NotificationPayload): Promise<DispatchResult>;
+export declare function dispatchNotifications(config: NotificationConfig, event: NotificationEvent, payload: NotificationPayload, platformMessages?: Map<NotificationPlatform, string>): Promise<DispatchResult>;
 //# sourceMappingURL=dispatcher.d.ts.map

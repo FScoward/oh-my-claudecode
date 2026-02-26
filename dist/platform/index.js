@@ -3,6 +3,7 @@
  * Central module for all platform-specific code.
  */
 import * as path from 'path';
+import { readFileSync } from 'fs';
 export const PLATFORM = process.platform;
 export function isWindows() {
     return PLATFORM === 'win32';
@@ -23,6 +24,22 @@ export function isUnix() {
 export function isPathRoot(filepath) {
     const parsed = path.parse(filepath);
     return parsed.root === filepath;
+}
+/**
+ * Check if running inside WSL (Windows Subsystem for Linux).
+ * Checks WSLENV env var OR /proc/version containing "microsoft".
+ */
+export function isWSL() {
+    if (process.env.WSLENV !== undefined) {
+        return true;
+    }
+    try {
+        const procVersion = readFileSync('/proc/version', 'utf8');
+        return procVersion.toLowerCase().includes('microsoft');
+    }
+    catch {
+        return false;
+    }
 }
 // Re-exports
 export * from './process-utils.js';

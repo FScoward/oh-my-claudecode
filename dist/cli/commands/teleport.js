@@ -462,6 +462,7 @@ export async function teleportListCommand(options) {
 }
 /**
  * Remove a worktree
+ * Returns 0 on success, 1 on failure.
  */
 export async function teleportRemoveCommand(pathOrName, options) {
     const worktreeRoot = DEFAULT_WORKTREE_ROOT;
@@ -478,7 +479,7 @@ export async function teleportRemoveCommand(pathOrName, options) {
         else {
             console.error(chalk.red(error));
         }
-        return;
+        return 1;
     }
     // Safety check: must be under worktree root
     const rel = relative(worktreeRoot, worktreePath);
@@ -490,7 +491,7 @@ export async function teleportRemoveCommand(pathOrName, options) {
         else {
             console.error(chalk.red(error));
         }
-        return;
+        return 1;
     }
     try {
         // Check for uncommitted changes
@@ -507,7 +508,7 @@ export async function teleportRemoveCommand(pathOrName, options) {
                 else {
                     console.error(chalk.red(error));
                 }
-                return;
+                return 1;
             }
         }
         // Find the main repo to run git worktree remove
@@ -536,6 +537,7 @@ export async function teleportRemoveCommand(pathOrName, options) {
         else {
             console.log(chalk.green(`Removed worktree: ${worktreePath}`));
         }
+        return 0;
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -545,6 +547,7 @@ export async function teleportRemoveCommand(pathOrName, options) {
         else {
             console.error(chalk.red(`Failed to remove worktree: ${message}`));
         }
+        return 1;
     }
 }
 //# sourceMappingURL=teleport.js.map

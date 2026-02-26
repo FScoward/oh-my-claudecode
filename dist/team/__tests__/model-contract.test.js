@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { getContract, buildLaunchArgs, buildWorkerArgv, getWorkerEnv, parseCliOutput, isPromptModeAgent, getPromptModeArgs } from '../model-contract.js';
+import { describe, it, expect, vi } from 'vitest';
+import { spawnSync } from 'child_process';
+import { getContract, buildLaunchArgs, buildWorkerArgv, getWorkerEnv, parseCliOutput, isPromptModeAgent, getPromptModeArgs, isCliAvailable } from '../model-contract.js';
+vi.mock('child_process', async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        spawnSync: vi.fn(actual.spawnSync),
+    };
+});
 describe('model-contract', () => {
     describe('getContract', () => {
         it('returns contract for claude', () => {
@@ -72,6 +80,15 @@ describe('model-contract', () => {
             expect(parseCliOutput('codex', 'plain text')).toBe('plain text');
         });
     });
+    describe('isCliAvailable', () => {
+        it('passes shell: true to spawnSync so .cmd wrappers are found on Windows', () => {
+            const mockSpawnSync = vi.mocked(spawnSync);
+            mockSpawnSync.mockReturnValue({ status: 0, stdout: '', stderr: '', pid: 0, output: [], signal: null });
+            isCliAvailable('codex');
+            expect(mockSpawnSync).toHaveBeenCalledWith('codex', ['--version'], { timeout: 5000, shell: true });
+            mockSpawnSync.mockRestore();
+        });
+    });
     describe('prompt mode (headless TUI bypass)', () => {
         it('gemini supports prompt mode', () => {
             expect(isPromptModeAgent('gemini')).toBe(true);
@@ -82,16 +99,22 @@ describe('model-contract', () => {
         it('claude does not support prompt mode', () => {
             expect(isPromptModeAgent('claude')).toBe(false);
         });
-        it('codex does not support prompt mode', () => {
-            expect(isPromptModeAgent('codex')).toBe(false);
+        it('codex supports prompt mode (positional argument, no flag)', () => {
+            expect(isPromptModeAgent('codex')).toBe(true);
+            const c = getContract('codex');
+            expect(c.supportsPromptMode).toBe(true);
+            expect(c.promptModeFlag).toBeUndefined();
         });
         it('getPromptModeArgs returns flag + instruction for gemini', () => {
             const args = getPromptModeArgs('gemini', 'Read inbox');
             expect(args).toEqual(['-p', 'Read inbox']);
         });
+        it('getPromptModeArgs returns instruction only (positional) for codex', () => {
+            const args = getPromptModeArgs('codex', 'Read inbox');
+            expect(args).toEqual(['Read inbox']);
+        });
         it('getPromptModeArgs returns empty array for non-prompt-mode agents', () => {
             expect(getPromptModeArgs('claude', 'Read inbox')).toEqual([]);
-            expect(getPromptModeArgs('codex', 'Read inbox')).toEqual([]);
         });
     });
 });

@@ -38,6 +38,7 @@ var import_path2 = require("path");
 var import_os = require("os");
 
 // src/lib/worktree-paths.ts
+var import_crypto = require("crypto");
 var import_child_process = require("child_process");
 var import_fs = require("fs");
 var import_path = require("path");

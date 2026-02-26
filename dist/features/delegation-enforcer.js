@@ -8,6 +8,7 @@
  * from agent definitions - every Task call must explicitly pass the model parameter.
  */
 import { getAgentDefinitions } from '../agents/definitions.js';
+import { normalizeDelegationRole } from './delegation-routing/types.js';
 /**
  * Enforce model parameter for an agent delegation call
  *
@@ -29,7 +30,9 @@ export function enforceModel(agentInput) {
         };
     }
     // Extract agent type (strip oh-my-claudecode: prefix if present)
-    const agentType = agentInput.subagent_type.replace(/^oh-my-claudecode:/, '');
+    const rawAgentType = agentInput.subagent_type.replace(/^oh-my-claudecode:/, '');
+    // Normalize deprecated role aliases before registry lookup
+    const agentType = normalizeDelegationRole(rawAgentType);
     // Get agent definition
     const agentDefs = getAgentDefinitions();
     const agentDef = agentDefs[agentType];

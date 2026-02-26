@@ -10,8 +10,10 @@ import { formatContextSummary } from './formatter.js';
 /**
  * Session caches to prevent duplicate injection
  * Map<sessionId, Set<projectRoot>>
+ * Bounded to MAX_SESSION_CACHE_SIZE entries to prevent memory leaks in long-running MCP processes.
  */
 const sessionCaches = new Map();
+const MAX_SESSION_CACHE_SIZE = 100;
 /**
  * Register project memory context for a session
  * Called from SessionStart hook
@@ -28,6 +30,13 @@ export async function registerProjectMemoryContext(sessionId, workingDirectory) 
     }
     // Check session cache (avoid duplicate injection)
     if (!sessionCaches.has(sessionId)) {
+        // Evict oldest entry if cache is at capacity
+        if (sessionCaches.size >= MAX_SESSION_CACHE_SIZE) {
+            const oldestKey = sessionCaches.keys().next().value;
+            if (oldestKey !== undefined) {
+                sessionCaches.delete(oldestKey);
+            }
+        }
         sessionCaches.set(sessionId, new Set());
     }
     const cache = sessionCaches.get(sessionId);

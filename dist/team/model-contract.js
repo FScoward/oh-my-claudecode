@@ -19,6 +19,9 @@ const CONTRACTS = {
         agentType: 'codex',
         binary: 'codex',
         installInstructions: 'Install Codex CLI: npm install -g @openai/codex',
+        supportsPromptMode: true,
+        // Codex accepts prompt as a positional argument (no flag needed):
+        //   codex [OPTIONS] [PROMPT]
         buildLaunchArgs(model, extraFlags = []) {
             const args = ['--dangerously-bypass-approvals-and-sandbox'];
             if (model)
@@ -72,7 +75,7 @@ export function getContract(agentType) {
 export function isCliAvailable(agentType) {
     const contract = getContract(agentType);
     try {
-        const result = spawnSync(contract.binary, ['--version'], { timeout: 5000 });
+        const result = spawnSync(contract.binary, ['--version'], { timeout: 5000, shell: true });
         return result.status === 0;
     }
     catch {
@@ -115,7 +118,7 @@ export function parseCliOutput(agentType, rawOutput) {
  */
 export function isPromptModeAgent(agentType) {
     const contract = getContract(agentType);
-    return !!(contract.supportsPromptMode && contract.promptModeFlag);
+    return !!contract.supportsPromptMode;
 }
 /**
  * Get the extra CLI args needed to pass an instruction in prompt mode.
@@ -123,9 +126,14 @@ export function isPromptModeAgent(agentType) {
  */
 export function getPromptModeArgs(agentType, instruction) {
     const contract = getContract(agentType);
-    if (contract.supportsPromptMode && contract.promptModeFlag) {
+    if (!contract.supportsPromptMode) {
+        return [];
+    }
+    // If a flag is defined (e.g. gemini's '-p'), prepend it; otherwise the
+    // instruction is passed as a positional argument (e.g. codex [PROMPT]).
+    if (contract.promptModeFlag) {
         return [contract.promptModeFlag, instruction];
     }
-    return [];
+    return [instruction];
 }
 //# sourceMappingURL=model-contract.js.map

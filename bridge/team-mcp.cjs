@@ -17754,7 +17754,7 @@ var StdioServerTransport = class {
 };
 
 // src/mcp/team-server.ts
-var import_child_process2 = require("child_process");
+var import_child_process3 = require("child_process");
 var import_path2 = require("path");
 var import_fs = require("fs");
 var import_promises2 = require("fs/promises");
@@ -17763,6 +17763,7 @@ var import_os = require("os");
 // src/team/tmux-session.ts
 var import_child_process = require("child_process");
 var import_path = require("path");
+var import_util5 = require("util");
 var import_promises = __toESM(require("fs/promises"), 1);
 
 // src/team/team-name.ts
@@ -17778,6 +17779,158 @@ function validateTeamName(teamName) {
 
 // src/team/tmux-session.ts
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var promisifiedExec = (0, import_util5.promisify)(import_child_process.exec);
+var promisifiedExecFile = (0, import_util5.promisify)(import_child_process.execFile);
+async function tmuxAsync(args) {
+  if (args.some((a) => a.includes("#{"))) {
+    const escaped = args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(" ");
+    return promisifiedExec(`tmux ${escaped}`);
+  }
+  return promisifiedExecFile("tmux", args);
+}
+function normalizeTmuxCapture(value) {
+  return value.replace(/\r/g, "").replace(/\s+/g, " ").trim();
+}
+async function capturePaneAsync(paneId, execFileAsync) {
+  try {
+    const result = await execFileAsync("tmux", ["capture-pane", "-t", paneId, "-p", "-S", "-80"]);
+    return result.stdout;
+  } catch {
+    return "";
+  }
+}
+function paneHasTrustPrompt(captured) {
+  const lines = captured.split("\n").map((l) => l.replace(/\r/g, "").trim()).filter((l) => l.length > 0);
+  const tail = lines.slice(-12);
+  const hasQuestion = tail.some((l) => /Do you trust the contents of this directory\?/i.test(l));
+  const hasChoices = tail.some((l) => /Yes,\s*continue|No,\s*quit|Press enter to continue/i.test(l));
+  return hasQuestion && hasChoices;
+}
+function paneHasActiveTask(captured) {
+  const lines = captured.split("\n").map((l) => l.replace(/\r/g, "").trim()).filter((l) => l.length > 0);
+  const tail = lines.slice(-40);
+  if (tail.some((l) => /esc to interrupt/i.test(l))) return true;
+  if (tail.some((l) => /\bbackground terminal running\b/i.test(l))) return true;
+  return false;
+}
+function paneLooksReady(captured) {
+  const lines = captured.split("\n").map((line) => line.replace(/\r/g, "").trim()).filter((line) => line.length > 0);
+  if (lines.length === 0) return false;
+  const tail = lines.slice(-20);
+  const hasPrompt = tail.some((line) => /^\s*[›>❯]\s*/u.test(line));
+  if (hasPrompt) return true;
+  const hasCodexHint = tail.some(
+    (line) => /\bgpt-[\w.-]+\b/i.test(line) || /\b\d+% left\b/i.test(line)
+  );
+  return hasCodexHint;
+}
+function paneTailContainsLiteralLine(captured, text) {
+  return normalizeTmuxCapture(captured).includes(normalizeTmuxCapture(text));
+}
+async function paneInCopyMode(paneId, execFileAsync) {
+  try {
+    const result = await tmuxAsync(["display-message", "-t", paneId, "-p", "#{pane_in_mode}"]);
+    return result.stdout.trim() === "1";
+  } catch {
+    return false;
+  }
+}
+function shouldAttemptAdaptiveRetry(args) {
+  if (process.env.OMX_TEAM_AUTO_INTERRUPT_RETRY === "0") return false;
+  if (args.retriesAttempted >= 1) return false;
+  if (args.paneInCopyMode) return false;
+  if (!args.paneBusy) return false;
+  if (typeof args.latestCapture !== "string") return false;
+  if (!paneTailContainsLiteralLine(args.latestCapture, args.message)) return false;
+  if (paneHasActiveTask(args.latestCapture)) return false;
+  if (!paneLooksReady(args.latestCapture)) return false;
+  return true;
+}
+async function sendToWorker(_sessionName, paneId, message) {
+  if (message.length > 200) {
+    console.warn(`[tmux-session] sendToWorker: message truncated to 200 chars`);
+    message = message.slice(0, 200);
+  }
+  try {
+    const { execFile: execFile3 } = await import("child_process");
+    const { promisify: promisify2 } = await import("util");
+    const execFileAsync = promisify2(execFile3);
+    const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    const sendKey = async (key) => {
+      await execFileAsync("tmux", ["send-keys", "-t", paneId, key]);
+    };
+    if (await paneInCopyMode(paneId, execFileAsync)) {
+      return false;
+    }
+    const initialCapture = await capturePaneAsync(paneId, execFileAsync);
+    const paneBusy = paneHasActiveTask(initialCapture);
+    if (paneHasTrustPrompt(initialCapture)) {
+      await sendKey("C-m");
+      await sleep2(120);
+      await sendKey("C-m");
+      await sleep2(200);
+    }
+    await execFileAsync("tmux", ["send-keys", "-t", paneId, "-l", "--", message]);
+    await sleep2(150);
+    const submitRounds = 6;
+    for (let round = 0; round < submitRounds; round++) {
+      await sleep2(100);
+      if (round === 0 && paneBusy) {
+        await sendKey("Tab");
+        await sleep2(80);
+        await sendKey("C-m");
+      } else {
+        await sendKey("C-m");
+        await sleep2(200);
+        await sendKey("C-m");
+      }
+      await sleep2(140);
+      const checkCapture = await capturePaneAsync(paneId, execFileAsync);
+      if (!paneTailContainsLiteralLine(checkCapture, message)) return true;
+      await sleep2(140);
+    }
+    if (await paneInCopyMode(paneId, execFileAsync)) {
+      return false;
+    }
+    const finalCapture = await capturePaneAsync(paneId, execFileAsync);
+    const paneModeBeforeAdaptiveRetry = await paneInCopyMode(paneId, execFileAsync);
+    if (shouldAttemptAdaptiveRetry({
+      paneBusy,
+      latestCapture: finalCapture,
+      message,
+      paneInCopyMode: paneModeBeforeAdaptiveRetry,
+      retriesAttempted: 0
+    })) {
+      if (await paneInCopyMode(paneId, execFileAsync)) {
+        return false;
+      }
+      await sendKey("C-u");
+      await sleep2(80);
+      if (await paneInCopyMode(paneId, execFileAsync)) {
+        return false;
+      }
+      await execFileAsync("tmux", ["send-keys", "-t", paneId, "-l", "--", message]);
+      await sleep2(120);
+      for (let round = 0; round < 4; round++) {
+        await sendKey("C-m");
+        await sleep2(180);
+        await sendKey("C-m");
+        await sleep2(140);
+        const retryCapture = await capturePaneAsync(paneId, execFileAsync);
+        if (!paneTailContainsLiteralLine(retryCapture, message)) return true;
+      }
+    }
+    if (await paneInCopyMode(paneId, execFileAsync)) {
+      return false;
+    }
+    await sendKey("C-m");
+    await sleep2(120);
+    await sendKey("C-m");
+    return true;
+  } catch {
+    return false;
+  }
+}
 async function killWorkerPanes(opts) {
   const { paneIds, leaderPaneId, teamName, cwd, graceMs = 1e4 } = opts;
   if (!paneIds.length) return;
@@ -17787,9 +17940,9 @@ async function killWorkerPanes(opts) {
     await sleep(graceMs);
   } catch {
   }
-  const { execFile } = await import("child_process");
-  const { promisify } = await import("util");
-  const execFileAsync = promisify(execFile);
+  const { execFile: execFile3 } = await import("child_process");
+  const { promisify: promisify2 } = await import("util");
+  const execFileAsync = promisify2(execFile3);
   for (const paneId of paneIds) {
     if (paneId === leaderPaneId) continue;
     try {
@@ -17798,6 +17951,95 @@ async function killWorkerPanes(opts) {
     }
   }
 }
+
+// src/team/idle-nudge.ts
+var import_child_process2 = require("child_process");
+var DEFAULT_NUDGE_CONFIG = {
+  delayMs: 3e4,
+  maxCount: 3,
+  message: "Continue working on your assigned task."
+};
+function capturePane(paneId) {
+  return new Promise((resolve) => {
+    (0, import_child_process2.execFile)("tmux", ["capture-pane", "-t", paneId, "-p", "-S", "-80"], (err, stdout) => {
+      if (err) resolve("");
+      else resolve(stdout ?? "");
+    });
+  });
+}
+async function isPaneIdle(paneId) {
+  const captured = await capturePane(paneId);
+  if (!captured) return false;
+  return paneLooksReady(captured) && !paneHasActiveTask(captured);
+}
+var NudgeTracker = class {
+  config;
+  states = /* @__PURE__ */ new Map();
+  /** Minimum interval between idle-detection scans (ms). */
+  scanIntervalMs = 5e3;
+  lastScanAt = 0;
+  constructor(config2) {
+    this.config = { ...DEFAULT_NUDGE_CONFIG, ...config2 };
+  }
+  /**
+   * Check worker panes for idle state and nudge when appropriate.
+   * Returns pane IDs that were nudged in this call.
+   *
+   * @param paneIds   - Worker pane IDs from the job's panes file
+   * @param leaderPaneId - Leader pane ID (never nudged)
+   * @param sessionName  - Tmux session name (passed to sendToWorker)
+   */
+  async checkAndNudge(paneIds, leaderPaneId, sessionName) {
+    const now = Date.now();
+    if (now - this.lastScanAt < this.scanIntervalMs) return [];
+    this.lastScanAt = now;
+    const nudged = [];
+    for (const paneId of paneIds) {
+      if (paneId === leaderPaneId) continue;
+      let state = this.states.get(paneId);
+      if (!state) {
+        state = { nudgeCount: 0, firstIdleAt: null, lastNudgeAt: null };
+        this.states.set(paneId, state);
+      }
+      if (state.nudgeCount >= this.config.maxCount) continue;
+      const idle = await isPaneIdle(paneId);
+      if (!idle) {
+        state.firstIdleAt = null;
+        continue;
+      }
+      if (state.firstIdleAt === null) {
+        state.firstIdleAt = now;
+      }
+      if (now - state.firstIdleAt < this.config.delayMs) continue;
+      const ok = await sendToWorker(sessionName, paneId, this.config.message);
+      if (ok) {
+        state.nudgeCount++;
+        state.lastNudgeAt = now;
+        state.firstIdleAt = null;
+        nudged.push(paneId);
+      }
+    }
+    return nudged;
+  }
+  /** Summary of nudge activity per pane. */
+  getSummary() {
+    const out = {};
+    for (const [paneId, state] of this.states) {
+      if (state.nudgeCount > 0) {
+        out[paneId] = { nudgeCount: state.nudgeCount, lastNudgeAt: state.lastNudgeAt };
+      }
+    }
+    return out;
+  }
+  /** Total nudges sent across all panes. */
+  get totalNudges() {
+    let total = 0;
+    for (const state of this.states.values()) {
+      total += state.nudgeCount;
+    }
+    return total;
+  }
+};
 
 // src/mcp/team-server.ts
 var omcTeamJobs = /* @__PURE__ */ new Map();
@@ -17843,7 +18085,10 @@ var statusSchema = external_exports.object({
 });
 var waitSchema = external_exports.object({
   job_id: external_exports.string().describe("Job ID returned by omc_run_team_start"),
-  timeout_ms: external_exports.number().optional().describe("Maximum wait time in ms (default: 300000, max: 3600000)")
+  timeout_ms: external_exports.number().optional().describe("Maximum wait time in ms (default: 300000, max: 3600000)"),
+  nudge_delay_ms: external_exports.number().optional().describe("Milliseconds a pane must be idle before nudging (default: 30000)"),
+  nudge_max_count: external_exports.number().optional().describe("Maximum nudges per pane (default: 3)"),
+  nudge_message: external_exports.string().optional().describe('Message sent as nudge (default: "Continue working on your assigned task.")')
 });
 async function handleStart(args) {
   if (typeof args === "object" && args !== null && Object.prototype.hasOwnProperty.call(args, "timeoutSeconds")) {
@@ -17857,7 +18102,7 @@ async function handleStart(args) {
   const runtimeCliPath = (0, import_path2.join)(__dirname, "runtime-cli.cjs");
   const job = { status: "running", startedAt: Date.now(), teamName: input.teamName, cwd: input.cwd };
   omcTeamJobs.set(jobId, job);
-  const child = (0, import_child_process2.spawn)("node", [runtimeCliPath], {
+  const child = (0, import_child_process3.spawn)("node", [runtimeCliPath], {
     env: { ...process.env, OMC_JOB_ID: jobId, OMC_JOBS_DIR },
     stdio: ["pipe", "pipe", "pipe"]
   });
@@ -17920,10 +18165,15 @@ async function handleStatus(args) {
   return { content: [{ type: "text", text: JSON.stringify(out) }] };
 }
 async function handleWait(args) {
-  const { job_id, timeout_ms = 3e5 } = waitSchema.parse(args);
+  const { job_id, timeout_ms = 3e5, nudge_delay_ms, nudge_max_count, nudge_message } = waitSchema.parse(args);
   validateJobId(job_id);
   const deadline = Date.now() + Math.min(timeout_ms, 36e5);
   let pollDelay = 500;
+  const nudgeTracker = new NudgeTracker({
+    ...nudge_delay_ms != null ? { delayMs: nudge_delay_ms } : {},
+    ...nudge_max_count != null ? { maxCount: nudge_max_count } : {},
+    ...nudge_message != null ? { message: nudge_message } : {}
+  });
   while (Date.now() < deadline) {
     const job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
     if (!job) {
@@ -17953,13 +18203,27 @@ async function handleWait(args) {
         }
       }
       if (job.stderr) out.stderr = job.stderr;
+      if (nudgeTracker.totalNudges > 0) out.nudges = nudgeTracker.getSummary();
       return { content: [{ type: "text", text: JSON.stringify(out) }] };
     }
     await new Promise((r) => setTimeout(r, pollDelay));
     pollDelay = Math.min(Math.floor(pollDelay * 1.5), 2e3);
+    try {
+      const panes = await loadPaneIds(job_id);
+      if (panes?.paneIds?.length) {
+        await nudgeTracker.checkAndNudge(
+          panes.paneIds,
+          panes.leaderPaneId,
+          job.teamName ?? ""
+        );
+      }
+    } catch {
+    }
   }
   const elapsed = ((Date.now() - (omcTeamJobs.get(job_id)?.startedAt ?? Date.now())) / 1e3).toFixed(1);
-  return { content: [{ type: "text", text: JSON.stringify({ error: `Timed out waiting for job ${job_id} after ${(timeout_ms / 1e3).toFixed(0)}s \u2014 workers are still running; call omc_run_team_wait again to keep waiting or omc_run_team_cleanup to stop them`, jobId: job_id, status: "running", elapsedSeconds: elapsed }) }] };
+  const timeoutOut = { error: `Timed out waiting for job ${job_id} after ${(timeout_ms / 1e3).toFixed(0)}s \u2014 workers are still running; call omc_run_team_wait again to keep waiting or omc_run_team_cleanup to stop them`, jobId: job_id, status: "running", elapsedSeconds: elapsed };
+  if (nudgeTracker.totalNudges > 0) timeoutOut.nudges = nudgeTracker.getSummary();
+  return { content: [{ type: "text", text: JSON.stringify(timeoutOut) }] };
 }
 var TOOLS = [
   {
@@ -18000,12 +18264,15 @@ var TOOLS = [
   },
   {
     name: "omc_run_team_wait",
-    description: "Block (poll internally) until a background omc_run_team job reaches a terminal state (completed or failed). Returns the result when done. One call instead of N polling calls. Uses exponential backoff (500ms \u2192 2000ms). If this wait call times out, workers are left running \u2014 call omc_run_team_wait again to keep waiting, or omc_run_team_cleanup to stop them explicitly.",
+    description: "Block (poll internally) until a background omc_run_team job reaches a terminal state (completed or failed). Returns the result when done. One call instead of N polling calls. Uses exponential backoff (500ms \u2192 2000ms). Auto-nudges idle teammate panes via tmux send-keys. If this wait call times out, workers are left running \u2014 call omc_run_team_wait again to keep waiting, or omc_run_team_cleanup to stop them explicitly.",
     inputSchema: {
       type: "object",
       properties: {
         job_id: { type: "string", description: "Job ID returned by omc_run_team_start" },
-        timeout_ms: { type: "number", description: "Maximum wait time in ms (default: 300000, max: 3600000)" }
+        timeout_ms: { type: "number", description: "Maximum wait time in ms (default: 300000, max: 3600000)" },
+        nudge_delay_ms: { type: "number", description: "Milliseconds a pane must be idle before nudging (default: 30000)" },
+        nudge_max_count: { type: "number", description: "Maximum nudges per pane (default: 3)" },
+        nudge_message: { type: "string", description: 'Message sent as nudge (default: "Continue working on your assigned task.")' }
       },
       required: ["job_id"]
     }

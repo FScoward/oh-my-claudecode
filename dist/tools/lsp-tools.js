@@ -24,6 +24,7 @@ async function withLspClient(filePath, operation, fn) {
         const serverConfig = getServerForFile(filePath);
         if (!serverConfig) {
             return {
+                isError: true,
                 content: [{
                         type: 'text',
                         text: `No language server available for file type: ${filePath}\n\nUse lsp_servers tool to see available language servers.`
@@ -45,6 +46,7 @@ async function withLspClient(filePath, operation, fn) {
         // Surface install hints for missing servers
         if (message.includes('not found')) {
             return {
+                isError: true,
                 content: [{
                         type: 'text',
                         text: `${message}`
@@ -52,6 +54,7 @@ async function withLspClient(filePath, operation, fn) {
             };
         }
         return {
+            isError: true,
             content: [{
                     type: 'text',
                     text: `Error in ${operation}: ${message}`
@@ -378,6 +381,7 @@ export const lspDiagnosticsDirectoryTool = {
         }
         catch (error) {
             return {
+                isError: true,
                 content: [{
                         type: 'text',
                         text: `Error running directory diagnostics: ${error instanceof Error ? error.message : String(error)}`

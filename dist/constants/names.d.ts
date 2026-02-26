@@ -12,6 +12,8 @@ export declare const MODES: {
     readonly ULTRAQA: "ultraqa";
     readonly TEAM: "team";
     readonly PIPELINE: "pipeline";
+    readonly SWARM: "swarm";
+    readonly RALPLAN: "ralplan";
 };
 export type ModeName = typeof MODES[keyof typeof MODES];
 export declare const TOOL_CATEGORIES: {

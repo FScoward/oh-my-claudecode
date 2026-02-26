@@ -5,7 +5,7 @@
  * Minimal continuation enforcer for all OMC modes.
  * Stripped down for reliability — no optional imports, no PRD, no notepad pruning.
  *
- * Supported modes: ralph, autopilot, ultrapilot, swarm, ultrawork, ultraqa, pipeline
+ * Supported modes: ralph, autopilot, ultrapilot, swarm, ultrawork, ultraqa, pipeline, team
  */
 
 import {
@@ -151,6 +151,28 @@ function isStaleState(state) {
 
   const age = Date.now() - mostRecent;
   return age > STALE_STATE_THRESHOLD_MS;
+}
+
+/**
+ * Check if a skill active state is stale based on its per-skill TTL.
+ * Unlike mode states (which use the global 2-hour threshold), skill states
+ * carry their own stale_ttl_ms value set when the skill was activated.
+ */
+function isStaleSkillState(state) {
+  if (!state) return true;
+  if (!state.active) return true;
+
+  const lastChecked = state.last_checked_at
+    ? new Date(state.last_checked_at).getTime()
+    : 0;
+  const startedAt = state.started_at ? new Date(state.started_at).getTime() : 0;
+  const mostRecent = Math.max(lastChecked, startedAt);
+
+  if (mostRecent === 0) return true;
+
+  const ttl = state.stale_ttl_ms || 5 * 60 * 1000; // Default 5 min
+  const age = Date.now() - mostRecent;
+  return age > ttl;
 }
 
 /**
@@ -467,8 +489,15 @@ async function main() {
       "pipeline-state.json",
       sessionId,
     );
+    const team = readStateFileWithSession(
+      stateDir,
+      globalStateDir,
+      "team-state.json",
+      sessionId,
+    );
 
     // Swarm uses swarm-summary.json (not swarm-state.json) + marker file
+    // Note: Swarm only reads from local stateDir, never global fallback
     const swarmMarker = existsSync(join(stateDir, "swarm-active.marker"));
     const swarmSummary = readJsonFile(join(stateDir, "swarm-summary.json"));
 
@@ -679,7 +708,46 @@ async function main() {
       }
     }
 
-    // Priority 6: UltraQA (QA cycling)
+    // Priority 6: Team (omc-teams / staged pipeline)
+    if (
+      team.state?.active &&
+      !isStaleState(team.state) &&
+      isStateForCurrentProject(team.state, directory, team.isGlobal)
+    ) {
+      const sessionMatches = hasValidSessionId
+        ? team.state.session_id === sessionId
+        : !team.state.session_id || team.state.session_id === sessionId;
+      if (sessionMatches) {
+        const phase = team.state.current_phase || "executing";
+        const terminalPhases = ["completed", "complete", "failed", "cancelled"];
+        if (!terminalPhases.includes(phase)) {
+          const newCount = (team.state.reinforcement_count || 0) + 1;
+          if (newCount <= 20) {
+            const toolError = readLastToolError(stateDir);
+            const errorGuidance = getToolErrorRetryGuidance(toolError);
+
+            team.state.reinforcement_count = newCount;
+            team.state.last_checked_at = new Date().toISOString();
+            writeJsonFile(team.path, team.state);
+
+            let reason = `[TEAM - Phase: ${phase}] Team mode active. Continue working. When all team tasks complete, run /oh-my-claudecode:cancel to cleanly exit. If cancel fails, retry with /oh-my-claudecode:cancel --force.`;
+            if (errorGuidance) {
+              reason = errorGuidance + reason;
+            }
+
+            console.log(
+              JSON.stringify({
+                decision: "block",
+                reason,
+              }),
+            );
+            return;
+          }
+        }
+      }
+    }
+
+    // Priority 7: UltraQA (QA cycling)
     if (
       ultraqa.state?.active &&
       !isStaleState(ultraqa.state) &&
@@ -713,7 +781,7 @@ async function main() {
       }
     }
 
-    // Priority 7: Ultrawork - ALWAYS continue while active (not just when tasks exist)
+    // Priority 8: Ultrawork - ALWAYS continue while active (not just when tasks exist)
     // This prevents false stops from bash errors, transient failures, etc.
     // Session isolation: only block if state belongs to this session (issue #311)
     // If state has session_id, it must match. If no session_id (legacy), allow.
@@ -764,6 +832,55 @@ async function main() {
 
       console.log(JSON.stringify({ decision: "block", reason }));
       return;
+    }
+
+    // Priority 9: Skill Active State (issue #1033)
+    // Skills like code-review, plan, tdd, etc. write skill-active-state.json
+    // when invoked via the Skill tool. This prevents premature stops mid-skill.
+    const skillState = readStateFileWithSession(
+      stateDir,
+      globalStateDir,
+      "skill-active-state.json",
+      sessionId,
+    );
+    if (
+      skillState.state?.active &&
+      !isStaleSkillState(skillState.state)
+    ) {
+      const sessionMatches = hasValidSessionId
+        ? skillState.state.session_id === sessionId
+        : !skillState.state.session_id || skillState.state.session_id === sessionId;
+      if (sessionMatches) {
+        const count = skillState.state.reinforcement_count || 0;
+        const maxReinforcements = skillState.state.max_reinforcements || 3;
+
+        if (count < maxReinforcements) {
+          const toolError = readLastToolError(stateDir);
+          const errorGuidance = getToolErrorRetryGuidance(toolError);
+
+          skillState.state.reinforcement_count = count + 1;
+          skillState.state.last_checked_at = new Date().toISOString();
+          writeJsonFile(skillState.path, skillState.state);
+
+          const skillName = skillState.state.skill_name || "unknown";
+          let reason = `[SKILL ACTIVE: ${skillName}] The "${skillName}" skill is still executing (reinforcement ${count + 1}/${maxReinforcements}). Continue working on the skill's instructions. Do not stop until the skill completes its workflow.`;
+          if (errorGuidance) {
+            reason = errorGuidance + reason;
+          }
+
+          console.log(JSON.stringify({ decision: "block", reason }));
+          return;
+        } else {
+          // Reinforcement limit reached - clear state and allow stop
+          try {
+            if (existsSync(skillState.path)) {
+              unlinkSync(skillState.path);
+            }
+          } catch {
+            // Ignore cleanup errors
+          }
+        }
+      }
     }
 
     // No blocking needed

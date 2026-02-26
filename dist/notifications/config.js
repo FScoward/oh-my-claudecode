@@ -7,6 +7,7 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { getClaudeConfigDir } from "../utils/paths.js";
+import { getHookConfig, mergeHookConfigIntoNotificationConfig, } from "./hook-config.js";
 const CONFIG_FILE = join(getClaudeConfigDir(), ".omc-config.json");
 /**
  * Read raw config from .omc-config.json
@@ -245,6 +246,20 @@ function mergeEnvIntoFileConfig(fileConfig, envConfig) {
     return merged;
 }
 /**
+ * Apply hook config merge then env-var mention patching and platform merge.
+ * Hook config event flags override event enabled/disabled (Priority 1).
+ * Env platforms fill missing blocks (Priority 3).
+ */
+function applyHookAndEnvMerge(config) {
+    // Priority 1: Hook config event overrides
+    const hookConfig = getHookConfig();
+    let merged = config;
+    if (hookConfig?.enabled && hookConfig.events) {
+        merged = mergeHookConfigIntoNotificationConfig(hookConfig, merged);
+    }
+    return applyEnvMerge(merged);
+}
+/**
  * Apply env-var mention patching and platform merge to a notification config.
  * Shared logic used by both profile and default config resolution paths.
  */
@@ -359,19 +374,19 @@ export function getNotificationConfig(profileName) {
             if (typeof profileConfig.enabled !== "boolean") {
                 return null;
             }
-            return applyEnvMerge(profileConfig);
+            return applyHookAndEnvMerge(profileConfig);
         }
         // Profile requested but not found — warn and fall through to default
         console.warn(`[notifications] Profile "${effectiveProfile}" not found, using default`);
     }
-    // Priority 1: Explicit notifications config in .omc-config.json
+    // Priority 2: Explicit notifications config in .omc-config.json
     if (raw) {
         const notifications = raw.notifications;
         if (notifications) {
             if (typeof notifications.enabled !== "boolean") {
                 return null;
             }
-            return applyEnvMerge(notifications);
+            return applyHookAndEnvMerge(notifications);
         }
     }
     // Priority 2: Environment variables (zero-config)
@@ -385,6 +400,25 @@ export function getNotificationConfig(profileName) {
     return null;
 }
 /**
+ * Check if a platform is activated for this session.
+ * Each platform requires its corresponding CLI flag:
+ *   --telegram  -> OMC_TELEGRAM=1
+ *   --discord   -> OMC_DISCORD=1
+ *   --slack     -> OMC_SLACK=1
+ *   --webhook   -> OMC_WEBHOOK=1
+ */
+function isPlatformActivated(platform) {
+    if (platform === "telegram")
+        return process.env.OMC_TELEGRAM === "1";
+    if (platform === "discord" || platform === "discord-bot")
+        return process.env.OMC_DISCORD === "1";
+    if (platform === "slack")
+        return process.env.OMC_SLACK === "1";
+    if (platform === "webhook")
+        return process.env.OMC_WEBHOOK === "1";
+    return false;
+}
+/**
  * Check if a specific event has any enabled platform.
  */
 export function isEventEnabled(config, event) {
@@ -396,26 +430,26 @@ export function isEventEnabled(config, event) {
         return false;
     // If event has no specific config, check if any top-level platform is enabled
     if (!eventConfig) {
-        return !!(config.discord?.enabled ||
-            config["discord-bot"]?.enabled ||
-            config.telegram?.enabled ||
-            config.slack?.enabled ||
-            config.webhook?.enabled);
+        return !!((isPlatformActivated("discord") && config.discord?.enabled) ||
+            (isPlatformActivated("discord-bot") && config["discord-bot"]?.enabled) ||
+            (isPlatformActivated("telegram") && config.telegram?.enabled) ||
+            (isPlatformActivated("slack") && config.slack?.enabled) ||
+            (isPlatformActivated("webhook") && config.webhook?.enabled));
     }
     // Check event-specific platform overrides
-    if (eventConfig.discord?.enabled ||
-        eventConfig["discord-bot"]?.enabled ||
-        eventConfig.telegram?.enabled ||
-        eventConfig.slack?.enabled ||
-        eventConfig.webhook?.enabled) {
+    if ((isPlatformActivated("discord") && eventConfig.discord?.enabled) ||
+        (isPlatformActivated("discord-bot") && eventConfig["discord-bot"]?.enabled) ||
+        (isPlatformActivated("telegram") && eventConfig.telegram?.enabled) ||
+        (isPlatformActivated("slack") && eventConfig.slack?.enabled) ||
+        (isPlatformActivated("webhook") && eventConfig.webhook?.enabled)) {
         return true;
     }
     // Fall back to top-level platforms
-    return !!(config.discord?.enabled ||
-        config["discord-bot"]?.enabled ||
-        config.telegram?.enabled ||
-        config.slack?.enabled ||
-        config.webhook?.enabled);
+    return !!((isPlatformActivated("discord") && config.discord?.enabled) ||
+        (isPlatformActivated("discord-bot") && config["discord-bot"]?.enabled) ||
+        (isPlatformActivated("telegram") && config.telegram?.enabled) ||
+        (isPlatformActivated("slack") && config.slack?.enabled) ||
+        (isPlatformActivated("webhook") && config.webhook?.enabled));
 }
 /**
  * Get list of enabled platforms for an event.
@@ -429,6 +463,8 @@ export function getEnabledPlatforms(config, event) {
     if (eventConfig && eventConfig.enabled === false)
         return [];
     const checkPlatform = (platform) => {
+        if (!isPlatformActivated(platform))
+            return;
         const eventPlatform = eventConfig?.[platform];
         if (eventPlatform &&
             typeof eventPlatform === "object" &&

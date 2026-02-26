@@ -69,12 +69,13 @@ export function appendSessionId(directory, sessionId) {
 export function clearBoulderState(directory) {
     const filePath = getBoulderFilePath(directory);
     try {
-        if (existsSync(filePath)) {
-            unlinkSync(filePath);
-        }
+        unlinkSync(filePath);
         return true;
     }
-    catch {
+    catch (error) {
+        if (error.code === 'ENOENT') {
+            return true; // Already gone — success
+        }
         return false;
     }
 }
@@ -137,11 +138,14 @@ export function getPlanName(planPath) {
  * Create a new boulder state for a plan.
  */
 export function createBoulderState(planPath, sessionId) {
+    const now = new Date().toISOString();
     return {
         active_plan: planPath,
-        started_at: new Date().toISOString(),
+        started_at: now,
         session_ids: [sessionId],
         plan_name: getPlanName(planPath),
+        active: true,
+        updatedAt: now,
     };
 }
 /**

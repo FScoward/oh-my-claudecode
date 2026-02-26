@@ -410,32 +410,36 @@ function getEffectivePlatformConfig(platform, config, event) {
  * Runs all sends in parallel with an overall timeout.
  * Individual failures don't block other platforms.
  */
-export async function dispatchNotifications(config, event, payload) {
+export async function dispatchNotifications(config, event, payload, platformMessages) {
     const promises = [];
+    /** Get payload for a platform, using per-platform message if available. */
+    const payloadFor = (platform) => platformMessages?.has(platform)
+        ? { ...payload, message: platformMessages.get(platform) }
+        : payload;
     // Discord
     const discordConfig = getEffectivePlatformConfig("discord", config, event);
     if (discordConfig?.enabled) {
-        promises.push(sendDiscord(discordConfig, payload));
+        promises.push(sendDiscord(discordConfig, payloadFor("discord")));
     }
     // Telegram
     const telegramConfig = getEffectivePlatformConfig("telegram", config, event);
     if (telegramConfig?.enabled) {
-        promises.push(sendTelegram(telegramConfig, payload));
+        promises.push(sendTelegram(telegramConfig, payloadFor("telegram")));
     }
     // Slack
     const slackConfig = getEffectivePlatformConfig("slack", config, event);
     if (slackConfig?.enabled) {
-        promises.push(sendSlack(slackConfig, payload));
+        promises.push(sendSlack(slackConfig, payloadFor("slack")));
     }
     // Webhook
     const webhookConfig = getEffectivePlatformConfig("webhook", config, event);
     if (webhookConfig?.enabled) {
-        promises.push(sendWebhook(webhookConfig, payload));
+        promises.push(sendWebhook(webhookConfig, payloadFor("webhook")));
     }
     // Discord Bot
     const discordBotConfig = getEffectivePlatformConfig("discord-bot", config, event);
     if (discordBotConfig?.enabled) {
-        promises.push(sendDiscordBot(discordBotConfig, payload));
+        promises.push(sendDiscordBot(discordBotConfig, payloadFor("discord-bot")));
     }
     if (promises.length === 0) {
         return { event, results: [], anySuccess: false };

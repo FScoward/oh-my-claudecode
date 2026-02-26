@@ -56,6 +56,11 @@ export declare const TODO_CONTINUATION_PROMPT = "[SYSTEM REMINDER - TODO CONTINU
  * Auto-activates ultrawork for parallel execution
  */
 export declare const RALPH_MESSAGE = "[RALPH + ULTRAWORK MODE ACTIVATED]\n\nRalph mode auto-activates Ultrawork for maximum parallel execution. Follow these rules:\n\n### Parallel Execution\n- **PARALLEL**: Fire independent calls simultaneously - NEVER wait sequentially\n- **BACKGROUND FIRST**: Use Task(run_in_background=true) for long operations\n- **DELEGATE**: Route tasks to specialist agents immediately\n\n### Completion Requirements\n- Verify ALL requirements from the original task are met\n- Architect verification is MANDATORY before claiming completion\n- When FULLY complete, run `/oh-my-claudecode:cancel` to cleanly exit and clean up state files\n\nContinue working until the task is truly done.\n";
+/**
+ * Prompt translation message - injected when non-English input detected
+ * Reminds users to write prompts in English for consistent agent routing
+ */
+export declare const PROMPT_TRANSLATION_MESSAGE = "[PROMPT TRANSLATION] Non-English input detected.\nWhen delegating via Task(), write prompt arguments in English for consistent agent routing.\nRespond to the user in their original language.\n";
 /** Node.js keyword detector hook script - loaded from templates/hooks/keyword-detector.mjs */
 export declare const KEYWORD_DETECTOR_SCRIPT_NODE: string;
 /** Node.js stop continuation hook script - loaded from templates/hooks/stop-continuation.mjs */

@@ -7,7 +7,7 @@
  *
  * Adapted from oh-my-opencode's background-agent feature.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { getClaudeConfigDir } from '../../utils/paths.js';
 import { ConcurrencyManager } from './concurrency.js';
@@ -76,7 +76,6 @@ export class BackgroundManager {
         if (!existsSync(BACKGROUND_TASKS_DIR))
             return;
         try {
-            const { readdirSync } = require('fs');
             const files = readdirSync(BACKGROUND_TASKS_DIR);
             for (const file of files) {
                 if (!file.endsWith('.json'))

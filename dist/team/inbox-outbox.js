@@ -194,8 +194,10 @@ export function readNewInboxMessages(teamName, workerName) {
             bytesProcessed += lineBytes;
         }
         catch {
-            // Stop at first malformed line — don't skip past it
-            break;
+            // Malformed JSONL line: log a warning, advance cursor past it, and continue.
+            // Stopping here would permanently wedge the inbox cursor.
+            console.warn(`[inbox-outbox] Skipping malformed JSONL line for ${workerName}: ${cleanLine.slice(0, 80)}`);
+            bytesProcessed += lineBytes;
         }
     }
     // Advance cursor only through last successfully parsed content

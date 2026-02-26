@@ -13,6 +13,8 @@ export const MODES = {
     ULTRAQA: 'ultraqa',
     TEAM: 'team',
     PIPELINE: 'pipeline',
+    SWARM: 'swarm',
+    RALPLAN: 'ralplan',
 };
 // Tool categories
 export const TOOL_CATEGORIES = {

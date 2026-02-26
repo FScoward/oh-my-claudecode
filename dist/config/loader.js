@@ -10,24 +10,33 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import * as jsonc from 'jsonc-parser';
 import { getConfigDir } from '../utils/paths.js';
+import { getDefaultModelHigh, getDefaultModelMedium, getDefaultModelLow, } from './models.js';
 /**
- * Default configuration
+ * Default configuration.
+ *
+ * Model IDs are resolved from environment variables (OMC_MODEL_HIGH,
+ * OMC_MODEL_MEDIUM, OMC_MODEL_LOW) with built-in fallbacks.
+ * User/project config files can further override via deepMerge.
+ *
+ * Note: env vars for external model defaults (OMC_CODEX_DEFAULT_MODEL,
+ * OMC_GEMINI_DEFAULT_MODEL) are read lazily in loadEnvConfig() to avoid
+ * capturing stale values at module load time.
  */
 export const DEFAULT_CONFIG = {
     agents: {
-        omc: { model: 'claude-opus-4-6-20260205' },
-        architect: { model: 'claude-opus-4-6-20260205', enabled: true },
-        researcher: { model: 'claude-sonnet-4-6-20260217' },
-        explore: { model: 'claude-haiku-4-5-20251001' },
-        frontendEngineer: { model: 'claude-sonnet-4-6-20260217', enabled: true },
-        documentWriter: { model: 'claude-haiku-4-5-20251001', enabled: true },
-        multimodalLooker: { model: 'claude-sonnet-4-6-20260217', enabled: true },
+        omc: { model: getDefaultModelHigh() },
+        architect: { model: getDefaultModelHigh(), enabled: true },
+        researcher: { model: getDefaultModelMedium() },
+        explore: { model: getDefaultModelLow() },
+        frontendEngineer: { model: getDefaultModelMedium(), enabled: true },
+        documentWriter: { model: getDefaultModelLow(), enabled: true },
+        multimodalLooker: { model: getDefaultModelMedium(), enabled: true },
         // New agents from oh-my-opencode
-        critic: { model: 'claude-opus-4-6-20260205', enabled: true },
-        analyst: { model: 'claude-opus-4-6-20260205', enabled: true },
-        coordinator: { model: 'claude-sonnet-4-6-20260217', enabled: true },
-        executor: { model: 'claude-sonnet-4-6-20260217', enabled: true },
-        planner: { model: 'claude-opus-4-6-20260205', enabled: true }
+        critic: { model: getDefaultModelHigh(), enabled: true },
+        analyst: { model: getDefaultModelHigh(), enabled: true },
+        coordinator: { model: getDefaultModelMedium(), enabled: true },
+        executor: { model: getDefaultModelMedium(), enabled: true },
+        planner: { model: getDefaultModelHigh(), enabled: true }
     },
     features: {
         parallelExecution: true,
@@ -59,9 +68,9 @@ export const DEFAULT_CONFIG = {
         escalationEnabled: true,
         maxEscalations: 2,
         tierModels: {
-            LOW: 'claude-haiku-4-5-20251001',
-            MEDIUM: 'claude-sonnet-4-6-20260217',
-            HIGH: 'claude-opus-4-6-20260205'
+            LOW: getDefaultModelLow(),
+            MEDIUM: getDefaultModelMedium(),
+            HIGH: getDefaultModelHigh()
         },
         agentOverrides: {
             architect: { tier: 'HIGH', reason: 'Advisory agent requires deep reasoning' },
@@ -80,10 +89,11 @@ export const DEFAULT_CONFIG = {
         ]
     },
     // External models configuration (Codex, Gemini)
+    // Static defaults only — env var overrides applied in loadEnvConfig()
     externalModels: {
         defaults: {
-            codexModel: process.env.OMC_CODEX_DEFAULT_MODEL || 'gpt-5.3-codex',
-            geminiModel: process.env.OMC_GEMINI_DEFAULT_MODEL || 'gemini-3.1-pro-preview',
+            codexModel: 'gpt-5.3-codex',
+            geminiModel: 'gemini-3.1-pro-preview',
         },
         fallbackPolicy: {
             onModelFailure: 'provider_chain',

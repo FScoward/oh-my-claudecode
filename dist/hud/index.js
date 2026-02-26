@@ -103,7 +103,7 @@ async function main(watchMode = false) {
             // First time seeing session start (or new session) - persist it
             const stateToWrite = hudState || { timestamp: new Date().toISOString(), backgroundTasks: [] };
             stateToWrite.sessionStartTimestamp = sessionStart.toISOString();
-            stateToWrite.sessionId = currentSessionId;
+            stateToWrite.sessionId = currentSessionId ?? undefined;
             stateToWrite.timestamp = new Date().toISOString();
             writeHudState(stateToWrite, cwd);
         }

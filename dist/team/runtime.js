@@ -5,6 +5,7 @@ import { buildWorkerArgv, validateCliAvailable, getWorkerEnv as getModelWorkerEn
 import { validateTeamName } from './team-name.js';
 import { createTeamSession, spawnWorkerInPane, sendToWorker, isWorkerAlive, killTeamSession, } from './tmux-session.js';
 import { composeInitialInbox, ensureWorkerStateDir, writeWorkerOverlay, } from './worker-bootstrap.js';
+import { withTaskLock } from './task-file-ops.js';
 function workerName(index) {
     return `worker-${index + 1}`;
 }
@@ -51,15 +52,19 @@ async function readTask(root, taskId) {
 async function writeTask(root, task) {
     await writeJson(taskPath(root, task.id), task);
 }
-async function markTaskInProgress(root, taskId, owner) {
-    const task = await readTask(root, taskId);
-    if (!task || task.status !== 'pending')
-        return false;
-    task.status = 'in_progress';
-    task.owner = owner;
-    task.assignedAt = new Date().toISOString();
-    await writeTask(root, task);
-    return true;
+async function markTaskInProgress(root, taskId, owner, teamName, cwd) {
+    const result = await withTaskLock(teamName, taskId, async () => {
+        const task = await readTask(root, taskId);
+        if (!task || task.status !== 'pending')
+            return false;
+        task.status = 'in_progress';
+        task.owner = owner;
+        task.assignedAt = new Date().toISOString();
+        await writeTask(root, task);
+        return true;
+    }, { cwd });
+    // withTaskLock returns null if the lock could not be acquired — treat as not claimed
+    return result ?? false;
 }
 async function resetTaskToPending(root, taskId) {
     const task = await readTask(root, taskId);
@@ -299,17 +304,35 @@ export async function monitorTeam(teamName, cwd, workerPaneIds) {
  */
 export function watchdogCliWorkers(runtime, intervalMs) {
     let tickInFlight = false;
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3;
+    // Track consecutive unresponsive ticks per worker
+    const unresponsiveCounts = new Map();
+    const UNRESPONSIVE_KILL_THRESHOLD = 3;
     const tick = async () => {
         if (tickInFlight)
             return;
         tickInFlight = true;
         try {
-            for (const [wName, active] of [...runtime.activeWorkers.entries()]) {
-                const root = stateRoot(runtime.cwd, runtime.teamName);
+            const workers = [...runtime.activeWorkers.entries()];
+            if (workers.length === 0)
+                return;
+            const root = stateRoot(runtime.cwd, runtime.teamName);
+            // Collect done signals and alive checks in parallel to avoid O(N×300ms) sequential tmux calls.
+            const [doneSignals, aliveResults] = await Promise.all([
+                Promise.all(workers.map(([wName]) => {
+                    const donePath = join(root, 'workers', wName, 'done.json');
+                    return readJsonSafe(donePath);
+                })),
+                Promise.all(workers.map(([, active]) => isWorkerAlive(active.paneId))),
+            ]);
+            for (let i = 0; i < workers.length; i++) {
+                const [wName, active] = workers[i];
                 const donePath = join(root, 'workers', wName, 'done.json');
+                const signal = doneSignals[i];
                 // Process done.json first if present
-                const signal = await readJsonSafe(donePath);
                 if (signal) {
+                    unresponsiveCounts.delete(wName);
                     await markTaskFromDone(root, signal.taskId || active.taskId, signal.status, signal.summary);
                     try {
                         const { unlink } = await import('fs/promises');
@@ -328,8 +351,9 @@ export function watchdogCliWorkers(runtime, intervalMs) {
                     continue;
                 }
                 // Dead pane without done.json => fail task, do not requeue
-                const alive = await isWorkerAlive(active.paneId);
+                const alive = aliveResults[i];
                 if (!alive) {
+                    unresponsiveCounts.delete(wName);
                     await markTaskFailedDeadPane(root, active.taskId, wName);
                     await killWorkerPane(runtime, wName, active.paneId);
                     if (!(await allTasksTerminal(runtime))) {
@@ -338,14 +362,65 @@ export function watchdogCliWorkers(runtime, intervalMs) {
                             await spawnWorkerForTask(runtime, wName, nextTaskIndexValue);
                         }
                     }
+                    continue;
                 }
+                // Pane is alive but no done.json — check heartbeat for stall detection
+                const heartbeatPath = join(root, 'workers', wName, 'heartbeat.json');
+                const heartbeat = await readJsonSafe(heartbeatPath);
+                const isStalled = heartbeat?.updatedAt
+                    ? Date.now() - new Date(heartbeat.updatedAt).getTime() > 60_000
+                    : false;
+                if (isStalled) {
+                    const count = (unresponsiveCounts.get(wName) ?? 0) + 1;
+                    unresponsiveCounts.set(wName, count);
+                    if (count < UNRESPONSIVE_KILL_THRESHOLD) {
+                        console.warn(`[watchdog] worker ${wName} unresponsive (${count}/${UNRESPONSIVE_KILL_THRESHOLD}), task ${active.taskId}`);
+                    }
+                    else {
+                        console.warn(`[watchdog] worker ${wName} unresponsive ${count} consecutive ticks — killing and reassigning task ${active.taskId}`);
+                        unresponsiveCounts.delete(wName);
+                        await markTaskFailedDeadPane(root, active.taskId, wName);
+                        await killWorkerPane(runtime, wName, active.paneId);
+                        if (!(await allTasksTerminal(runtime))) {
+                            const nextTaskIndexValue = await nextPendingTaskIndex(runtime);
+                            if (nextTaskIndexValue != null) {
+                                await spawnWorkerForTask(runtime, wName, nextTaskIndexValue);
+                            }
+                        }
+                    }
+                }
+                else {
+                    // Worker is responsive — reset counter
+                    unresponsiveCounts.delete(wName);
+                }
+            }
+            // Reset failure counter on a successful tick
+            consecutiveFailures = 0;
+        }
+        catch (err) {
+            consecutiveFailures++;
+            console.warn('[watchdog] tick error:', err);
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                console.warn(`[watchdog] ${consecutiveFailures} consecutive failures — marking team as failed`);
+                try {
+                    const root = stateRoot(runtime.cwd, runtime.teamName);
+                    await writeJson(join(root, 'watchdog-failed.json'), {
+                        failedAt: new Date().toISOString(),
+                        consecutiveFailures,
+                        lastError: err instanceof Error ? err.message : String(err),
+                    });
+                }
+                catch {
+                    // best-effort
+                }
+                clearInterval(intervalId);
             }
         }
         finally {
             tickInFlight = false;
         }
     };
-    const intervalId = setInterval(() => { tick().catch(err => console.warn('[watchdog] tick error:', err)); }, intervalMs);
+    const intervalId = setInterval(() => { tick(); }, intervalMs);
     return () => clearInterval(intervalId);
 }
 /**
@@ -357,7 +432,7 @@ export async function spawnWorkerForTask(runtime, workerNameValue, taskIndex) {
     const task = runtime.config.tasks[taskIndex];
     if (!task)
         return '';
-    const marked = await markTaskInProgress(root, taskId, workerNameValue);
+    const marked = await markTaskInProgress(root, taskId, workerNameValue, runtime.teamName, runtime.cwd);
     if (!marked)
         return '';
     const { execFile } = await import('child_process');
@@ -475,20 +550,24 @@ export async function killWorkerPane(runtime, workerNameValue, paneId) {
  */
 export async function assignTask(teamName, taskId, targetWorkerName, paneId, sessionName, cwd) {
     const root = stateRoot(cwd, teamName);
-    const taskPath = join(root, 'tasks', `${taskId}.json`);
-    // Update task ownership atomically (using file write — task-file-ops withTaskLock not directly applicable here)
-    const task = await readJsonSafe(taskPath);
-    const previousTaskState = task ? {
-        status: task.status,
-        owner: task.owner,
-        assignedAt: task.assignedAt,
-    } : null;
-    if (task) {
-        task.owner = targetWorkerName;
-        task.status = 'in_progress';
-        task.assignedAt = new Date().toISOString();
-        await writeJson(taskPath, task);
-    }
+    const taskFilePath = join(root, 'tasks', `${taskId}.json`);
+    let previousTaskState = null;
+    let lockedTask = null;
+    await withTaskLock(teamName, taskId, async () => {
+        const t = await readJsonSafe(taskFilePath);
+        lockedTask = t;
+        previousTaskState = t ? {
+            status: t.status,
+            owner: t.owner,
+            assignedAt: t.assignedAt,
+        } : null;
+        if (t) {
+            t.owner = targetWorkerName;
+            t.status = 'in_progress';
+            t.assignedAt = new Date().toISOString();
+            await writeJson(taskFilePath, t);
+        }
+    }, { cwd });
     // Write to worker inbox
     const inboxPath = join(root, 'workers', targetWorkerName, 'inbox.md');
     await mkdir(join(inboxPath, '..'), { recursive: true });
@@ -498,11 +577,12 @@ export async function assignTask(teamName, taskId, targetWorkerName, paneId, ses
     // Send tmux trigger
     const notified = await notifyPaneWithRetry(sessionName, paneId, `new-task:${taskId}`);
     if (!notified) {
-        if (task && previousTaskState) {
-            task.status = previousTaskState.status;
-            task.owner = previousTaskState.owner;
-            task.assignedAt = previousTaskState.assignedAt;
-            await writeJson(taskPath, task);
+        if (lockedTask && previousTaskState) {
+            const rollback = lockedTask;
+            rollback.status = previousTaskState.status;
+            rollback.owner = previousTaskState.owner;
+            rollback.assignedAt = previousTaskState.assignedAt;
+            await writeJson(taskFilePath, rollback);
         }
         throw new Error(`worker_notify_failed:${targetWorkerName}:new-task:${taskId}`);
     }
@@ -517,22 +597,32 @@ export async function shutdownTeam(teamName, sessionName, cwd, timeoutMs = 30_00
         requestedAt: new Date().toISOString(),
         teamName,
     });
-    // Poll for ACK files (timeout 30s)
-    const deadline = Date.now() + timeoutMs;
     const configData = await readJsonSafe(join(root, 'config.json'));
-    const workerCount = configData?.workerCount ?? 0;
-    const expectedAcks = Array.from({ length: workerCount }, (_, i) => `worker-${i + 1}`);
-    while (Date.now() < deadline && expectedAcks.length > 0) {
-        for (const wName of [...expectedAcks]) {
-            const ackPath = join(root, 'workers', wName, 'shutdown-ack.json');
-            if (existsSync(ackPath)) {
-                expectedAcks.splice(expectedAcks.indexOf(wName), 1);
+    // CLI workers (claude/codex/gemini tmux pane processes) never write shutdown-ack.json.
+    // Polling for ACK files on CLI worker teams wastes the full timeoutMs on every shutdown.
+    // Detect CLI worker teams by checking if all agent types are known CLI types, and skip
+    // ACK polling — the tmux kill below handles process cleanup instead.
+    const CLI_AGENT_TYPES = new Set(['claude', 'codex', 'gemini']);
+    const agentTypes = configData?.agentTypes ?? [];
+    const isCliWorkerTeam = agentTypes.length > 0 && agentTypes.every(t => CLI_AGENT_TYPES.has(t));
+    if (!isCliWorkerTeam) {
+        // Bridge daemon workers do write shutdown-ack.json — poll for them.
+        const deadline = Date.now() + timeoutMs;
+        const workerCount = configData?.workerCount ?? 0;
+        const expectedAcks = Array.from({ length: workerCount }, (_, i) => `worker-${i + 1}`);
+        while (Date.now() < deadline && expectedAcks.length > 0) {
+            for (const wName of [...expectedAcks]) {
+                const ackPath = join(root, 'workers', wName, 'shutdown-ack.json');
+                if (existsSync(ackPath)) {
+                    expectedAcks.splice(expectedAcks.indexOf(wName), 1);
+                }
+            }
+            if (expectedAcks.length > 0) {
+                await new Promise(r => setTimeout(r, 500));
             }
         }
-        if (expectedAcks.length > 0) {
-            await new Promise(r => setTimeout(r, 500));
-        }
     }
+    // CLI worker teams: skip ACK polling — process exit is handled by tmux kill below.
     // Kill tmux session (or just worker panes in split-pane mode)
     await killTeamSession(sessionName, workerPaneIds, leaderPaneId);
     // Clean up state
@@ -545,6 +635,8 @@ export async function shutdownTeam(teamName, sessionName, cwd, timeoutMs = 30_00
 }
 /**
  * Resume an existing team from persisted state.
+ * Reconstructs activeWorkers by scanning task files for in_progress tasks
+ * so the watchdog loop can continue processing without stalling.
  */
 export async function resumeTeam(teamName, cwd) {
     const root = stateRoot(cwd, teamName);
@@ -570,6 +662,22 @@ export async function resumeTeam(teamName, cwd) {
     // First pane is leader, rest are workers
     const workerPaneIds = allPanes.slice(1);
     const workerNames = workerPaneIds.map((_, i) => `worker-${i + 1}`);
+    // Reconstruct activeWorkers by scanning task files for in_progress tasks.
+    // Build a paneId lookup: worker-N maps to workerPaneIds[N-1].
+    const paneByWorker = new Map(workerNames.map((wName, i) => [wName, workerPaneIds[i] ?? '']));
+    const activeWorkers = new Map();
+    for (let i = 0; i < configData.tasks.length; i++) {
+        const taskId = String(i + 1);
+        const task = await readTask(root, taskId);
+        if (task?.status === 'in_progress' && task.owner) {
+            const paneId = paneByWorker.get(task.owner) ?? '';
+            activeWorkers.set(task.owner, {
+                paneId,
+                taskId,
+                spawnedAt: task.assignedAt ? new Date(task.assignedAt).getTime() : Date.now(),
+            });
+        }
+    }
     return {
         teamName,
         sessionName: sName,
@@ -577,7 +685,7 @@ export async function resumeTeam(teamName, cwd) {
         config: configData,
         workerNames,
         workerPaneIds,
-        activeWorkers: new Map(),
+        activeWorkers,
         cwd,
     };
 }

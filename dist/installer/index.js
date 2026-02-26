@@ -323,8 +323,8 @@ export function mergeClaudeMd(existingContent, omcContent, version) {
         const afterMarker = existingContent.substring(endIndex + END_MARKER.length);
         return `${beforeMarker}${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}${afterMarker}`;
     }
-    // Case 3: Corrupted markers (START without END or vice versa)
-    if (startIndex !== -1 || endIndex !== -1) {
+    // Case 3: Corrupted markers (exactly one present, or both present but in wrong order)
+    if ((startIndex !== -1) !== (endIndex !== -1) || (startIndex !== -1 && endIndex !== -1 && endIndex < startIndex)) {
         // Handle corrupted state - backup will be created by caller
         return `${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}\n\n<!-- User customizations (recovered from corrupted markers) -->\n${existingContent}`;
     }

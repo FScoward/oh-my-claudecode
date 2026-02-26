@@ -1,12 +1,14 @@
 /**
  * Issue #595: Consensus mode execution handoff regression tests
  * Issue #600: User feedback step between Planner and Architect/Critic
+ * Issue #999: Structured deliberation protocol (RALPLAN-DR)
  *
  * Verifies that the plan skill's consensus mode (ralplan) mandates:
  * 1. Structured AskUserQuestion for approval (not plain text)
  * 2. Explicit Skill("oh-my-claudecode:ralph") invocation on approval
  * 3. Prohibition of direct implementation from the planning agent
  * 4. User feedback step after Planner but before Architect/Critic (#600)
+ * 5. RALPLAN-DR short mode and deliberate mode requirements (#999)
  *
  * Also verifies that non-consensus modes (interview, direct, review) are unaffected.
  */
@@ -116,6 +118,47 @@ describe('Issue #595: Consensus mode execution handoff', () => {
       // Old vague language should be gone
       expect(escalation).not.toContain('transition to execution mode (ralph or executor)');
     });
+
+    it('should require RALPLAN-DR structured deliberation in consensus mode', () => {
+      const skill = getBuiltinSkill('omc-plan');
+      expect(skill).toBeDefined();
+
+      const consensusSection = extractSection(skill!.template, 'Consensus Mode');
+      expect(consensusSection).toBeDefined();
+      expect(consensusSection).toContain('RALPLAN-DR');
+      expect(consensusSection).toContain('**Principles** (3-5)');
+      expect(consensusSection).toContain('**Decision Drivers** (top 3)');
+      expect(consensusSection).toContain('**Viable Options** (>=2)');
+      expect(consensusSection).toContain('**invalidation rationale**');
+    });
+
+    it('should require ADR fields in final consensus output', () => {
+      const skill = getBuiltinSkill('omc-plan');
+      expect(skill).toBeDefined();
+
+      const consensusSection = extractSection(skill!.template, 'Consensus Mode');
+      expect(consensusSection).toBeDefined();
+      expect(consensusSection).toContain('ADR');
+      expect(consensusSection).toContain('**Decision**');
+      expect(consensusSection).toContain('**Drivers**');
+      expect(consensusSection).toContain('**Alternatives considered**');
+      expect(consensusSection).toContain('**Why chosen**');
+      expect(consensusSection).toContain('**Consequences**');
+      expect(consensusSection).toContain('**Follow-ups**');
+    });
+
+    it('should mention deliberate mode requirements in consensus mode', () => {
+      const skill = getBuiltinSkill('omc-plan');
+      expect(skill).toBeDefined();
+
+      const consensusSection = extractSection(skill!.template, 'Consensus Mode');
+      expect(consensusSection).toBeDefined();
+      expect(consensusSection).toContain('**Deliberate**');
+      expect(consensusSection).toContain('`--deliberate`');
+      expect(consensusSection).toContain('pre-mortem');
+      expect(consensusSection).toContain('expanded test plan');
+      expect(consensusSection).toContain('unit / integration / e2e / observability');
+    });
   });
 
   describe('Issue #600: User feedback step between Planner and Architect/Critic', () => {
@@ -176,6 +219,19 @@ describe('Issue #595: Consensus mode execution handoff', () => {
       expect(architectIdx).toBeGreaterThan(-1);
       expect(criticIdx).toBeGreaterThan(-1);
       expect(criticIdx).toBeGreaterThan(architectIdx);
+    });
+
+    it('should require architect antithesis and critic rejection gates in consensus flow', () => {
+      const skill = getBuiltinSkill('omc-plan');
+      expect(skill).toBeDefined();
+
+      const consensusSection = extractSection(skill!.template, 'Consensus Mode');
+      expect(consensusSection).toBeDefined();
+      expect(consensusSection).toContain('steelman counterargument (antithesis)');
+      expect(consensusSection).toContain('tradeoff tension');
+      expect(consensusSection).toContain('Critic **MUST** explicitly reject shallow alternatives');
+      expect(consensusSection).toContain('driver contradictions');
+      expect(consensusSection).toContain('weak verification');
     });
 
   });

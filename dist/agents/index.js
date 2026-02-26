@@ -34,6 +34,4 @@ export { testEngineerAgent } from './definitions.js';
 export { securityReviewerAgent, buildFixerAgent, codeReviewerAgent, gitMasterAgent, codeSimplifierAgent } from './definitions.js';
 // Core exports (getAgentDefinitions and omcSystemPrompt)
 export { getAgentDefinitions, omcSystemPrompt } from './definitions.js';
-// Deprecated exports (for backward compatibility)
-export { coordinatorAgent, ORCHESTRATOR_COORDINATOR_PROMPT_METADATA } from './coordinator-deprecated.js';
 //# sourceMappingURL=index.js.map

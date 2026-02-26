@@ -124,7 +124,7 @@ async function recoverToolResultMissing(sessionID, failedAssistantMsg) {
     // integrate with the actual session/tool system to inject tool results.
     // This is a placeholder showing the recovery intent.
     // A full implementation would require access to the SDK client.
-    return true; // Indicate recovery was attempted
+    return false; // Cannot actually inject tool results without SDK client access
 }
 /**
  * Recover from thinking block order errors

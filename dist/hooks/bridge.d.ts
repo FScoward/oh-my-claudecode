@@ -71,6 +71,17 @@ export declare const _notify: {
     askUserQuestion: typeof dispatchAskUserQuestionNotification;
 };
 /**
+ * @internal Object wrapper for OpenClaw gateway dispatch.
+ * Mirrors the _notify pattern for testability (tests spy on _openclaw.wake
+ * instead of mocking dynamic imports).
+ *
+ * Fire-and-forget: the lazy import + double .catch() ensures OpenClaw
+ * never blocks hooks or surfaces errors.
+ */
+export declare const _openclaw: {
+    wake: (event: import("../openclaw/types.js").OpenClawHookEvent, context: import("../openclaw/types.js").OpenClawContext) => void;
+};
+/**
  * Reset the skip hooks cache (for testing only)
  */
 export declare function resetSkipHooksCache(): void;

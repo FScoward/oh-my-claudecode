@@ -19,6 +19,12 @@ export interface DetectedKeyword {
  */
 export declare function removeCodeBlocks(text: string): string;
 /**
+ * Regex matching non-Latin script characters for prompt translation detection.
+ * Uses Unicode script ranges (not raw non-ASCII) to avoid false positives on emoji and accented Latin.
+ * Covers: CJK (Japanese/Chinese), Korean, Cyrillic, Arabic, Devanagari, Thai, Myanmar.
+ */
+export declare const NON_LATIN_SCRIPT_PATTERN: RegExp;
+/**
 * Sanitize text for keyword detection by removing structural noise.
  * Strips XML tags, URLs, file paths, and code blocks.
  */
@@ -76,4 +82,27 @@ export declare function getAllKeywordsWithSizeCheck(text: string, options?: Task
  * Get the highest priority keyword detected with conflict resolution
  */
 export declare function getPrimaryKeyword(text: string): DetectedKeyword | null;
+/**
+ * Execution mode keywords subject to the ralplan-first gate (issue #997).
+ * These modes spin up heavy orchestration and should not run on vague requests.
+ */
+export declare const EXECUTION_GATE_KEYWORDS: Set<KeywordType>;
+/**
+ * Check if a prompt is underspecified for direct execution.
+ * Returns true if the prompt lacks enough specificity for heavy execution modes.
+ *
+ * Conservative: only gates clearly vague prompts. Borderline cases pass through.
+ */
+export declare function isUnderspecifiedForExecution(text: string): boolean;
+/**
+ * Apply the ralplan-first gate (issue #997): if execution keywords are present
+ * but the prompt is underspecified, redirect to ralplan.
+ *
+ * Returns the modified keyword list and gate metadata.
+ */
+export declare function applyRalplanGate(keywords: KeywordType[], text: string): {
+    keywords: KeywordType[];
+    gateApplied: boolean;
+    gatedKeywords: KeywordType[];
+};
 //# sourceMappingURL=index.d.ts.map

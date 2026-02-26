@@ -12,5 +12,10 @@ export declare function isUnix(): boolean;
  * Works on both Unix (/) and Windows (C:\)
  */
 export declare function isPathRoot(filepath: string): boolean;
+/**
+ * Check if running inside WSL (Windows Subsystem for Linux).
+ * Checks WSLENV env var OR /proc/version containing "microsoft".
+ */
+export declare function isWSL(): boolean;
 export * from './process-utils.js';
 //# sourceMappingURL=index.d.ts.map

@@ -29,9 +29,10 @@ export declare function teleportListCommand(options: {
 }): Promise<void>;
 /**
  * Remove a worktree
+ * Returns 0 on success, 1 on failure.
  */
 export declare function teleportRemoveCommand(pathOrName: string, options: {
     force?: boolean;
     json?: boolean;
-}): Promise<void>;
+}): Promise<number>;
 //# sourceMappingURL=teleport.d.ts.map

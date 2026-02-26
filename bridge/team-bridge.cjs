@@ -126,8 +126,11 @@ var STALE_THRESHOLD_MS = 24 * 60 * 60 * 1e3;
 // src/team/tmux-session.ts
 var import_child_process = require("child_process");
 var import_path3 = require("path");
+var import_util = require("util");
 var import_promises = __toESM(require("fs/promises"), 1);
 var TMUX_SESSION_PREFIX = "omc-team";
+var promisifiedExec = (0, import_util.promisify)(import_child_process.exec);
+var promisifiedExecFile = (0, import_util.promisify)(import_child_process.execFile);
 function sanitizeName(name) {
   const sanitized = name.replace(/[^a-zA-Z0-9-]/g, "");
   if (sanitized.length === 0) {
@@ -541,7 +544,8 @@ function readNewInboxMessages(teamName, workerName) {
       messages.push(JSON.parse(cleanLine));
       bytesProcessed += lineBytes;
     } catch {
-      break;
+      console.warn(`[inbox-outbox] Skipping malformed JSONL line for ${workerName}: ${cleanLine.slice(0, 80)}`);
+      bytesProcessed += lineBytes;
     }
   }
   const newOffset = offset + (bytesProcessed > 0 ? bytesProcessed : 0);
@@ -1651,14 +1655,19 @@ ${violationSummary}`);
 }
 
 // src/lib/worktree-paths.ts
+var import_crypto = require("crypto");
 var import_child_process3 = require("child_process");
 var import_fs9 = require("fs");
 var import_path11 = require("path");
-var worktreeCache = null;
+var MAX_WORKTREE_CACHE_SIZE = 8;
+var worktreeCacheMap = /* @__PURE__ */ new Map();
 function getWorktreeRoot(cwd) {
   const effectiveCwd = cwd || process.cwd();
-  if (worktreeCache && worktreeCache.cwd === effectiveCwd) {
-    return worktreeCache.root || null;
+  if (worktreeCacheMap.has(effectiveCwd)) {
+    const root = worktreeCacheMap.get(effectiveCwd);
+    worktreeCacheMap.delete(effectiveCwd);
+    worktreeCacheMap.set(effectiveCwd, root);
+    return root || null;
   }
   try {
     const root = (0, import_child_process3.execSync)("git rev-parse --show-toplevel", {
@@ -1666,7 +1675,13 @@ function getWorktreeRoot(cwd) {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"]
     }).trim();
-    worktreeCache = { cwd: effectiveCwd, root };
+    if (worktreeCacheMap.size >= MAX_WORKTREE_CACHE_SIZE) {
+      const oldest = worktreeCacheMap.keys().next().value;
+      if (oldest !== void 0) {
+        worktreeCacheMap.delete(oldest);
+      }
+    }
+    worktreeCacheMap.set(effectiveCwd, root);
     return root;
   } catch {
     return null;

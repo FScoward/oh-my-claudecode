@@ -5,6 +5,7 @@ import { triggerStopCallbacks } from './callbacks.js';
 import { notify } from '../../notifications/index.js';
 import { cleanupBridgeSessions } from '../../tools/python-repl/bridge-manager.js';
 import { resolveToWorktreeRoot } from '../../lib/worktree-paths.js';
+import { SESSION_END_MODE_STATE_FILES, SESSION_METRICS_MODE_FILES } from '../../lib/mode-names.js';
 /**
  * Read agent tracking to get spawn/completion counts
  */
@@ -33,15 +34,7 @@ function getModesUsed(directory) {
     if (!fs.existsSync(stateDir)) {
         return modes;
     }
-    const modeStateFiles = [
-        { file: 'autopilot-state.json', mode: 'autopilot' },
-        { file: 'ultrapilot-state.json', mode: 'ultrapilot' },
-        { file: 'ralph-state.json', mode: 'ralph' },
-        { file: 'ultrawork-state.json', mode: 'ultrawork' },
-        { file: 'swarm-state.json', mode: 'swarm' },
-        { file: 'pipeline-state.json', mode: 'pipeline' },
-    ];
-    for (const { file, mode } of modeStateFiles) {
+    for (const { file, mode } of SESSION_METRICS_MODE_FILES) {
         const statePath = path.join(stateDir, file);
         if (fs.existsSync(statePath)) {
             modes.push(mode);
@@ -202,19 +195,8 @@ export function cleanupTransientState(directory) {
 }
 /**
  * Mode state files that should be cleaned up on session end.
- * These files track active execution modes that should not persist across sessions.
+ * Imported from the shared mode-names module (issue #1058).
  */
-const MODE_STATE_FILES = [
-    { file: 'autopilot-state.json', mode: 'autopilot' },
-    { file: 'ultrapilot-state.json', mode: 'ultrapilot' },
-    { file: 'ralph-state.json', mode: 'ralph' },
-    { file: 'ultrawork-state.json', mode: 'ultrawork' },
-    { file: 'ultraqa-state.json', mode: 'ultraqa' },
-    { file: 'pipeline-state.json', mode: 'pipeline' },
-    // Swarm uses marker file + SQLite
-    { file: 'swarm-active.marker', mode: 'swarm' },
-    { file: 'swarm-summary.json', mode: 'swarm' },
-];
 const PYTHON_REPL_TOOL_NAMES = new Set(['python_repl', 'mcp__t__python_repl']);
 /**
  * Extract python_repl research session IDs from transcript JSONL.
@@ -283,7 +265,7 @@ export function cleanupModeStates(directory, sessionId) {
     if (!fs.existsSync(stateDir)) {
         return { filesRemoved, modesCleaned };
     }
-    for (const { file, mode } of MODE_STATE_FILES) {
+    for (const { file, mode } of SESSION_END_MODE_STATE_FILES) {
         const localPath = path.join(stateDir, file);
         // Check if local state exists and is active
         if (fs.existsSync(localPath)) {
@@ -390,6 +372,15 @@ export async function processSessionEnd(input) {
     }
     catch {
         // Notification failures should never block session end
+    }
+    // Wake OpenClaw gateway for session-end (non-blocking)
+    if (process.env.OMC_OPENCLAW === "1") {
+        import("../../openclaw/index.js").then(({ wakeOpenClaw }) => wakeOpenClaw("session-end", {
+            sessionId: input.session_id,
+            projectPath: input.cwd,
+            contextSummary: `Duration: ${metrics.duration_ms}ms, Agents: ${metrics.agents_completed}/${metrics.agents_spawned}`,
+            reason: metrics.reason,
+        }).catch(() => { })).catch(() => { });
     }
     // Clean up reply session registry and stop daemon if no active sessions remain
     try {

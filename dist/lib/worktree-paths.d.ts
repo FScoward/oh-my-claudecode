@@ -3,6 +3,10 @@
  *
  * Provides strict path validation and resolution for .omc/ paths,
  * ensuring all operations stay within the worktree boundary.
+ *
+ * Supports OMC_STATE_DIR environment variable for centralized state storage.
+ * When set, state is stored at $OMC_STATE_DIR/{project-identifier}/ instead
+ * of {worktree}/.omc/. This preserves state across worktree deletions.
  */
 /** Standard .omc subdirectories */
 export declare const OmcPaths: {
@@ -32,13 +36,43 @@ export declare function getWorktreeRoot(cwd?: string): string | null;
  */
 export declare function validatePath(inputPath: string): void;
 /**
+ * Clear the dual-directory warning cache (useful for testing).
+ * @internal
+ */
+export declare function clearDualDirWarnings(): void;
+/**
+ * Get a stable project identifier for centralized state storage.
+ *
+ * Uses a hybrid strategy:
+ * 1. Git remote URL hash (stable across worktrees and clones of the same repo)
+ * 2. Fallback to worktree root path hash (for local-only repos without remotes)
+ *
+ * Format: `{dirName}-{hash}` where hash is first 16 chars of SHA-256.
+ * Example: `my-project-a1b2c3d4e5f6g7h8`
+ *
+ * @param worktreeRoot - Optional worktree root path
+ * @returns A stable project identifier string
+ */
+export declare function getProjectIdentifier(worktreeRoot?: string): string;
+/**
+ * Get the .omc root directory path.
+ *
+ * When OMC_STATE_DIR is set, returns $OMC_STATE_DIR/{project-identifier}/
+ * instead of {worktree}/.omc/. This allows centralized state storage that
+ * survives worktree deletion.
+ *
+ * @param worktreeRoot - Optional worktree root
+ * @returns Absolute path to the omc root directory
+ */
+export declare function getOmcRoot(worktreeRoot?: string): string;
+/**
  * Resolve a relative path under .omc/ to an absolute path.
- * Validates the path is within the worktree boundary.
+ * Validates the path is within the omc boundary.
  *
  * @param relativePath - Path relative to .omc/ (e.g., "state/ralph.json")
  * @param worktreeRoot - Optional worktree root (auto-detected if not provided)
  * @returns Absolute path
- * @throws Error if path would escape worktree
+ * @throws Error if path would escape omc boundary
  */
 export declare function resolveOmcPath(relativePath: string, worktreeRoot?: string): string;
 /**
@@ -74,10 +108,6 @@ export declare function getWorktreeNotepadPath(worktreeRoot?: string): string;
  * Get the absolute path to the project memory file.
  */
 export declare function getWorktreeProjectMemoryPath(worktreeRoot?: string): string;
-/**
- * Get the .omc root directory path.
- */
-export declare function getOmcRoot(worktreeRoot?: string): string;
 /**
  * Resolve a plan file path.
  * @param planName - Plan name (without .md extension)
@@ -137,7 +167,7 @@ export declare function resetProcessSessionId(): void;
 export declare function validateSessionId(sessionId: string): void;
 /**
  * Resolve a session-scoped state file path.
- * Path: .omc/state/sessions/{sessionId}/{mode}-state.json
+ * Path: {omcRoot}/state/sessions/{sessionId}/{mode}-state.json
  *
  * @param stateName - State name (e.g., "ralph", "ultrawork")
  * @param sessionId - Session identifier
@@ -147,7 +177,7 @@ export declare function validateSessionId(sessionId: string): void;
 export declare function resolveSessionStatePath(stateName: string, sessionId: string, worktreeRoot?: string): string;
 /**
  * Get the session state directory path.
- * Path: .omc/state/sessions/{sessionId}/
+ * Path: {omcRoot}/state/sessions/{sessionId}/
  *
  * @param sessionId - Session identifier
  * @param worktreeRoot - Optional worktree root

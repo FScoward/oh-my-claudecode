@@ -25,5 +25,4 @@ export { qualityReviewerAgent } from './definitions.js';
 export { testEngineerAgent } from './definitions.js';
 export { securityReviewerAgent, buildFixerAgent, codeReviewerAgent, gitMasterAgent, codeSimplifierAgent } from './definitions.js';
 export { getAgentDefinitions, omcSystemPrompt } from './definitions.js';
-export { coordinatorAgent, ORCHESTRATOR_COORDINATOR_PROMPT_METADATA } from './coordinator-deprecated.js';
 //# sourceMappingURL=index.d.ts.map

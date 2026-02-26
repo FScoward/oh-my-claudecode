@@ -9,42 +9,31 @@ import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join, basename } from 'path';
 import { getClaudeConfigDir } from '../../utils/paths.js';
 import { resolveLiveData } from './live-data.js';
+import { parseFrontmatter, parseFrontmatterAliases, stripOptionalQuotes } from '../../utils/frontmatter.js';
 /** Claude config directory */
 const CLAUDE_CONFIG_DIR = getClaudeConfigDir();
 /**
- * Parse YAML-like frontmatter from markdown file
- * Simple implementation - supports basic key: value format
+ * Claude Code native commands that must not be shadowed by user skills.
+ * Skills whose canonical name or alias matches one of these will be prefixed
+ * with `omc-` to avoid overriding built-in CC slash commands.
  */
-function parseFrontmatter(content) {
-    const frontmatterRegex = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
-    const match = content.match(frontmatterRegex);
-    if (!match) {
-        return { data: {}, body: content };
-    }
-    const [, yamlContent, body] = match;
-    const data = {};
-    for (const line of yamlContent.split('\n')) {
-        const colonIndex = line.indexOf(':');
-        if (colonIndex === -1)
-            continue;
-        const key = line.slice(0, colonIndex).trim();
-        let value = line.slice(colonIndex + 1).trim();
-        // Remove surrounding quotes
-        if ((value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-        }
-        data[key] = value;
-    }
-    return { data, body };
-}
-function stripOptionalQuotes(value) {
-    const trimmed = value.trim();
-    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-        (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-        return trimmed.slice(1, -1).trim();
-    }
-    return trimmed;
+const CC_NATIVE_COMMANDS = new Set([
+    'review',
+    'plan',
+    'security-review',
+    'init',
+    'doctor',
+    'help',
+    'config',
+    'clear',
+    'compact',
+    'memory',
+]);
+function toSafeSkillName(name) {
+    const normalized = name.trim();
+    return CC_NATIVE_COMMANDS.has(normalized.toLowerCase())
+        ? `omc-${normalized}`
+        : normalized;
 }
 function getFrontmatterString(data, key) {
     const value = data[key];
@@ -52,21 +41,6 @@ function getFrontmatterString(data, key) {
         return undefined;
     const normalized = stripOptionalQuotes(value);
     return normalized.length > 0 ? normalized : undefined;
-}
-function getFrontmatterAliases(data) {
-    const rawAliases = getFrontmatterString(data, 'aliases');
-    if (!rawAliases)
-        return [];
-    if (rawAliases.startsWith('[') && rawAliases.endsWith(']')) {
-        const inner = rawAliases.slice(1, -1).trim();
-        if (!inner)
-            return [];
-        return inner
-            .split(',')
-            .map(alias => stripOptionalQuotes(alias))
-            .filter(alias => alias.length > 0);
-    }
-    return [rawAliases];
 }
 /**
  * Discover commands from a directory
@@ -91,18 +65,18 @@ function discoverCommandsFromDir(commandsDir, scope) {
         const commandName = basename(entry.name, '.md');
         try {
             const content = readFileSync(commandPath, 'utf-8');
-            const { data, body } = parseFrontmatter(content);
-            const metadata = {
+            const { metadata: fm, body } = parseFrontmatter(content);
+            const commandMetadata = {
                 name: commandName,
-                description: data.description || '',
-                argumentHint: data['argument-hint'],
-                model: data.model,
-                agent: data.agent,
+                description: fm.description || '',
+                argumentHint: fm['argument-hint'],
+                model: fm.model,
+                agent: fm.agent,
             };
             commands.push({
                 name: commandName,
                 path: commandPath,
-                metadata,
+                metadata: commandMetadata,
                 content: body,
                 scope,
             });
@@ -134,14 +108,17 @@ export function discoverAllCommands() {
                 if (existsSync(skillPath)) {
                     try {
                         const content = readFileSync(skillPath, 'utf-8');
-                        const { data, body } = parseFrontmatter(content);
-                        const canonicalName = getFrontmatterString(data, 'name') || dir.name;
-                        const aliases = Array.from(new Set(getFrontmatterAliases(data).filter(alias => alias.toLowerCase() !== canonicalName.toLowerCase())));
+                        const { metadata: fm, body } = parseFrontmatter(content);
+                        const rawName = getFrontmatterString(fm, 'name') || dir.name;
+                        const canonicalName = toSafeSkillName(rawName);
+                        const aliases = Array.from(new Set(parseFrontmatterAliases(fm.aliases)
+                            .map((alias) => toSafeSkillName(alias))
+                            .filter((alias) => alias.toLowerCase() !== canonicalName.toLowerCase())));
                         const commandNames = [canonicalName, ...aliases];
-                        const description = getFrontmatterString(data, 'description') || '';
-                        const argumentHint = getFrontmatterString(data, 'argument-hint');
-                        const model = getFrontmatterString(data, 'model');
-                        const agent = getFrontmatterString(data, 'agent');
+                        const description = getFrontmatterString(fm, 'description') || '';
+                        const argumentHint = getFrontmatterString(fm, 'argument-hint');
+                        const model = getFrontmatterString(fm, 'model');
+                        const agent = getFrontmatterString(fm, 'agent');
                         for (const commandName of commandNames) {
                             const isAlias = commandName !== canonicalName;
                             const metadata = {

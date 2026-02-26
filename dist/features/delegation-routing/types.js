@@ -39,6 +39,8 @@ export const ROLE_CATEGORY_DEFAULTS = {
     debugger: 'debugger',
     scientist: 'scientist',
     'build-fixer': 'build-fixer',
+    'git-master': 'executor',
+    'code-simplifier': 'executor',
 };
 /**
  * Deprecated role aliases mapped to canonical role names.

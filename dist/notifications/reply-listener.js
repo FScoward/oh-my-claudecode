@@ -244,6 +244,7 @@ export function isDaemonRunning() {
 export function sanitizeReplyInput(text) {
     return text
         .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // Strip control chars (keep \n, \r, \t)
+        .replace(/[\u202a-\u202e\u2066-\u2069]/g, '') // Strip bidi override characters
         .replace(/\r?\n/g, ' ') // Newlines -> spaces
         .replace(/\\/g, '\\\\') // Escape backslashes
         .replace(/`/g, '\\`') // Escape backticks

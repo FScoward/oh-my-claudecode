@@ -408,7 +408,7 @@ IMPORTANT: dryRun=true (default) only previews changes. Set dryRun=false to appl
                                 const varName = metaVar.replace(/^\$+/, "");
                                 const captured = match.getMatch(varName);
                                 if (captured) {
-                                    finalReplacement = finalReplacement.replace(metaVar, captured.text());
+                                    finalReplacement = finalReplacement.replaceAll(metaVar, captured.text());
                                 }
                             }
                         }
