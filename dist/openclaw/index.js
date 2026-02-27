@@ -7,9 +7,9 @@
  *   _openclaw.wake("session-start", { sessionId, projectPath: directory });
  */
 export { getOpenClawConfig, resolveGateway, resetOpenClawConfigCache } from "./config.js";
-export { wakeGateway, interpolateInstruction } from "./dispatcher.js";
+export { wakeGateway, wakeCommandGateway, interpolateInstruction, isCommandGateway, shellEscapeArg } from "./dispatcher.js";
 import { getOpenClawConfig, resolveGateway } from "./config.js";
-import { wakeGateway, interpolateInstruction } from "./dispatcher.js";
+import { wakeGateway, wakeCommandGateway, interpolateInstruction, isCommandGateway } from "./dispatcher.js";
 import { basename } from "path";
 import { getCurrentTmuxSession } from "../notifications/tmux.js";
 /** Whether debug logging is enabled */
@@ -36,6 +36,8 @@ function buildWhitelistedContext(context) {
         result.reason = context.reason;
     if (context.question !== undefined)
         result.question = context.question;
+    if (context.tmuxTail !== undefined)
+        result.tmuxTail = context.tmuxTail;
     return result;
 }
 /**
@@ -62,6 +64,20 @@ export async function wakeOpenClaw(event, context) {
         const now = new Date().toISOString();
         // Auto-detect tmux session if not provided in context
         const tmuxSession = context.tmuxSession ?? getCurrentTmuxSession() ?? undefined;
+        // Auto-capture tmux pane content for stop/session-end events (best-effort)
+        let tmuxTail = context.tmuxTail;
+        if (!tmuxTail && (event === "stop" || event === "session-end") && process.env.TMUX) {
+            try {
+                const { capturePaneContent } = await import("../features/rate-limit-wait/tmux-detector.js");
+                const paneId = process.env.TMUX_PANE;
+                if (paneId) {
+                    tmuxTail = capturePaneContent(paneId, 15) ?? undefined;
+                }
+            }
+            catch {
+                // Non-blocking: tmux capture is best-effort
+            }
+        }
         // Build template variables from whitelisted context fields
         const variables = {
             sessionId: context.sessionId,
@@ -73,21 +89,33 @@ export async function wakeOpenClaw(event, context) {
             contextSummary: context.contextSummary,
             reason: context.reason,
             question: context.question,
+            tmuxTail,
             event,
             timestamp: now,
         };
+        // Add interpolated instruction to variables for command gateway {{instruction}} placeholder
         const interpolatedInstruction = interpolateInstruction(instruction, variables);
-        const payload = {
-            event,
-            instruction: interpolatedInstruction,
-            timestamp: now,
-            sessionId: context.sessionId,
-            projectPath: context.projectPath,
-            projectName: context.projectPath ? basename(context.projectPath) : undefined,
-            tmuxSession,
-            context: buildWhitelistedContext(context),
-        };
-        const result = await wakeGateway(gatewayName, gateway, payload);
+        variables.instruction = interpolatedInstruction;
+        let result;
+        if (isCommandGateway(gateway)) {
+            // Command gateway: execute shell command with shell-escaped variables
+            result = await wakeCommandGateway(gatewayName, gateway, variables);
+        }
+        else {
+            // HTTP gateway: send JSON payload
+            const payload = {
+                event,
+                instruction: interpolatedInstruction,
+                timestamp: now,
+                sessionId: context.sessionId,
+                projectPath: context.projectPath,
+                projectName: context.projectPath ? basename(context.projectPath) : undefined,
+                tmuxSession,
+                tmuxTail,
+                context: buildWhitelistedContext(context),
+            };
+            result = await wakeGateway(gatewayName, gateway, payload);
+        }
         if (DEBUG) {
             console.error(`[openclaw] wake ${event} -> ${gatewayName}: ${result.success ? "ok" : result.error}`);
         }

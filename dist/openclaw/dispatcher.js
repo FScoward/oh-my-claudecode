@@ -1,7 +1,7 @@
 /**
  * OpenClaw Gateway Dispatcher
  *
- * Sends instruction payloads to OpenClaw gateways via HTTP.
+ * Sends instruction payloads to OpenClaw gateways via HTTP or CLI command.
  * All calls are non-blocking with timeouts. Failures are swallowed
  * to avoid blocking hooks.
  */
@@ -48,7 +48,21 @@ export function interpolateInstruction(template, variables) {
     });
 }
 /**
- * Wake an OpenClaw gateway with the given payload.
+ * Type guard: is this gateway config a command gateway?
+ */
+export function isCommandGateway(config) {
+    return config.type === "command";
+}
+/**
+ * Shell-escape a string for safe embedding in a shell command.
+ * Uses single-quote wrapping with internal quote escaping.
+ * Follows the sanitizeForTmux pattern from tmux-detector.ts.
+ */
+export function shellEscapeArg(value) {
+    return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+/**
+ * Wake an HTTP-type OpenClaw gateway with the given payload.
  */
 export async function wakeGateway(gatewayName, gatewayConfig, payload) {
     if (!validateGatewayUrl(gatewayConfig.url)) {
@@ -79,6 +93,39 @@ export async function wakeGateway(gatewayName, gatewayConfig, payload) {
             };
         }
         return { gateway: gatewayName, success: true, statusCode: response.status };
+    }
+    catch (error) {
+        return {
+            gateway: gatewayName,
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        };
+    }
+}
+/**
+ * Wake a command-type OpenClaw gateway by executing a shell command.
+ *
+ * The command template supports {{variable}} placeholders. All variable
+ * values are shell-escaped before interpolation to prevent injection.
+ */
+export async function wakeCommandGateway(gatewayName, gatewayConfig, variables) {
+    try {
+        const { execFile } = await import("child_process");
+        const { promisify } = await import("util");
+        const execFileAsync = promisify(execFile);
+        // Interpolate variables with shell escaping
+        const command = gatewayConfig.command.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+            const value = variables[key];
+            if (value === undefined)
+                return match;
+            return shellEscapeArg(value);
+        });
+        const timeout = gatewayConfig.timeout ?? DEFAULT_TIMEOUT_MS;
+        await execFileAsync("sh", ["-c", command], {
+            timeout,
+            env: { ...process.env },
+        });
+        return { gateway: gatewayName, success: true };
     }
     catch (error) {
         return {

@@ -1,11 +1,11 @@
 /**
  * OpenClaw Gateway Dispatcher
  *
- * Sends instruction payloads to OpenClaw gateways via HTTP.
+ * Sends instruction payloads to OpenClaw gateways via HTTP or CLI command.
  * All calls are non-blocking with timeouts. Failures are swallowed
  * to avoid blocking hooks.
  */
-import type { OpenClawGatewayConfig, OpenClawPayload, OpenClawResult } from "./types.js";
+import type { OpenClawCommandGatewayConfig, OpenClawGatewayConfig, OpenClawHttpGatewayConfig, OpenClawPayload, OpenClawResult } from "./types.js";
 /**
  * Interpolate template variables in an instruction string.
  *
@@ -24,7 +24,24 @@ import type { OpenClawGatewayConfig, OpenClawPayload, OpenClawResult } from "./t
  */
 export declare function interpolateInstruction(template: string, variables: Record<string, string | undefined>): string;
 /**
- * Wake an OpenClaw gateway with the given payload.
+ * Type guard: is this gateway config a command gateway?
  */
-export declare function wakeGateway(gatewayName: string, gatewayConfig: OpenClawGatewayConfig, payload: OpenClawPayload): Promise<OpenClawResult>;
+export declare function isCommandGateway(config: OpenClawGatewayConfig): config is OpenClawCommandGatewayConfig;
+/**
+ * Shell-escape a string for safe embedding in a shell command.
+ * Uses single-quote wrapping with internal quote escaping.
+ * Follows the sanitizeForTmux pattern from tmux-detector.ts.
+ */
+export declare function shellEscapeArg(value: string): string;
+/**
+ * Wake an HTTP-type OpenClaw gateway with the given payload.
+ */
+export declare function wakeGateway(gatewayName: string, gatewayConfig: OpenClawHttpGatewayConfig, payload: OpenClawPayload): Promise<OpenClawResult>;
+/**
+ * Wake a command-type OpenClaw gateway by executing a shell command.
+ *
+ * The command template supports {{variable}} placeholders. All variable
+ * values are shell-escaped before interpolation to prevent injection.
+ */
+export declare function wakeCommandGateway(gatewayName: string, gatewayConfig: OpenClawCommandGatewayConfig, variables: Record<string, string | undefined>): Promise<OpenClawResult>;
 //# sourceMappingURL=dispatcher.d.ts.map

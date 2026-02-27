@@ -6,9 +6,11 @@
  */
 /** Hook events that can trigger OpenClaw gateway calls */
 export type OpenClawHookEvent = "session-start" | "session-end" | "pre-tool-use" | "post-tool-use" | "stop" | "keyword-detector" | "ask-user-question";
-/** Single gateway endpoint configuration */
-export interface OpenClawGatewayConfig {
-    /** Gateway endpoint URL (HTTPS required) */
+/** HTTP gateway configuration (default when type is absent or "http") */
+export interface OpenClawHttpGatewayConfig {
+    /** Gateway type discriminator (optional for backward compat) */
+    type?: "http";
+    /** Gateway endpoint URL (HTTPS required, HTTP allowed for localhost) */
     url: string;
     /** Optional custom headers (e.g., Authorization) */
     headers?: Record<string, string>;
@@ -17,6 +19,18 @@ export interface OpenClawGatewayConfig {
     /** Per-request timeout in ms (default: 10000) */
     timeout?: number;
 }
+/** CLI command gateway configuration */
+export interface OpenClawCommandGatewayConfig {
+    /** Gateway type discriminator */
+    type: "command";
+    /** Command template with {{variable}} placeholders.
+     *  Variables are shell-escaped automatically before interpolation. */
+    command: string;
+    /** Per-command timeout in ms (default: 10000) */
+    timeout?: number;
+}
+/** Gateway configuration — HTTP or CLI command */
+export type OpenClawGatewayConfig = OpenClawHttpGatewayConfig | OpenClawCommandGatewayConfig;
 /** Per-hook-event mapping to a gateway + instruction */
 export interface OpenClawHookMapping {
     /** Name of the gateway (key in gateways object) */
@@ -51,6 +65,8 @@ export interface OpenClawPayload {
     projectName?: string;
     /** Tmux session name (if running inside tmux) */
     tmuxSession?: string;
+    /** Recent tmux pane output (for stop/session-end events) */
+    tmuxTail?: string;
     /** Context data from the hook (whitelisted fields only) */
     context: OpenClawContext;
 }
@@ -69,6 +85,8 @@ export interface OpenClawContext {
     contextSummary?: string;
     reason?: string;
     question?: string;
+    /** Recent tmux pane output (captured automatically for stop/session-end events) */
+    tmuxTail?: string;
 }
 /** Result of a gateway wake attempt */
 export interface OpenClawResult {

@@ -1,3 +1,21 @@
+# oh-my-claudecode v4.5.1: OpenClaw CLI Command Gateway
+
+## Patch Notes
+
+Hotfix adding CLI command gateway support to OpenClaw. The HTTP-only dispatcher could not wake CLI-based agents (Clawdbot/OpenClaw) that use WebSocket interfaces. This release adds a `"command"` gateway type that executes shell commands with shell-escaped variable interpolation, auto-detects `openclaw`/`clawdbot` binaries, and captures tmux pane tail content for stop/session-end events.
+
+### Features
+
+- **CLI command gateway type** (#1087): New `OpenClawCommandGatewayConfig` with discriminated union types, `wakeCommandGateway()` dispatcher using `execFile("sh", ["-c", ...])`, and shell-safe `{{variable}}` interpolation via `shellEscapeArg()`.
+- **tmux tail capture**: Auto-captures last 15 lines of tmux pane content for `stop` and `session-end` events via `capturePaneContent()`. Added `tmuxTail` field to `OpenClawContext` and `OpenClawPayload`.
+- **configure-openclaw skill update**: Auto-detects installed CLI (`which openclaw || which clawdbot`) and offers command gateway setup with pre-filled templates.
+
+### Bug Fixes
+
+- **OpenClaw HTTP 405 on CLI agents**: Clawdbot/OpenClaw gateways use WebSocket, not REST — HTTP POST returned 405 on all routes. Command gateway type bypasses this entirely.
+
+---
+
 # oh-my-claudecode v4.5.0: Notifications Engine, OpenClaw Gateway & Reliability Hardening
 
 ## Patch Notes

@@ -6,9 +6,9 @@
  * Usage (from bridge.ts via _openclaw wrapper):
  *   _openclaw.wake("session-start", { sessionId, projectPath: directory });
  */
-export type { OpenClawConfig, OpenClawContext, OpenClawGatewayConfig, OpenClawHookEvent, OpenClawHookMapping, OpenClawPayload, OpenClawResult, } from "./types.js";
+export type { OpenClawCommandGatewayConfig, OpenClawConfig, OpenClawContext, OpenClawGatewayConfig, OpenClawHookEvent, OpenClawHookMapping, OpenClawHttpGatewayConfig, OpenClawPayload, OpenClawResult, } from "./types.js";
 export { getOpenClawConfig, resolveGateway, resetOpenClawConfigCache } from "./config.js";
-export { wakeGateway, interpolateInstruction } from "./dispatcher.js";
+export { wakeGateway, wakeCommandGateway, interpolateInstruction, isCommandGateway, shellEscapeArg } from "./dispatcher.js";
 import type { OpenClawHookEvent, OpenClawContext, OpenClawResult } from "./types.js";
 /**
  * Wake the OpenClaw gateway mapped to a hook event.

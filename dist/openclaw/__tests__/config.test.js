@@ -145,5 +145,56 @@ describe("resolveGateway", () => {
         const result = resolveGateway(configWithBadGateway, "session-start");
         expect(result).toBeNull();
     });
+    it("resolves a command gateway with type and command fields correctly", () => {
+        const configWithCommand = {
+            enabled: true,
+            gateways: {
+                "cmd-gateway": {
+                    type: "command",
+                    command: "echo {{instruction}}",
+                    timeout: 5000,
+                },
+            },
+            hooks: {
+                "session-start": {
+                    gateway: "cmd-gateway",
+                    instruction: "Session started",
+                    enabled: true,
+                },
+            },
+        };
+        const result = resolveGateway(configWithCommand, "session-start");
+        expect(result).not.toBeNull();
+        expect(result.gatewayName).toBe("cmd-gateway");
+        expect(result.gateway).toEqual({ type: "command", command: "echo {{instruction}}", timeout: 5000 });
+        expect(result.instruction).toBe("Session started");
+    });
+    it("returns null for command gateway when command field is missing", () => {
+        const configWithBrokenCommand = {
+            enabled: true,
+            gateways: {
+                "cmd-gateway": {
+                    type: "command",
+                    command: "",
+                },
+            },
+            hooks: {
+                "session-start": {
+                    gateway: "cmd-gateway",
+                    instruction: "Session started",
+                    enabled: true,
+                },
+            },
+        };
+        const result = resolveGateway(configWithBrokenCommand, "session-start");
+        expect(result).toBeNull();
+    });
+    it("resolves an HTTP gateway without a type field (backward compat)", () => {
+        const result = resolveGateway(validConfig, "session-start");
+        expect(result).not.toBeNull();
+        expect(result.gatewayName).toBe("my-gateway");
+        // gateway has no type field — backward compat with pre-command-gateway configs
+        expect(result.gateway.type).toBeUndefined();
+    });
 });
 //# sourceMappingURL=config.test.js.map

@@ -59,8 +59,18 @@ export function resolveGateway(config, event) {
         return null;
     }
     const gateway = config.gateways[mapping.gateway];
-    if (!gateway || !gateway.url) {
+    if (!gateway) {
         return null;
+    }
+    // Validate based on gateway type
+    if (gateway.type === "command") {
+        if (!gateway.command)
+            return null;
+    }
+    else {
+        // HTTP gateway (default when type is absent or "http")
+        if (!("url" in gateway) || !gateway.url)
+            return null;
     }
     return { gatewayName: mapping.gateway, gateway, instruction: mapping.instruction };
 }
