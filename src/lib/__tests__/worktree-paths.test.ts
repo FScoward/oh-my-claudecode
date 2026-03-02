@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, existsSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, mkdtempSync } from 'fs';
 import { execSync } from 'child_process';
 import { join } from 'path';
 import {
@@ -82,9 +82,10 @@ describe('worktree-paths', () => {
       expect(result).toBe(join(TEST_DIR, '.omc', 'state', 'ultrawork-state.json'));
     });
 
-    it('should throw for swarm (uses SQLite, not JSON)', () => {
-      expect(() => resolveStatePath('swarm', TEST_DIR)).toThrow('SQLite');
-      expect(() => resolveStatePath('swarm-state', TEST_DIR)).toThrow('SQLite');
+    it('should resolve swarm as regular JSON path after #1131 removal', () => {
+      // swarm SQLite special-casing removed in #1131
+      const result = resolveStatePath('swarm', TEST_DIR);
+      expect(result).toContain('swarm-state.json');
     });
   });
 
@@ -287,7 +288,7 @@ describe('worktree-paths', () => {
     });
 
     it('should generate a new ID after reset', () => {
-      const id1 = getProcessSessionId();
+      const _id1 = getProcessSessionId();
       resetProcessSessionId();
       const id2 = getProcessSessionId();
       // IDs should differ (different timestamp)

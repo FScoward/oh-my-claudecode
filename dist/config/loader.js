@@ -10,7 +10,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import * as jsonc from 'jsonc-parser';
 import { getConfigDir } from '../utils/paths.js';
-import { getDefaultModelHigh, getDefaultModelMedium, getDefaultModelLow, } from './models.js';
+import { getDefaultModelHigh, getDefaultModelMedium, getDefaultModelLow, isNonClaudeProvider, } from './models.js';
 /**
  * Default configuration.
  *
@@ -65,6 +65,7 @@ export const DEFAULT_CONFIG = {
     routing: {
         enabled: true,
         defaultTier: 'MEDIUM',
+        forceInherit: false,
         escalationEnabled: true,
         maxEscalations: 2,
         tierModels: {
@@ -219,6 +220,12 @@ export function loadEnvConfig() {
             enabled: process.env.OMC_ROUTING_ENABLED === 'true'
         };
     }
+    if (process.env.OMC_ROUTING_FORCE_INHERIT !== undefined) {
+        config.routing = {
+            ...config.routing,
+            forceInherit: process.env.OMC_ROUTING_FORCE_INHERIT === 'true'
+        };
+    }
     if (process.env.OMC_ROUTING_DEFAULT_TIER) {
         const tier = process.env.OMC_ROUTING_DEFAULT_TIER.toUpperCase();
         if (tier === 'LOW' || tier === 'MEDIUM' || tier === 'HIGH') {
@@ -310,6 +317,19 @@ export function loadConfig() {
     // Merge environment variables (highest precedence)
     const envConfig = loadEnvConfig();
     config = deepMerge(config, envConfig);
+    // Auto-enable forceInherit for non-Claude providers (issue #1201)
+    // Only auto-enable if user hasn't explicitly set it via config or env var.
+    // When a non-Claude model is detected (CC Switch, LiteLLM, etc.), passing
+    // Claude-specific tier names (sonnet/opus/haiku) to the Agent tool causes
+    // 400 errors because the provider doesn't recognize them.
+    if (config.routing?.forceInherit !== true &&
+        process.env.OMC_ROUTING_FORCE_INHERIT === undefined &&
+        isNonClaudeProvider()) {
+        config.routing = {
+            ...config.routing,
+            forceInherit: true,
+        };
+    }
     return config;
 }
 /**
@@ -464,14 +484,13 @@ export function generateConfigSchema() {
                     ultrathink: { type: 'array', items: { type: 'string' } }
                 }
             },
-            swarm: {
+            routing: {
                 type: 'object',
-                description: 'Swarm mode settings',
+                description: 'Intelligent model routing configuration',
                 properties: {
-                    defaultMaxConcurrent: { type: 'integer', default: 5, minimum: 1, maximum: 50 },
-                    wavePollingInterval: { type: 'integer', default: 5000, minimum: 1000, maximum: 30000 },
-                    aggressiveThreshold: { type: 'integer', default: 5 },
-                    enableFileOwnership: { type: 'boolean', default: true }
+                    enabled: { type: 'boolean', default: true, description: 'Enable intelligent model routing' },
+                    defaultTier: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], default: 'MEDIUM', description: 'Default tier when no rules match' },
+                    forceInherit: { type: 'boolean', default: false, description: 'Force all agents to inherit the parent model, bypassing OMC model routing. When true, no model parameter is passed to Task calls, so agents use the user\'s Claude Code model setting. Auto-enabled when a non-Claude provider is detected (CC Switch, custom ANTHROPIC_BASE_URL, etc.).' },
                 }
             },
             externalModels: {

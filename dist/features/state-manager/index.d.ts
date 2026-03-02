@@ -104,6 +104,8 @@ export declare function cleanupStaleStates(directory?: string, maxAgeMs?: number
  * State Manager Class
  *
  * Object-oriented interface for managing a specific state.
+ *
+ * @deprecated For mode state (autopilot, ralph, ultrawork, etc.), use `writeModeState`/`readModeState` from `src/lib/mode-state-io.ts` instead. StateManager is retained for non-mode state only.
  */
 export declare class StateManager<T = StateData> {
     private name;

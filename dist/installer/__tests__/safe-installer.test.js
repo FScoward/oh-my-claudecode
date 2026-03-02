@@ -111,7 +111,7 @@ describe('Safe Installer - Hook Conflict Detection', () => {
             }
         };
         writeFileSync(TEST_SETTINGS_FILE, JSON.stringify(existingSettings, null, 2));
-        const options = {
+        const _options = {
             verbose: true,
             skipClaudeCheck: true
         };

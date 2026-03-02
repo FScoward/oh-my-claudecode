@@ -607,6 +607,147 @@ describe("sendSlack", () => {
         });
     });
 });
+describe("sendSlack input sanitization", () => {
+    beforeEach(() => {
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+    it("drops channel containing shell metacharacters", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            channel: "#alerts; rm -rf /",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBeUndefined();
+    });
+    it("drops channel containing path traversal", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            channel: "../../etc/passwd",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBeUndefined();
+    });
+    it("drops channel containing command substitution", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            channel: "#ch$(whoami)",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBeUndefined();
+    });
+    it("drops channel containing backticks", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            channel: "#ch`whoami`",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBeUndefined();
+    });
+    it("accepts valid channel name and passes it through", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            channel: "#alerts",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBe("#alerts");
+    });
+    it("accepts valid channel ID and passes it through", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            channel: "C1234567890",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBe("C1234567890");
+    });
+    it("drops username containing shell metacharacters", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            username: "bot; rm -rf /",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.username).toBeUndefined();
+    });
+    it("drops username containing command substitution", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            username: "bot$(whoami)",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.username).toBeUndefined();
+    });
+    it("accepts valid username and passes it through", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            username: "OMC Bot",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.username).toBe("OMC Bot");
+    });
+    it("drops invalid mention and sends text without prefix", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            mention: "@everyone",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.text).toBe(basePayload.message);
+        expect(body.text).not.toContain("@everyone");
+    });
+    it("drops mention with injected content", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            mention: "<@U1234567890> malicious payload",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.text).toBe(basePayload.message);
+    });
+    it("accepts valid Slack user mention and prepends it", async () => {
+        const config = {
+            enabled: true,
+            webhookUrl: "https://hooks.slack.com/services/T00/B00/xxx",
+            mention: "<@U1234567890>",
+        };
+        await sendSlack(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.text).toMatch(/^<@U1234567890>\n/);
+    });
+});
 describe("sendWebhook", () => {
     beforeEach(() => {
         vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
@@ -994,6 +1135,60 @@ describe("dispatcher mention separation", () => {
         expect(body.allowed_mentions.roles).toEqual(["22222222222222222"]);
         vi.unstubAllEnvs();
         vi.restoreAllMocks();
+    });
+});
+describe("sendWebhook reply channel context", () => {
+    beforeEach(() => {
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+    it("includes channel, to, thread_id in webhook payload when reply fields are set", async () => {
+        const config = {
+            enabled: true,
+            url: "https://example.com/hook",
+        };
+        const payload = {
+            ...basePayload,
+            replyChannel: "#general",
+            replyTarget: "@bot",
+            replyThread: "thread-123",
+        };
+        await sendWebhook(config, payload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBe("#general");
+        expect(body.to).toBe("@bot");
+        expect(body.thread_id).toBe("thread-123");
+    });
+    it("does not include channel fields in webhook payload when reply fields are not set", async () => {
+        const config = {
+            enabled: true,
+            url: "https://example.com/hook",
+        };
+        await sendWebhook(config, basePayload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body).not.toHaveProperty("channel");
+        expect(body).not.toHaveProperty("to");
+        expect(body).not.toHaveProperty("thread_id");
+    });
+    it("includes only partial reply channel fields in webhook payload", async () => {
+        const config = {
+            enabled: true,
+            url: "https://example.com/hook",
+        };
+        const payload = {
+            ...basePayload,
+            replyChannel: "#alerts",
+        };
+        await sendWebhook(config, payload);
+        const call = vi.mocked(fetch).mock.calls[0];
+        const body = JSON.parse(call[1].body);
+        expect(body.channel).toBe("#alerts");
+        expect(body).not.toHaveProperty("to");
+        expect(body).not.toHaveProperty("thread_id");
     });
 });
 //# sourceMappingURL=dispatcher.test.js.map

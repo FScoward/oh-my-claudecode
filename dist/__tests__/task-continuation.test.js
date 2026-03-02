@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { checkIncompleteTodos, isValidTask, readTaskFiles, getTaskDirectory, isTaskIncomplete, checkIncompleteTasks, checkLegacyTodos, isUserAbort, createTodoContinuationHook, formatTodoStatus, getNextPendingTodo, isValidSessionId } from '../hooks/todo-continuation/index.js';
+import { checkIncompleteTodos, isValidTask, readTaskFiles, getTaskDirectory, isTaskIncomplete, checkIncompleteTasks, checkLegacyTodos, isUserAbort, createTodoContinuationHook, formatTodoStatus, getNextPendingTodo, isValidSessionId, } from '../hooks/todo-continuation/index.js';
 // Mock fs and os modules
 vi.mock('fs');
 vi.mock('os');

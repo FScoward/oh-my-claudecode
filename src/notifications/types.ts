@@ -24,6 +24,7 @@ export type NotificationPlatform =
   | "discord-bot"
   | "telegram"
   | "slack"
+  | "slack-bot"
   | "webhook";
 
 /** Discord webhook configuration */
@@ -70,6 +71,21 @@ export interface SlackNotificationConfig {
   username?: string;
   /** Optional mention to prepend to messages (e.g. "<@U12345678>" for user, "<!subteam^S12345>" for group, "<!channel>" / "<!here>" / "<!everyone>") */
   mention?: string;
+  /** Slack signing secret for verifying incoming WebSocket/Events API messages */
+  signingSecret?: string;
+}
+
+/** Slack Bot API configuration (Socket Mode for inbound, Web API for outbound) */
+export interface SlackBotNotificationConfig {
+  enabled: boolean;
+  /** Slack app-level token for Socket Mode (xapp-...) */
+  appToken?: string;
+  /** Slack bot token for Web API (xoxb-...) */
+  botToken?: string;
+  /** Channel ID for sending messages and listening */
+  channelId?: string;
+  /** Optional mention to prepend to messages */
+  mention?: string;
 }
 
 /** Generic webhook configuration */
@@ -89,6 +105,7 @@ export type PlatformConfig =
   | DiscordBotNotificationConfig
   | TelegramNotificationConfig
   | SlackNotificationConfig
+  | SlackBotNotificationConfig
   | WebhookNotificationConfig;
 
 /** Per-event notification configuration */
@@ -100,6 +117,7 @@ export interface EventNotificationConfig {
   "discord-bot"?: DiscordBotNotificationConfig;
   telegram?: TelegramNotificationConfig;
   slack?: SlackNotificationConfig;
+  "slack-bot"?: SlackBotNotificationConfig;
   webhook?: WebhookNotificationConfig;
 }
 
@@ -116,6 +134,7 @@ export interface NotificationConfig {
   "discord-bot"?: DiscordBotNotificationConfig;
   telegram?: TelegramNotificationConfig;
   slack?: SlackNotificationConfig;
+  "slack-bot"?: SlackBotNotificationConfig;
   webhook?: WebhookNotificationConfig;
 
   /** Per-event configuration */
@@ -175,6 +194,12 @@ export interface NotificationPayload {
   agentType?: string;
   /** Captured tmux pane content (last N lines) */
   tmuxTail?: string;
+  /** Reply channel name (from OPENCLAW_REPLY_CHANNEL env var) */
+  replyChannel?: string;
+  /** Reply target (from OPENCLAW_REPLY_TARGET env var) */
+  replyTarget?: string;
+  /** Reply thread ID (from OPENCLAW_REPLY_THREAD env var) */
+  replyThread?: string;
 }
 
 /** Named notification profiles (keyed by profile name) */

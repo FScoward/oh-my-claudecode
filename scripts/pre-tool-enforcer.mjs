@@ -20,6 +20,7 @@ const MODE_STATE_FILES = [
   'ultraqa-state.json',
   'pipeline-state.json',
   'team-state.json',
+  'omc-teams-state.json',
 ];
 
 // Simple JSON field extraction

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import {
   stateReadTool,
@@ -138,7 +138,7 @@ describe('state-tools', () => {
     });
 
     it('should clear only the requested session for every execution mode', async () => {
-      const modes = ['autopilot', 'ultrapilot', 'pipeline', 'ralph', 'ultrawork', 'ultraqa'] as const;
+      const modes = ['autopilot', 'ralph', 'ultrawork', 'ultraqa', 'team'] as const;
       const sessionA = 'session-a';
       const sessionB = 'session-b';
 
@@ -377,13 +377,14 @@ describe('state-tools', () => {
       expect(result.content[0].text).toContain('active');
     });
 
-    it('should clear session-specific state without affecting legacy', async () => {
+    it('should clear session-specific state without affecting legacy owned by another session', async () => {
       const sessionId = 'test-session-clear';
+      const otherSessionId = 'other-session-owner';
 
-      // Create both legacy and session-scoped state
+      // Create legacy state owned by a different session
       writeFileSync(
         join(TEST_DIR, '.omc', 'state', 'ralph-state.json'),
-        JSON.stringify({ active: true, source: 'legacy' })
+        JSON.stringify({ active: true, source: 'legacy', _meta: { sessionId: otherSessionId } })
       );
       const sessionDir = join(TEST_DIR, '.omc', 'state', 'sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
@@ -401,7 +402,7 @@ describe('state-tools', () => {
       expect(result.content[0].text).toContain('cleared');
       // Session-scoped file should be gone
       expect(existsSync(join(sessionDir, 'ralph-state.json'))).toBe(false);
-      // Legacy file should remain
+      // Legacy file should remain (belongs to different session)
       expect(existsSync(join(TEST_DIR, '.omc', 'state', 'ralph-state.json'))).toBe(true);
     });
   });
@@ -456,6 +457,73 @@ describe('state-tools', () => {
 
       const legacyPath = join(TEST_DIR, '.omc', 'state', 'ultrawork-state.json');
       expect(existsSync(legacyPath)).toBe(true);
+    });
+  });
+
+  describe('payload size validation', () => {
+    it('should reject oversized custom state payloads', async () => {
+      const result = await stateWriteTool.handler({
+        mode: 'ralph',
+        state: { huge: 'x'.repeat(2_000_000) },
+        workingDirectory: TEST_DIR,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('payload rejected');
+      expect(result.content[0].text).toContain('exceeds maximum');
+    });
+
+    it('should reject deeply nested custom state payloads', async () => {
+      let obj: Record<string, unknown> = { leaf: true };
+      for (let i = 0; i < 15; i++) {
+        obj = { nested: obj };
+      }
+
+      const result = await stateWriteTool.handler({
+        mode: 'ralph',
+        state: obj,
+        workingDirectory: TEST_DIR,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('nesting depth');
+    });
+
+    it('should reject state with too many top-level keys', async () => {
+      const state: Record<string, string> = {};
+      for (let i = 0; i < 150; i++) {
+        state[`key_${i}`] = 'value';
+      }
+
+      const result = await stateWriteTool.handler({
+        mode: 'ralph',
+        state,
+        workingDirectory: TEST_DIR,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('top-level keys');
+    });
+
+    it('should still allow normal-sized state writes', async () => {
+      const result = await stateWriteTool.handler({
+        mode: 'ralph',
+        state: { active: true, task: 'normal task', items: [1, 2, 3] },
+        workingDirectory: TEST_DIR,
+      });
+
+      expect(result.content[0].text).toContain('Successfully wrote');
+    });
+
+    it('should not validate when no custom state is provided', async () => {
+      const result = await stateWriteTool.handler({
+        mode: 'ralph',
+        active: true,
+        iteration: 1,
+        workingDirectory: TEST_DIR,
+      });
+
+      expect(result.content[0].text).toContain('Successfully wrote');
     });
   });
 });

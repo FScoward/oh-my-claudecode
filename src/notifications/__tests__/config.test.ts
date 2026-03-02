@@ -4,8 +4,9 @@ import {
   parseMentionAllowedMentions,
   buildConfigFromEnv,
   validateSlackMention,
+  validateSlackChannel,
+  validateSlackUsername,
 } from "../config.js";
-import type { NotificationConfig } from "../types.js";
 
 describe("validateMention", () => {
   it("accepts valid user mention", () => {
@@ -174,8 +175,132 @@ describe("validateSlackMention", () => {
   });
 });
 
+describe("validateSlackChannel", () => {
+  it("accepts valid channel name with # prefix", () => {
+    expect(validateSlackChannel("#general")).toBe("#general");
+  });
+
+  it("accepts valid channel name without # prefix", () => {
+    expect(validateSlackChannel("general")).toBe("general");
+  });
+
+  it("accepts channel name with hyphens and underscores", () => {
+    expect(validateSlackChannel("#my-alerts_channel")).toBe("#my-alerts_channel");
+  });
+
+  it("accepts channel ID format (C prefix)", () => {
+    expect(validateSlackChannel("C1234567890")).toBe("C1234567890");
+  });
+
+  it("accepts channel ID format (G prefix for group)", () => {
+    expect(validateSlackChannel("G1234567890")).toBe("G1234567890");
+  });
+
+  it("rejects channel with shell metacharacters", () => {
+    expect(validateSlackChannel("#alerts; rm -rf /")).toBeUndefined();
+  });
+
+  it("rejects channel with path traversal", () => {
+    expect(validateSlackChannel("../../etc/passwd")).toBeUndefined();
+  });
+
+  it("rejects channel with backticks", () => {
+    expect(validateSlackChannel("#alerts`whoami`")).toBeUndefined();
+  });
+
+  it("rejects channel with $() command substitution", () => {
+    expect(validateSlackChannel("#alerts$(cat /etc/passwd)")).toBeUndefined();
+  });
+
+  it("rejects channel with newlines", () => {
+    expect(validateSlackChannel("#alerts\nmalicious")).toBeUndefined();
+  });
+
+  it("rejects channel with control characters", () => {
+    expect(validateSlackChannel("#alerts\x00\x01")).toBeUndefined();
+  });
+
+  it("rejects channel with spaces", () => {
+    expect(validateSlackChannel("#my channel")).toBeUndefined();
+  });
+
+  it("rejects empty string", () => {
+    expect(validateSlackChannel("")).toBeUndefined();
+  });
+
+  it("returns undefined for undefined", () => {
+    expect(validateSlackChannel(undefined)).toBeUndefined();
+  });
+
+  it("trims whitespace and validates", () => {
+    expect(validateSlackChannel("  #alerts  ")).toBe("#alerts");
+  });
+
+  it("rejects channel exceeding 80 chars", () => {
+    expect(validateSlackChannel("#" + "a".repeat(81))).toBeUndefined();
+  });
+});
+
+describe("validateSlackUsername", () => {
+  it("accepts simple username", () => {
+    expect(validateSlackUsername("OMC Bot")).toBe("OMC Bot");
+  });
+
+  it("accepts username with hyphens and underscores", () => {
+    expect(validateSlackUsername("omc-notify_bot")).toBe("omc-notify_bot");
+  });
+
+  it("accepts username with periods", () => {
+    expect(validateSlackUsername("omc.bot")).toBe("omc.bot");
+  });
+
+  it("accepts username with apostrophe", () => {
+    expect(validateSlackUsername("O'Brien Bot")).toBe("O'Brien Bot");
+  });
+
+  it("rejects username with shell metacharacters", () => {
+    expect(validateSlackUsername("bot; rm -rf /")).toBeUndefined();
+  });
+
+  it("rejects username with backticks", () => {
+    expect(validateSlackUsername("bot`whoami`")).toBeUndefined();
+  });
+
+  it("rejects username with $() command substitution", () => {
+    expect(validateSlackUsername("bot$(cat /etc/passwd)")).toBeUndefined();
+  });
+
+  it("rejects username with path traversal", () => {
+    expect(validateSlackUsername("../../etc/passwd")).toBeUndefined();
+  });
+
+  it("rejects username with newlines", () => {
+    expect(validateSlackUsername("bot\nmalicious")).toBeUndefined();
+  });
+
+  it("rejects username with control characters", () => {
+    expect(validateSlackUsername("bot\x00\x01")).toBeUndefined();
+  });
+
+  it("rejects empty string", () => {
+    expect(validateSlackUsername("")).toBeUndefined();
+  });
+
+  it("returns undefined for undefined", () => {
+    expect(validateSlackUsername(undefined)).toBeUndefined();
+  });
+
+  it("trims whitespace and validates", () => {
+    expect(validateSlackUsername("  OMC Bot  ")).toBe("OMC Bot");
+  });
+
+  it("rejects username exceeding 80 chars", () => {
+    expect(validateSlackUsername("a".repeat(81))).toBeUndefined();
+  });
+});
+
 describe("buildConfigFromEnv", () => {
-  const originalEnv = process.env;
+  const _originalEnv = process.env;
 
   beforeEach(() => {
     vi.stubEnv("OMC_DISCORD_NOTIFIER_BOT_TOKEN", "");
@@ -305,8 +430,8 @@ describe("buildConfigFromEnv", () => {
 });
 
 describe("getNotificationConfig - deep merge", () => {
-  let mockExistsSync: ReturnType<typeof vi.fn>;
-  let mockReadFileSync: ReturnType<typeof vi.fn>;
+  let _mockExistsSync: ReturnType<typeof vi.fn>;
+  let _mockReadFileSync: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     // Clear env vars
@@ -322,8 +447,8 @@ describe("getNotificationConfig - deep merge", () => {
     vi.stubEnv("OMC_SLACK_WEBHOOK_URL", "");
     vi.stubEnv("OMC_SLACK_MENTION", "");
 
-    mockExistsSync = vi.fn().mockReturnValue(false);
-    mockReadFileSync = vi.fn().mockReturnValue("{}");
+    _mockExistsSync = vi.fn().mockReturnValue(false);
+    _mockReadFileSync = vi.fn().mockReturnValue("{}");
   });
 
   afterEach(() => {

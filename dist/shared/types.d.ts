@@ -97,6 +97,13 @@ export interface PluginConfig {
         enabled?: boolean;
         /** Default tier when no rules match */
         defaultTier?: 'LOW' | 'MEDIUM' | 'HIGH';
+        /**
+         * Force all agents to inherit the parent model instead of using OMC model routing.
+         * When true, the `model` parameter is stripped from all Task calls so agents use
+         * the user's Claude Code model setting. Overrides all per-agent model recommendations.
+         * Env: OMC_ROUTING_FORCE_INHERIT=true
+         */
+        forceInherit?: boolean;
         /** Enable automatic escalation on failure */
         escalationEnabled?: boolean;
         /** Maximum escalation attempts */
@@ -126,6 +133,29 @@ export interface PluginConfig {
         maxFiles?: number;
         /** Maximum directory depth to scan. Default: 4 */
         maxDepth?: number;
+    };
+    guards?: {
+        factcheck?: {
+            enabled?: boolean;
+            mode?: 'strict' | 'declared' | 'manual' | 'quick';
+            strict_project_patterns?: string[];
+            forbidden_path_prefixes?: string[];
+            forbidden_path_substrings?: string[];
+            readonly_command_prefixes?: string[];
+            warn_on_cwd_mismatch?: boolean;
+            enforce_cwd_parity_in_quick?: boolean;
+            warn_on_unverified_gates?: boolean;
+            warn_on_unverified_gates_when_no_source_files?: boolean;
+        };
+        sentinel?: {
+            enabled?: boolean;
+            readiness?: {
+                min_pass_rate?: number;
+                max_timeout_rate?: number;
+                max_warn_plus_fail_rate?: number;
+                min_reason_coverage_rate?: number;
+            };
+        };
     };
     taskSizeDetection?: {
         /** Enable task-size detection to prevent over-orchestration for small tasks. Default: true */

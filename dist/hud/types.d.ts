@@ -4,7 +4,8 @@
  * Type definitions for the HUD state, configuration, and rendering.
  */
 import type { AutopilotStateForHud } from './elements/autopilot.js';
-export type { AutopilotStateForHud };
+import type { ApiKeySource } from './elements/api-key-source.js';
+export type { AutopilotStateForHud, ApiKeySource };
 export interface BackgroundTask {
     id: string;
     description: string;
@@ -230,6 +231,8 @@ export interface HudRenderContext {
     skillCallCount: number;
     /** Last prompt submission time (from HUD state) */
     promptTime: Date | null;
+    /** API key source: 'project', 'global', or 'env' */
+    apiKeySource: ApiKeySource | null;
 }
 export type HudPreset = 'minimal' | 'focused' | 'full' | 'opencode' | 'dense';
 /**
@@ -288,6 +291,7 @@ export interface HudElementConfig {
     permissionStatus: boolean;
     thinking: boolean;
     thinkingFormat: ThinkingFormat;
+    apiKeySource: boolean;
     promptTime: boolean;
     sessionHealth: boolean;
     showSessionDuration?: boolean;
@@ -322,6 +326,8 @@ export interface HudConfig {
     contextLimitWarning: ContextLimitWarningConfig;
     /** Optional custom rate limit provider; omit to use built-in Anthropic/z.ai */
     rateLimitsProvider?: RateLimitsProviderConfig;
+    /** Optional maximum width (columns) for statusline output. Lines exceeding this width are truncated with ellipsis. Useful when the terminal shares space with IDE panels or tabs. */
+    maxWidth?: number;
 }
 export declare const DEFAULT_HUD_CONFIG: HudConfig;
 export declare const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>>;

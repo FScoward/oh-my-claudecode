@@ -322,7 +322,6 @@ describe("isCommandGateway", () => {
 });
 
 describe("wakeCommandGateway", () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   let execFileMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {

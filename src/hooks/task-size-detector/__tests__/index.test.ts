@@ -8,8 +8,6 @@ import {
   isHeavyMode,
   HEAVY_MODE_KEYWORDS,
   DEFAULT_THRESHOLDS,
-  type TaskSize,
-  type TaskSizeResult,
 } from '../index.js';
 
 describe('task-size-detector', () => {
@@ -354,16 +352,16 @@ describe('task-size-detector', () => {
       expect(isHeavyMode('ultrawork')).toBe(true);
     });
 
-    it('returns true for ultrapilot', () => {
-      expect(isHeavyMode('ultrapilot')).toBe(true);
+    it('returns false for removed ultrapilot (#1131)', () => {
+      expect(isHeavyMode('ultrapilot')).toBe(false);
     });
 
-    it('returns true for swarm', () => {
-      expect(isHeavyMode('swarm')).toBe(true);
+    it('returns false for removed swarm (#1131)', () => {
+      expect(isHeavyMode('swarm')).toBe(false);
     });
 
-    it('returns true for pipeline', () => {
-      expect(isHeavyMode('pipeline')).toBe(true);
+    it('returns false for removed pipeline (#1131)', () => {
+      expect(isHeavyMode('pipeline')).toBe(false);
     });
 
     it('returns true for ralplan', () => {
@@ -413,7 +411,7 @@ describe('task-size-detector', () => {
 
   describe('HEAVY_MODE_KEYWORDS set', () => {
     it('contains expected heavy modes', () => {
-      const expected = ['ralph', 'autopilot', 'team', 'ultrawork', 'ultrapilot', 'swarm', 'pipeline', 'ralplan', 'ccg'];
+      const expected = ['ralph', 'autopilot', 'team', 'ultrawork', 'ralplan', 'ccg'];
       for (const mode of expected) {
         expect(HEAVY_MODE_KEYWORDS.has(mode)).toBe(true);
       }

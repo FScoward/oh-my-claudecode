@@ -6,8 +6,16 @@ import { enforceModel, isAgentCall, processPreToolUse, getModelForAgent } from '
 import { resolveDelegation } from '../features/delegation-routing/resolver.js';
 describe('delegation-enforcer', () => {
     let originalDebugEnv;
+    // Save/restore env vars that trigger non-Claude provider detection (issue #1201)
+    // so existing tests run in a standard Claude environment
+    const providerEnvKeys = ['ANTHROPIC_BASE_URL', 'CLAUDE_MODEL', 'ANTHROPIC_MODEL', 'OMC_ROUTING_FORCE_INHERIT'];
+    const savedProviderEnv = {};
     beforeEach(() => {
         originalDebugEnv = process.env.OMC_DEBUG;
+        for (const key of providerEnvKeys) {
+            savedProviderEnv[key] = process.env[key];
+            delete process.env[key];
+        }
     });
     afterEach(() => {
         if (originalDebugEnv === undefined) {
@@ -15,6 +23,14 @@ describe('delegation-enforcer', () => {
         }
         else {
             process.env.OMC_DEBUG = originalDebugEnv;
+        }
+        for (const key of providerEnvKeys) {
+            if (savedProviderEnv[key] === undefined) {
+                delete process.env[key];
+            }
+            else {
+                process.env[key] = savedProviderEnv[key];
+            }
         }
     });
     describe('enforceModel', () => {
@@ -232,6 +248,62 @@ describe('delegation-enforcer', () => {
             expect(result.provider).toBe('claude');
             expect(result.tool).toBe('Task');
             expect(result.agentOrModel).toBe('document-specialist');
+        });
+    });
+    describe('non-Claude provider support (issue #1201)', () => {
+        const savedEnv = {};
+        const envKeys = ['CLAUDE_MODEL', 'ANTHROPIC_BASE_URL', 'OMC_ROUTING_FORCE_INHERIT'];
+        beforeEach(() => {
+            for (const key of envKeys) {
+                savedEnv[key] = process.env[key];
+                delete process.env[key];
+            }
+        });
+        afterEach(() => {
+            for (const key of envKeys) {
+                if (savedEnv[key] === undefined) {
+                    delete process.env[key];
+                }
+                else {
+                    process.env[key] = savedEnv[key];
+                }
+            }
+        });
+        it('strips model when non-Claude provider auto-enables forceInherit', () => {
+            process.env.CLAUDE_MODEL = 'glm-5';
+            // forceInherit is auto-enabled by loadConfig for non-Claude providers
+            const input = {
+                description: 'Test task',
+                prompt: 'Do something',
+                subagent_type: 'oh-my-claudecode:executor',
+                model: 'sonnet'
+            };
+            const result = enforceModel(input);
+            expect(result.model).toBe('inherit');
+            expect(result.modifiedInput.model).toBeUndefined();
+        });
+        it('strips model when custom ANTHROPIC_BASE_URL auto-enables forceInherit', () => {
+            process.env.ANTHROPIC_BASE_URL = 'https://my-proxy.example.com/v1';
+            const input = {
+                description: 'Test task',
+                prompt: 'Do something',
+                subagent_type: 'oh-my-claudecode:architect',
+                model: 'opus'
+            };
+            const result = enforceModel(input);
+            expect(result.model).toBe('inherit');
+            expect(result.modifiedInput.model).toBeUndefined();
+        });
+        it('does not strip model for standard Claude setup', () => {
+            const input = {
+                description: 'Test task',
+                prompt: 'Do something',
+                subagent_type: 'oh-my-claudecode:executor',
+                model: 'haiku'
+            };
+            const result = enforceModel(input);
+            expect(result.model).toBe('haiku');
+            expect(result.modifiedInput.model).toBe('haiku');
         });
     });
 });

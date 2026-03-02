@@ -9,14 +9,17 @@
  *   import { notify } from '../notifications/index.js';
  *   await notify('session-start', { sessionId, projectPath, ... });
  */
-export type { NotificationEvent, NotificationPlatform, NotificationConfig, NotificationProfilesConfig, NotificationPayload, NotificationResult, DispatchResult, DiscordNotificationConfig, DiscordBotNotificationConfig, TelegramNotificationConfig, SlackNotificationConfig, WebhookNotificationConfig, EventNotificationConfig, } from "./types.js";
+export type { NotificationEvent, NotificationPlatform, NotificationConfig, NotificationProfilesConfig, NotificationPayload, NotificationResult, DispatchResult, DiscordNotificationConfig, DiscordBotNotificationConfig, TelegramNotificationConfig, SlackNotificationConfig, SlackBotNotificationConfig, WebhookNotificationConfig, EventNotificationConfig, } from "./types.js";
 export type { HookNotificationConfig, HookEventConfig, PlatformTemplateOverride, TemplateVariable, } from "./hook-config-types.js";
-export { dispatchNotifications, sendDiscord, sendDiscordBot, sendTelegram, sendSlack, sendWebhook, } from "./dispatcher.js";
+export { dispatchNotifications, sendDiscord, sendDiscordBot, sendTelegram, sendSlack, sendSlackBot, sendWebhook, } from "./dispatcher.js";
 export { formatNotification, formatSessionStart, formatSessionStop, formatSessionEnd, formatSessionIdle, formatAskUserQuestion, formatAgentCall, } from "./formatter.js";
 export { getCurrentTmuxSession, getCurrentTmuxPaneId, getTeamTmuxSessions, formatTmuxInfo, } from "./tmux.js";
 export { getNotificationConfig, isEventEnabled, getEnabledPlatforms, getVerbosity, isEventAllowedByVerbosity, shouldIncludeTmuxTail, } from "./config.js";
 export { getHookConfig, resolveEventTemplate, resetHookConfigCache, mergeHookConfigIntoNotificationConfig, } from "./hook-config.js";
 export { interpolateTemplate, getDefaultTemplate, validateTemplate, computeTemplateVariables, } from "./template-engine.js";
+export { verifySlackSignature, isTimestampValid, validateSlackEnvelope, validateSlackMessage, SlackConnectionStateTracker, } from "./slack-socket.js";
+export type { SlackConnectionState, SlackValidationResult, SlackSocketEnvelope, } from "./slack-socket.js";
+export { redactTokens } from "./redact.js";
 import type { NotificationEvent, NotificationPayload, DispatchResult } from "./types.js";
 /**
  * High-level notification function.

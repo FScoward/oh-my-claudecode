@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { getWorktreeProjectMemoryPath, ensureOmcDir, validateWorkingDirectory, } from '../lib/worktree-paths.js';
 import { loadProjectMemory, saveProjectMemory, addCustomNote, addDirective, } from '../hooks/project-memory/index.js';
+import { mergeProjectMemory } from '../lib/project-memory-merge.js';
 // ============================================================================
 // project_memory_read - Read project memory
 // ============================================================================
@@ -89,7 +90,7 @@ export const projectMemoryWriteTool = {
             if (merge) {
                 const existing = await loadProjectMemory(root);
                 if (existing) {
-                    finalMemory = { ...existing, ...memory };
+                    finalMemory = mergeProjectMemory(existing, memory);
                 }
                 else {
                     finalMemory = memory;

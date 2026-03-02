@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { getReplayFilePath, appendReplayEvent, recordAgentStart, recordAgentStop, recordToolEvent, recordFileTouch, recordIntervention, readReplayEvents, getReplaySummary, resetSessionStartTimes, } from '../session-replay.js';

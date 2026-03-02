@@ -450,6 +450,12 @@ async function main() {
       "team-state.json",
       sessionId,
     );
+    const omcTeams = readStateFileWithSession(
+      stateDir,
+      globalStateDir,
+      "omc-teams-state.json",
+      sessionId,
+    );
 
     // Swarm uses swarm-summary.json (not swarm-state.json) + marker file
     const swarmMarker = existsSync(join(stateDir, "swarm-active.marker"));
@@ -660,7 +666,7 @@ async function main() {
       }
     }
 
-    // Priority 6: Team (omc-teams / staged pipeline)
+    // Priority 6: Team (native Claude Code teams / staged pipeline)
     if (
       team.state?.active &&
       !isStaleState(team.state) &&
@@ -693,6 +699,40 @@ async function main() {
                 reason,
               }),
             );
+            return;
+          }
+        }
+      }
+    }
+
+    // Priority 6.5: OMC Teams (tmux CLI workers — independent of native team state)
+    if (
+      omcTeams.state?.active &&
+      !isStaleState(omcTeams.state) &&
+      isStateForCurrentProject(omcTeams.state, directory, omcTeams.isGlobal)
+    ) {
+      const sessionMatches = hasValidSessionId
+        ? omcTeams.state.session_id === sessionId
+        : !omcTeams.state.session_id || omcTeams.state.session_id === sessionId;
+      if (sessionMatches) {
+        const phase = omcTeams.state.current_phase || "executing";
+        const terminalPhases = ["completed", "complete", "failed", "cancelled"];
+        if (!terminalPhases.includes(phase)) {
+          const newCount = (omcTeams.state.reinforcement_count || 0) + 1;
+          if (newCount <= 20) {
+            const toolError = readLastToolError(stateDir);
+            const errorGuidance = getToolErrorRetryGuidance(toolError);
+
+            omcTeams.state.reinforcement_count = newCount;
+            omcTeams.state.last_checked_at = new Date().toISOString();
+            writeJsonFile(omcTeams.path, omcTeams.state);
+
+            let reason = `[OMC TEAMS - Phase: ${phase}] OMC Teams workers active. Continue working. When all workers complete, run /oh-my-claudecode:cancel to cleanly exit. If cancel fails, retry with /oh-my-claudecode:cancel --force.`;
+            if (errorGuidance) {
+              reason = errorGuidance + reason;
+            }
+
+            console.log(JSON.stringify({ decision: "block", reason }));
             return;
           }
         }

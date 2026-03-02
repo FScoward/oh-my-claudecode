@@ -6,7 +6,7 @@
  * blocking hooks.
  */
 import { request as httpsRequest } from "https";
-import { parseMentionAllowedMentions } from "./config.js";
+import { parseMentionAllowedMentions, validateSlackMention, validateSlackChannel, validateSlackUsername, } from "./config.js";
 /** Per-request timeout for individual platform sends */
 const SEND_TIMEOUT_MS = 10_000;
 /** Overall dispatch timeout for all platforms combined. Must be >= SEND_TIMEOUT_MS */
@@ -278,10 +278,14 @@ export async function sendTelegram(config, payload) {
  * Compose Slack message text with mention prefix.
  * Slack mentions use formats like <@U12345678>, <!channel>, <!here>, <!everyone>,
  * or <!subteam^S12345> for user groups.
+ *
+ * Defense-in-depth: re-validates mention at point of use (config layer validates
+ * at read time, but we validate again here to guard against untrusted config).
  */
 function composeSlackText(message, mention) {
-    if (mention) {
-        return `${mention}\n${message}`;
+    const validatedMention = validateSlackMention(mention);
+    if (validatedMention) {
+        return `${validatedMention}\n${message}`;
     }
     return message;
 }
@@ -298,11 +302,16 @@ export async function sendSlack(config, payload) {
     try {
         const text = composeSlackText(payload.message, config.mention);
         const body = { text };
-        if (config.channel) {
-            body.channel = config.channel;
+        // Defense-in-depth: validate channel/username at point of use to guard
+        // against crafted config values containing shell metacharacters or
+        // path traversal sequences.
+        const validatedChannel = validateSlackChannel(config.channel);
+        if (validatedChannel) {
+            body.channel = validatedChannel;
         }
-        if (config.username) {
-            body.username = config.username;
+        const validatedUsername = validateSlackUsername(config.username);
+        if (validatedUsername) {
+            body.username = validatedUsername;
         }
         const response = await fetch(config.webhookUrl, {
             method: "POST",
@@ -322,6 +331,59 @@ export async function sendSlack(config, payload) {
     catch (error) {
         return {
             platform: "slack",
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        };
+    }
+}
+/**
+ * Send notification via Slack Bot Web API (chat.postMessage).
+ * Returns message timestamp (ts) as messageId for reply correlation.
+ */
+export async function sendSlackBot(config, payload) {
+    if (!config.enabled) {
+        return { platform: "slack-bot", success: false, error: "Not enabled" };
+    }
+    const botToken = config.botToken;
+    const channelId = config.channelId;
+    if (!botToken || !channelId) {
+        return {
+            platform: "slack-bot",
+            success: false,
+            error: "Missing botToken or channelId",
+        };
+    }
+    try {
+        const text = composeSlackText(payload.message, config.mention);
+        const response = await fetch("https://slack.com/api/chat.postMessage", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${botToken}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ channel: channelId, text }),
+            signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+        });
+        if (!response.ok) {
+            return {
+                platform: "slack-bot",
+                success: false,
+                error: `HTTP ${response.status}`,
+            };
+        }
+        const data = await response.json();
+        if (!data.ok) {
+            return {
+                platform: "slack-bot",
+                success: false,
+                error: data.error || "Slack API error",
+            };
+        }
+        return { platform: "slack-bot", success: true, messageId: data.ts };
+    }
+    catch (error) {
+        return {
+            platform: "slack-bot",
             success: false,
             error: error instanceof Error ? error.message : "Unknown error",
         };
@@ -362,6 +424,9 @@ export async function sendWebhook(config, payload) {
                 reason: payload.reason,
                 active_mode: payload.activeMode,
                 question: payload.question,
+                ...(payload.replyChannel && { channel: payload.replyChannel }),
+                ...(payload.replyTarget && { to: payload.replyTarget }),
+                ...(payload.replyThread && { thread_id: payload.replyThread }),
             }),
             signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
         });
@@ -440,6 +505,11 @@ export async function dispatchNotifications(config, event, payload, platformMess
     const discordBotConfig = getEffectivePlatformConfig("discord-bot", config, event);
     if (discordBotConfig?.enabled) {
         promises.push(sendDiscordBot(discordBotConfig, payloadFor("discord-bot")));
+    }
+    // Slack Bot
+    const slackBotConfig = getEffectivePlatformConfig("slack-bot", config, event);
+    if (slackBotConfig?.enabled) {
+        promises.push(sendSlackBot(slackBotConfig, payloadFor("slack-bot")));
     }
     if (promises.length === 0) {
         return { event, results: [], anySuccess: false };

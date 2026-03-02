@@ -5,7 +5,7 @@
  * All sends are non-blocking with timeouts. Failures are swallowed to avoid
  * blocking hooks.
  */
-import type { DiscordNotificationConfig, DiscordBotNotificationConfig, TelegramNotificationConfig, SlackNotificationConfig, WebhookNotificationConfig, NotificationPayload, NotificationResult, NotificationPlatform, DispatchResult, NotificationConfig, NotificationEvent } from "./types.js";
+import type { DiscordNotificationConfig, DiscordBotNotificationConfig, TelegramNotificationConfig, SlackNotificationConfig, SlackBotNotificationConfig, WebhookNotificationConfig, NotificationPayload, NotificationResult, NotificationPlatform, DispatchResult, NotificationConfig, NotificationEvent } from "./types.js";
 /**
  * Send notification via Discord webhook.
  */
@@ -24,6 +24,11 @@ export declare function sendTelegram(config: TelegramNotificationConfig, payload
  * Send notification via Slack incoming webhook.
  */
 export declare function sendSlack(config: SlackNotificationConfig, payload: NotificationPayload): Promise<NotificationResult>;
+/**
+ * Send notification via Slack Bot Web API (chat.postMessage).
+ * Returns message timestamp (ts) as messageId for reply correlation.
+ */
+export declare function sendSlackBot(config: SlackBotNotificationConfig, payload: NotificationPayload): Promise<NotificationResult>;
 /**
  * Send notification via generic webhook (POST JSON).
  */

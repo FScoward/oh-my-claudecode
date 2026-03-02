@@ -8,14 +8,16 @@ export declare const MODES: {
     readonly AUTOPILOT: "autopilot";
     readonly RALPH: "ralph";
     readonly ULTRAWORK: "ultrawork";
-    readonly ULTRAPILOT: "ultrapilot";
     readonly ULTRAQA: "ultraqa";
     readonly TEAM: "team";
-    readonly PIPELINE: "pipeline";
-    readonly SWARM: "swarm";
     readonly RALPLAN: "ralplan";
 };
 export type ModeName = typeof MODES[keyof typeof MODES];
+export declare const DEPRECATED_MODES: {
+    readonly ULTRAPILOT: "ultrapilot";
+    readonly SWARM: "swarm";
+    readonly PIPELINE: "pipeline";
+};
 export declare const TOOL_CATEGORIES: {
     readonly LSP: "lsp";
     readonly AST: "ast";
@@ -28,6 +30,7 @@ export declare const TOOL_CATEGORIES: {
     readonly INTEROP: "interop";
     readonly CODEX: "codex";
     readonly GEMINI: "gemini";
+    readonly SHARED_MEMORY: "shared-memory";
 };
 export type ToolCategory = typeof TOOL_CATEGORIES[keyof typeof TOOL_CATEGORIES];
 export declare const HOOK_EVENTS: {

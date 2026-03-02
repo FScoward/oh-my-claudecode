@@ -73,7 +73,9 @@ describe('Project Memory Integration', () => {
             expect(second).toBe(true);
         });
         it('should not inject if project has no useful info', async () => {
-            // Empty directory with no config files
+            // Empty directory with no config files — add .git so findProjectRoot
+            // stops here instead of walking up to the real repo root
+            await fs.mkdir(path.join(tempDir, '.git'));
             const sessionId = 'test-session-4';
             const registered = await registerProjectMemoryContext(sessionId, tempDir);
             expect(registered).toBe(false);
@@ -134,7 +136,7 @@ describe('Project Memory Integration', () => {
             const sessionId = 'test-session-8';
             await registerProjectMemoryContext(sessionId, tempDir);
             // Load and manually set lastScanned to 25 hours ago
-            let memory = await loadProjectMemory(tempDir);
+            const memory = await loadProjectMemory(tempDir);
             expect(memory).not.toBeNull();
             memory.lastScanned = Date.now() - 25 * 60 * 60 * 1000;
             // Save with old timestamp

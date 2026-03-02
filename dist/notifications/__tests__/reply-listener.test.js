@@ -331,7 +331,7 @@ describe("reply-listener", () => {
             // The else blocks only increment error counters
             const successBlocks = source.match(/if \(success\) \{[\s\S]*?messagesInjected/g);
             expect(successBlocks).not.toBeNull();
-            expect(successBlocks.length).toBe(2); // one for Discord, one for Telegram
+            expect(successBlocks.length).toBe(4); // one for Discord, one for Telegram, one for Slack inline, one for processSlackSocketMessage
         });
     });
     describe("Injection feedback mention", () => {

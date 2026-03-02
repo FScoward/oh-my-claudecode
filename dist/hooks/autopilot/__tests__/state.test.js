@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { readAutopilotState, clearAutopilotState, isAutopilotActive, initAutopilot, transitionPhase, updateExpansion, updateExecution } from '../state.js';
+import { readAutopilotState, clearAutopilotState, isAutopilotActive, initAutopilot, transitionPhase, updateExpansion, updateExecution, } from '../state.js';
 describe('AutopilotState', () => {
     let testDir;
     beforeEach(() => {
@@ -17,7 +17,7 @@ describe('AutopilotState', () => {
             expect(state).toBeNull();
         });
         it('should return parsed state when file exists', () => {
-            const state = initAutopilot(testDir, 'test idea');
+            const _state = initAutopilot(testDir, 'test idea');
             const readState = readAutopilotState(testDir);
             expect(readState).not.toBeNull();
             expect(readState?.originalIdea).toBe('test idea');

@@ -2,13 +2,14 @@
  * Reply Listener Daemon
  *
  * Background daemon that polls Discord and Telegram for replies to notification messages,
- * sanitizes input, verifies the target pane, and injects reply text via sendToPane().
+ * listens for Slack messages via Socket Mode, sanitizes input, verifies the target pane,
+ * and injects reply text via sendToPane().
  *
  * Security considerations:
  * - State/PID/log files use restrictive permissions (0600)
  * - Bot tokens stored in state file, NOT in environment variables
  * - Two-layer input sanitization (sanitizeReplyInput + sanitizeForTmux)
- * - Pane verification via analyzePaneContent before every injection
+ * - Pane verification via empty-content check before every injection
  * - Authorization: only configured user IDs (Discord) / chat ID (Telegram) can inject
  * - Rate limiting to prevent spam/abuse
  *
@@ -20,9 +21,11 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { spawn } from 'child_process';
 import { request as httpsRequest } from 'https';
-import { capturePaneContent, analyzePaneContent, sendToPane, isTmuxAvailable, } from '../features/rate-limit-wait/tmux-detector.js';
-import { lookupByMessageId, removeMessagesByPane, pruneStale, } from './session-registry.js';
+import { capturePaneContent, sendToPane, isTmuxAvailable, } from '../features/rate-limit-wait/tmux-detector.js';
+import { lookupByMessageId, loadAllMappings, removeMessagesByPane, pruneStale, } from './session-registry.js';
 import { parseMentionAllowedMentions } from './config.js';
+import { redactTokens } from './redact.js';
+import { validateSlackMessage, } from './slack-socket.js';
 // ESM compatibility: __filename is not available in ES modules
 const __filename = fileURLToPath(import.meta.url);
 // ============================================================================
@@ -125,7 +128,7 @@ function log(message) {
         ensureStateDir();
         rotateLogIfNeeded(LOG_FILE_PATH);
         const timestamp = new Date().toISOString();
-        const logLine = `[${timestamp}] ${message}\n`;
+        const logLine = `[${timestamp}] ${redactTokens(message)}\n`;
         appendFileSync(LOG_FILE_PATH, logLine, { mode: SECURE_FILE_MODE });
     }
     catch {
@@ -158,7 +161,7 @@ function writeDaemonState(state) {
  * Build daemon config from notification config.
  * Derives bot tokens, channel IDs, and reply settings from getNotificationConfig().
  */
-async function buildDaemonConfig() {
+export async function buildDaemonConfig() {
     try {
         const { getReplyConfig, getNotificationConfig, getReplyListenerPlatformConfig } = await import('./config.js');
         const replyConfig = getReplyConfig();
@@ -285,11 +288,10 @@ class RateLimiter {
  * Returns true if injection succeeded, false otherwise.
  */
 function injectReply(paneId, text, platform, config) {
-    // 1. Verify pane is running Claude Code
+    // 1. Verify pane has content (non-empty pane = active session per registry)
     const content = capturePaneContent(paneId, 15);
-    const analysis = analyzePaneContent(content);
-    if (analysis.confidence < 0.4) {
-        log(`WARN: Pane ${paneId} does not appear to be running Claude Code (confidence: ${analysis.confidence}). Skipping injection, removing stale mapping.`);
+    if (!content.trim()) {
+        log(`WARN: Pane ${paneId} appears empty. Skipping injection, removing stale mapping.`);
         removeMessagesByPane(paneId);
         return false;
     }
@@ -434,7 +436,7 @@ async function pollDiscord(config, state, rateLimiter) {
     }
     catch (error) {
         state.errors++;
-        state.lastError = error instanceof Error ? error.message : String(error);
+        state.lastError = redactTokens(error instanceof Error ? error.message : String(error));
         log(`Discord polling error: ${state.lastError}`);
     }
 }
@@ -574,7 +576,7 @@ async function pollTelegram(config, state, rateLimiter) {
     }
     catch (error) {
         state.errors++;
-        state.lastError = error instanceof Error ? error.message : String(error);
+        state.lastError = redactTokens(error instanceof Error ? error.message : String(error));
         log(`Telegram polling error: ${state.lastError}`);
     }
 }
@@ -607,10 +609,83 @@ async function pollLoop() {
     state.pid = process.pid;
     const rateLimiter = new RateLimiter(config.rateLimitPerMinute);
     let lastPruneAt = Date.now();
+    // Start Slack Socket Mode listener if configured
+    let slackSocket = null;
+    if (config.slackAppToken && config.slackBotToken && config.slackChannelId) {
+        if (typeof WebSocket === 'undefined') {
+            log('WARN: WebSocket not available (requires Node 20.10+), Slack Socket Mode disabled');
+        }
+        else {
+            try {
+                const { SlackSocketClient, addSlackReaction } = await import('./slack-socket.js');
+                const slackChannelId = config.slackChannelId;
+                const slackBotToken = config.slackBotToken;
+                slackSocket = new SlackSocketClient({
+                    appToken: config.slackAppToken,
+                    botToken: slackBotToken,
+                    channelId: slackChannelId,
+                }, async (event) => {
+                    // Rate limiting
+                    if (!rateLimiter.canProceed()) {
+                        log(`WARN: Rate limit exceeded, dropping Slack message ${event.ts}`);
+                        state.errors++;
+                        return;
+                    }
+                    // Find target pane for injection
+                    let targetPaneId = null;
+                    // Thread replies: look up parent message in session registry
+                    if (event.thread_ts && event.thread_ts !== event.ts) {
+                        const mapping = lookupByMessageId('slack-bot', event.thread_ts);
+                        if (mapping) {
+                            targetPaneId = mapping.tmuxPaneId;
+                        }
+                    }
+                    // No thread match: use most recent registered pane
+                    if (!targetPaneId) {
+                        const mappings = loadAllMappings();
+                        if (mappings.length > 0) {
+                            targetPaneId = mappings[mappings.length - 1].tmuxPaneId;
+                        }
+                    }
+                    if (!targetPaneId) {
+                        log('WARN: No target pane found for Slack message, skipping');
+                        return;
+                    }
+                    // Inject reply
+                    const success = injectReply(targetPaneId, event.text, 'slack', config);
+                    if (success) {
+                        state.messagesInjected++;
+                        writeDaemonState(state);
+                        // Send confirmation reaction (non-critical)
+                        try {
+                            await addSlackReaction(slackBotToken, slackChannelId, event.ts);
+                        }
+                        catch (e) {
+                            log(`WARN: Failed to add Slack reaction: ${e}`);
+                        }
+                    }
+                    else {
+                        state.errors++;
+                        writeDaemonState(state);
+                    }
+                }, log);
+                await slackSocket.start();
+                log('Slack Socket Mode listener started');
+            }
+            catch (e) {
+                log(`ERROR: Failed to start Slack Socket Mode: ${e instanceof Error ? e.message : String(e)}`);
+                slackSocket = null;
+            }
+        }
+    }
     // Graceful shutdown handlers
     const shutdown = () => {
         log('Shutdown signal received');
         state.isRunning = false;
+        if (slackSocket) {
+            slackSocket.stop();
+            slackSocket = null;
+        }
         writeDaemonState(state);
         removePidFile();
         process.exit(0);
@@ -648,7 +723,7 @@ async function pollLoop() {
         }
         catch (error) {
             state.errors++;
-            state.lastError = error instanceof Error ? error.message : String(error);
+            state.lastError = redactTokens(error instanceof Error ? error.message : String(error));
             log(`Poll error: ${state.lastError}`);
             writeDaemonState(state);
             // Back off on repeated errors
@@ -693,7 +768,7 @@ export function startReplyListener(_config) {
     const daemonScript = `
     import('${modulePath}').then(({ pollLoop }) => {
       return pollLoop();
-    }).catch((err) => { console.error(err); process.exit(1); });
+    }).catch((err) => { console.error('[reply-listener] Fatal:', err instanceof Error ? err.message : 'unknown error'); process.exit(1); });
   `;
     try {
         const child = spawn('node', ['-e', daemonScript], {
@@ -804,6 +879,93 @@ export function getReplyListenerStatus() {
         state: state ?? undefined,
     };
 }
+// ============================================================================
+// Slack WebSocket Message Validation Gate
+// ============================================================================
+/**
+ * Validate and process an incoming Slack WebSocket message before session injection.
+ *
+ * This function is the security gate for Slack Socket Mode messages.
+ * All Slack messages MUST pass through this function before reaching injectReply().
+ *
+ * Validation steps:
+ * 1. Slack message validation (envelope, signing secret, connection state)
+ * 2. Rate limiting
+ * 3. Session registry lookup
+ * 4. Pane verification and injection
+ *
+ * @param rawMessage - Raw WebSocket message string
+ * @param connectionState - Slack connection state tracker
+ * @param paneId - Target tmux pane ID (from session registry lookup by caller)
+ * @param config - Daemon configuration
+ * @param state - Daemon state (mutated: errors/messagesInjected counters)
+ * @param rateLimiter - Rate limiter instance
+ * @param signature - Slack request signature header (x-slack-signature)
+ * @param timestamp - Slack request timestamp header (x-slack-request-timestamp)
+ * @returns Object with injection result and validation details
+ */
+export function processSlackSocketMessage(rawMessage, connectionState, paneId, config, state, rateLimiter, signature, timestamp) {
+    // 1. Validate the Slack message
+    const validation = validateSlackMessage(rawMessage, connectionState, config.slackSigningSecret, signature, timestamp);
+    if (!validation.valid) {
+        log(`REJECTED Slack message: ${validation.reason}`);
+        state.errors++;
+        return { injected: false, validation };
+    }
+    // 2. Must have a target pane
+    if (!paneId) {
+        log('REJECTED Slack message: no target pane ID');
+        state.errors++;
+        return {
+            injected: false,
+            validation: { valid: false, reason: 'No target pane ID' },
+        };
+    }
+    // 3. Rate limiting
+    if (!rateLimiter.canProceed()) {
+        log('WARN: Rate limit exceeded, dropping Slack message');
+        state.errors++;
+        return {
+            injected: false,
+            validation: { valid: false, reason: 'Rate limit exceeded' },
+        };
+    }
+    // 4. Extract text from the validated message
+    let text;
+    try {
+        const parsed = JSON.parse(rawMessage);
+        const payload = parsed.payload;
+        text = payload?.event?.text || payload?.text || '';
+    }
+    catch {
+        log('REJECTED Slack message: failed to extract text from validated message');
+        state.errors++;
+        return {
+            injected: false,
+            validation: { valid: false, reason: 'Failed to extract message text' },
+        };
+    }
+    if (!text) {
+        log('REJECTED Slack message: empty message text');
+        return {
+            injected: false,
+            validation: { valid: false, reason: 'Empty message text' },
+        };
+    }
+    // 5. Inject reply (applies sanitization + pane verification)
+    const success = injectReply(paneId, text, 'slack', config);
+    if (success) {
+        state.messagesInjected++;
+    }
+    else {
+        state.errors++;
+    }
+    return { injected: success, validation };
+}
+// Re-export for Slack integration
+export { SlackConnectionStateTracker } from './slack-socket.js';
+// Export RateLimiter for external use (e.g., Slack Socket Mode handler)
+export { RateLimiter };
 // Export pollLoop for use by the daemon subprocess
 export { pollLoop };
 //# sourceMappingURL=reply-listener.js.map

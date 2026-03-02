@@ -18,6 +18,15 @@ export declare function loadProjectMemory(projectRoot: string): Promise<ProjectM
  */
 export declare function saveProjectMemory(projectRoot: string, memory: ProjectMemory): Promise<void>;
 /**
+ * Execute an async function while holding an exclusive lock on the project memory file.
+ * Prevents concurrent read-modify-write races across processes.
+ *
+ * @param projectRoot Project root directory
+ * @param fn Function to execute under lock
+ * @returns The function's return value
+ */
+export declare function withProjectMemoryLock<T>(projectRoot: string, fn: () => T | Promise<T>): Promise<T>;
+/**
  * Check if the memory cache is stale and should be rescanned
  */
 export declare function shouldRescan(memory: ProjectMemory): boolean;

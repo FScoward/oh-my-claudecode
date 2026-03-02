@@ -77,7 +77,7 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
     });
     it('falls back to latest version when target version is missing', () => {
         // Create a valid latest version with the target script
-        const latestDir = createFakeVersion('4.4.5', {
+        const _latestDir = createFakeVersion('4.4.5', {
             'test-hook.cjs': '#!/usr/bin/env node\nconsole.log("hook-ok"); process.exit(0);',
         });
         // Target points to a non-existent old version
@@ -110,7 +110,7 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
     });
     it('resolves target through symlinked version directory', () => {
         // Create a real latest version
-        const latestDir = createFakeVersion('4.4.5', {
+        const _latestDir = createFakeVersion('4.4.5', {
             'test-hook.cjs': '#!/usr/bin/env node\nconsole.log("via-symlink"); process.exit(0);',
         });
         // Create a symlink from old version to latest

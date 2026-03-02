@@ -28,6 +28,7 @@ export const DEFAULT_HUD_CONFIG = {
         permissionStatus: false, // Disabled: heuristic-based, causes false positives
         thinking: true,
         thinkingFormat: 'text', // Text format for backward compatibility
+        apiKeySource: false, // Disabled by default
         promptTime: true, // Show last prompt time by default
         sessionHealth: true,
         useBars: false, // Disabled by default for backwards compatibility
@@ -71,6 +72,7 @@ export const PRESET_CONFIGS = {
         permissionStatus: false,
         thinking: false,
         thinkingFormat: 'text',
+        apiKeySource: false,
         promptTime: false,
         sessionHealth: false,
         useBars: false,
@@ -101,6 +103,7 @@ export const PRESET_CONFIGS = {
         permissionStatus: false,
         thinking: true,
         thinkingFormat: 'text',
+        apiKeySource: false,
         promptTime: true,
         sessionHealth: true,
         useBars: true,
@@ -131,6 +134,7 @@ export const PRESET_CONFIGS = {
         permissionStatus: false,
         thinking: true,
         thinkingFormat: 'text',
+        apiKeySource: true,
         promptTime: true,
         sessionHealth: true,
         useBars: true,
@@ -161,6 +165,7 @@ export const PRESET_CONFIGS = {
         permissionStatus: false,
         thinking: true,
         thinkingFormat: 'text',
+        apiKeySource: false,
         promptTime: true,
         sessionHealth: true,
         useBars: false,
@@ -191,6 +196,7 @@ export const PRESET_CONFIGS = {
         permissionStatus: false,
         thinking: true,
         thinkingFormat: 'text',
+        apiKeySource: true,
         promptTime: true,
         sessionHealth: true,
         useBars: true,

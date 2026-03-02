@@ -42,11 +42,6 @@ export declare function getSkillProtection(skillName: string): SkillProtectionLe
  */
 export declare function getSkillConfig(skillName: string): SkillStateConfig;
 /**
- * Resolve the path to skill-active-state.json.
- * Uses session-scoped path when sessionId is provided.
- */
-export declare function getSkillStatePath(directory: string, sessionId?: string): string;
-/**
  * Read the current skill active state.
  * Returns null if no state exists or state is invalid.
  */

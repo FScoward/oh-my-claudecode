@@ -1,6 +1,6 @@
 {
   "name": "oh-my-claude-sisyphus",
-  "version": "4.5.1",
+  "version": "4.5.5",
   "description": "Multi-agent orchestration system for Claude Code - Inspired by oh-my-opencode",
   "type": "module",
   "main": "dist/index.js",
@@ -55,7 +55,6 @@
     "sync-metadata": "tsx scripts/sync-metadata.ts",
     "sync-metadata:verify": "tsx scripts/sync-metadata.ts --verify",
     "sync-metadata:dry-run": "tsx scripts/sync-metadata.ts --dry-run",
-    "prepare": "npm run build",
     "prepublishOnly": "npm run build && npm run compose-docs"
   },
   "dependencies": {

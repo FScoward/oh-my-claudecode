@@ -53,7 +53,7 @@ export declare function readRalphState(directory: string, sessionId?: string): R
  */
 export declare function writeRalphState(directory: string, state: RalphLoopState, sessionId?: string): boolean;
 /**
- * Clear Ralph Loop state
+ * Clear Ralph Loop state (includes ghost-legacy cleanup)
  */
 export declare function clearRalphState(directory: string, sessionId?: string): boolean;
 /**

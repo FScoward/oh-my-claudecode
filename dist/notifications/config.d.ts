@@ -11,6 +11,22 @@ import type { NotificationConfig, NotificationEvent, NotificationPlatform, Verbo
  */
 export declare function validateMention(raw: string | undefined): string | undefined;
 /**
+ * Validate Slack channel name or ID format.
+ * Accepts:
+ *   - Channel ID: C or G followed by 8-11 uppercase alphanumeric chars (e.g. "C1234567890")
+ *   - Channel name: optional # prefix, lowercase letters/numbers/hyphens/underscores (max 80 chars)
+ * Rejects control characters, shell metacharacters, and path traversal sequences.
+ * Returns the channel string if valid, undefined otherwise.
+ */
+export declare function validateSlackChannel(raw: string | undefined): string | undefined;
+/**
+ * Validate Slack username format.
+ * Accepts alphanumeric characters, spaces, hyphens, underscores, periods, apostrophes (max 80 chars).
+ * Rejects control characters, shell metacharacters, and path traversal sequences.
+ * Returns the username string if valid, undefined otherwise.
+ */
+export declare function validateSlackUsername(raw: string | undefined): string | undefined;
+/**
  * Validate Slack mention format.
  * Accepts: <@UXXXXXXXX> (user), <!channel>, <!here>, <!everyone>, <!subteam^SXXXXXXXXX> (user group).
  * Returns the mention string if valid, undefined otherwise.
@@ -85,6 +101,9 @@ export declare function getReplyListenerPlatformConfig(config: NotificationConfi
     discordBotToken?: string;
     discordChannelId?: string;
     discordMention?: string;
+    slackAppToken?: string;
+    slackBotToken?: string;
+    slackChannelId?: string;
 };
 /**
  * Get reply injection configuration.

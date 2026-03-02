@@ -1,3 +1,94 @@
+# oh-my-claudecode v4.5.2: Security Hardening, Shared Memory Reliability & Team Stability
+
+## Patch Notes
+
+Major reliability and security release with 59 commits. Addresses critical data-integrity issues in shared memory (atomic writes, file locking, TOCTOU prevention), hardens team worker coordination (path traversal validation, shell sandboxing, binary validation), adds notification security (token redaction, input sanitization, WebSocket message validation), and introduces new features including Slack Bot Socket Mode, cross-session memory sync, factcheck guards, configurable pipeline orchestrator, and non-Claude provider auto-detection.
+
+### Features
+
+- **Slack Bot Socket Mode** (#1138, #1139): Bidirectional replay injection via WebSocket for real-time Slack integration.
+- **Cross-session memory sync** (#1137): Shared memory subsystem for multi-agent handoffs across sessions.
+- **Factcheck guard + sentinel health analyzer** (#1155, #1156): Portable factcheck guard with sentinel health monitoring.
+- **Configurable pipeline orchestrator** (#1132): Phase 1 & 2 of autopilot pipeline orchestrator with configurable stages.
+- **API key source indicator** (#1146, #1147): HUD element showing the source of the active API key.
+- **OMC-OMX cross-platform worker adapter** (#1117, #1123): Interop adapter for cross-platform worker orchestration.
+- **OpenClaw channel context** (#1110, #1115): Originating channel context passed through to webhook hooks.
+- **forceInherit model routing** (#1135, #1136): Option to bypass model routing and inherit parent model.
+- **Non-Claude provider auto-detection** (#1201, #1202): Auto-detect non-Claude providers (OpenRouter, Bedrock, etc.) and enable forceInherit.
+- **LSP timeout configuration** (#1106): Configurable request timeout via `OMC_LSP_TIMEOUT_MS` env var.
+- **HUD maxWidth config** (#1102): Statusline truncation with configurable max width.
+- **Worktree path in tmux session name** (#1088, #1089): Include worktree path for disambiguating parallel sessions.
+
+### Security Fixes
+
+- **Path traversal prevention in worker inbox/outbox** (#1185): Validate file paths to prevent directory traversal attacks in team worker message exchange.
+- **Shell rc sandboxing and binary validation** (#1166, #1189): Sandbox shell rc loading and validate binary paths before execution in team workers.
+- **CLI binary resolution hardening** (#1173, #1190): Prevent PATH manipulation from influencing CLI binary resolution.
+- **Slack/Telegram token redaction** (#1176): Redact bot tokens in log and error output paths.
+- **Slack webhook input sanitization** (#1175): Sanitize input data in Slack webhook payloads.
+- **Slack WebSocket message validation** (#1188): Validate WebSocket messages before session injection.
+
+### Bug Fixes — Shared Memory & State
+
+- **Deep merge for cross-session sync** (#1193): Use deep merge instead of full overwrite to prevent data loss during sync.
+- **Payload size validation** (#1181): Validate memory write payloads to prevent oversized writes.
+- **TOCTOU cache poisoning prevention** (#1179): Add locking to state-manager `update()` to prevent time-of-check/time-of-use races.
+- **Atomic writes** (#1174): Write to temp file + rename to prevent corruption on crash.
+- **Cross-process file locking** (#1178): File locking to prevent concurrent write data loss.
+- **Mode state I/O consolidation** (#1143): Consolidate mode state I/O and fix cancel cleanup.
+- **OMC_STATE_DIR support** (#1127): Use `getOmcRoot()` in HUD and hooks to respect `OMC_STATE_DIR`.
+
+### Bug Fixes — Team & Workers
+
+- **Tmux layout debounce** (#1158, #1196): Debounce layout operations during rapid worker spawn/kill cycles.
+- **Shell-readiness configurable timeout** (#1171, #1192): Add configurable timeout to shell-readiness wait.
+- **Readiness race condition** (#1183): Close race between pane check and task delivery.
+- **Interop bootstrap fail-open warning** (#1164, #1182): Add visible warning log when interop bootstrap fails open.
+- **Worker spawn env hardening** (#1141): Harden worker spawn environment and interop bootstrap fail-open.
+- **Inline worker task sentinels** (#1151, #1152): Include `.ready`/`done.json` sentinel in inline worker task.
+- **Prompt-mode gitignore bypass** (#1148, #1150): Inline task content for prompt-mode workers to bypass gitignore.
+- **PromptMode shell-readiness wait** (#1144, #1145): Add shell-readiness wait for promptMode agent panes.
+- **Shell PATH resolution** (#1128): Resolve user's shell PATH for CLI detection and runtime spawn.
+- **Gemini CLI worker fixes** (#1105): Resolve 4 Gemini CLI worker bugs.
+- **Auto-create detached tmux session** (#1095): Auto-create detached tmux session when not inside tmux.
+
+### Bug Fixes — Notifications
+
+- **WebSocket cleanup gaps** (#1172, #1194): Close WebSocket cleanup gaps on disconnect.
+- **Telegram reply injection** (#1099): Fix 3 reply listener bugs preventing Telegram reply injection.
+
+### Bug Fixes — Hooks, CLI & Shell
+
+- **Transcript path in native git worktrees** (#1191, #1195): Resolve transcript path correctly in native git worktrees.
+- **Worktree-mismatched transcript paths** (#1098): Resolve worktree-mismatched transcript paths.
+- **Shell rc in tmux sessions** (#1153, #1154): Load default shell rc in OMC tmux shell sessions.
+- **Source shell rc in tmux launch** (Yeachan-Heo/fix/tmux-shell-rc-loading): Source shell rc files in tmux launch sessions.
+- **Forward OMC_* env vars** (#1093): Forward OMC_* environment variables to tmux sessions.
+
+### Bug Fixes — Other
+
+- **HUD worktree root resolution** (#1118, #1121): Resolve worktree root to prevent `.omc/` in subdirectories.
+- **CLAUDE_CONFIG_DIR support** (#1125): Support `CLAUDE_CONFIG_DIR` in HUD Keychain credential lookup.
+- **OpenClaw claude -p mode** (#1120, #1122): Stop and session-end hooks fire reliably in `claude -p` mode.
+- **Plugin setup runtime deps** (#1113, #1114): Install runtime deps in plugin cache, remove prepare trap.
+- **Skill name prefixing** (#1111): Prefix plan, review, security-review skill names with omc-.
+- **Windows TCP fallback** (#1112): Add TCP localhost fallback for bridge when AF_UNIX unavailable.
+- **omc-doctor false positives** (#1101, #1104): Resolve false-positive checks for CLAUDE.md and legacy skills.
+
+### Chore & Refactor
+
+- **Deprecate legacy execution modes** (#1131, #1134): Deprecate ultrapilot, swarm, and pipeline execution modes.
+- **CLAUDE.md diet** — Reduce from 288 to 162 lines (-44%).
+- **i18n README fix** (#1096): Fix npm package name in translated READMEs.
+
+### Tests
+
+- **Edge/smoke test suites** (#1157): Add edge/smoke test suites for main→dev feature coverage.
+- **Smoke and unit tests** (#1140): Add smoke and unit tests for changelog features.
+- **CI test fixes** (#1197, #1198, #1199): Fix slack-socket, project-memory-merge, runtime-interop, runtime-prompt-mode, and memory-tools payload test failures.
+
+---
+
 # oh-my-claudecode v4.5.1: OpenClaw CLI Command Gateway
 
 ## Patch Notes

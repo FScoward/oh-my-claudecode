@@ -162,7 +162,7 @@ export function checkForComments(filePath, content, oldString, newString, edits)
  */
 const pendingCalls = new Map();
 const PENDING_CALL_TTL = 60_000;
-function cleanupOldPendingCalls() {
+function _cleanupOldPendingCalls() {
     const now = Date.now();
     for (const [callID, call] of pendingCalls) {
         if (now - call.timestamp > PENDING_CALL_TTL) {

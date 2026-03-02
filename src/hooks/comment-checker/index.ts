@@ -227,7 +227,7 @@ export interface CommentCheckerConfig {
 const pendingCalls = new Map<string, PendingCall>();
 const PENDING_CALL_TTL = 60_000;
 
-function cleanupOldPendingCalls(): void {
+function _cleanupOldPendingCalls(): void {
   const now = Date.now();
   for (const [callID, call] of pendingCalls) {
     if (now - call.timestamp > PENDING_CALL_TTL) {

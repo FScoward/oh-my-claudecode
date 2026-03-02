@@ -39,6 +39,16 @@ export declare function sanitizeTmuxToken(value: string): string;
  */
 export declare function buildTmuxShellCommand(command: string, args: string[]): string;
 /**
+ * Wrap a command string in the user's login shell with RC file sourcing.
+ * Ensures PATH and other environment setup from .bashrc/.zshrc is available
+ * when tmux spawns new sessions or panes with a command argument.
+ *
+ * tmux new-session / split-window run commands via a non-login, non-interactive
+ * shell, so tools installed via nvm, pyenv, conda, etc. are invisible.
+ * This wrapper starts a login shell (`-lc`) and explicitly sources the RC file.
+ */
+export declare function wrapWithLoginShell(command: string): string;
+/**
  * Quote shell argument for safe shell execution
  * Uses single quotes with proper escaping
  */
