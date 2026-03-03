@@ -8,8 +8,9 @@ Complete reference for oh-my-claudecode. For quick start, see the main [README.m
 
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [MCP Team Runtime Tools](#mcp-team-runtime-tools)
 - [Agents (28 Total)](#agents-28-total)
-- [Skills (37 Total)](#skills-37-total)
+- [Skills (38 Total)](#skills-38-total)
 - [Slash Commands](#slash-commands)
 - [Hooks System](#hooks-system)
 - [Magic Keywords](#magic-keywords)
@@ -186,6 +187,23 @@ Tag behavior:
 
 ---
 
+## MCP Team Runtime Tools
+
+When using the Team MCP server (`bridge/team-mcp.cjs`), these tools are available:
+
+| Tool | Purpose |
+|------|---------|
+| `omc_run_team_start` | Start tmux workers in background and return `jobId` immediately |
+| `omc_run_team_status` | Non-blocking status check for a background team job |
+| `omc_run_team_wait` | Blocking wait with internal polling, backoff, and idle nudge support |
+| `omc_run_team_cleanup` | Explicitly stop worker panes and clear scoped team state directory |
+
+### Runtime status semantics
+
+- **Artifact-first terminal convergence**: `status` and `wait` prefer `{jobId}-result.json` when present.
+- **Deterministic parse-failure handling**: malformed result artifacts are treated as terminal `failed`.
+- **Cleanup scope**: cleanup clears only `.omc/state/team/{teamName}` for the job (never sibling teams).
+
 ## Agents (28 Total)
 
 Always use `oh-my-claudecode:` prefix when calling via Task tool.
@@ -246,7 +264,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 
 ---
 
-## Skills (37 Total)
+## Skills (38 Total)
 
 ### Core Skills
 
@@ -263,6 +281,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | `ultraqa` | Autonomous QA cycling workflow | `/oh-my-claudecode:ultraqa` |
 | `plan` | Start planning session (consensus mode uses RALPLAN-DR structured deliberation) | `/oh-my-claudecode:plan` |
 | `ralplan` | Iterative planning (Planner+Architect+Critic) with structured deliberation; short mode default, `--deliberate` for high-risk pre-mortem + expanded test plan | `/oh-my-claudecode:ralplan` |
+| `deep-interview` | Socratic deep interview with mathematical ambiguity gating (Ouroboros-inspired) | `/oh-my-claudecode:deep-interview` |
 | `review` | Review work plans with critic | `/oh-my-claudecode:review` |
 
 ### Enhancement Skills
@@ -317,6 +336,7 @@ All skills are available as slash commands with the prefix `/oh-my-claudecode:`.
 | `/oh-my-claudecode:ultraqa <goal>` | Autonomous QA cycling workflow |
 | `/oh-my-claudecode:plan <description>` | Start planning session (supports consensus structured deliberation) |
 | `/oh-my-claudecode:ralplan <description>` | Iterative planning with consensus structured deliberation (`--deliberate` for high-risk mode) |
+| `/oh-my-claudecode:deep-interview <idea>` | Socratic interview with ambiguity scoring before execution |
 | `/oh-my-claudecode:review [plan-path]` | Review a plan with critic |
 | `/oh-my-claudecode:deepsearch <query>` | Thorough multi-strategy codebase search |
 | `/oh-my-claudecode:deepinit [path]` | Index codebase with hierarchical AGENTS.md files |
@@ -448,6 +468,7 @@ Just include these words anywhere in your prompt to activate enhanced modes:
 | `ralph`, `don't stop`, `must complete` | Persistence until verified complete |
 | `plan this`, `plan the` | Planning interview workflow |
 | `ralplan` | Iterative planning consensus with structured deliberation (`--deliberate` for high-risk mode) |
+| `deep interview`, `ouroboros` | Deep Socratic interview with mathematical clarity gating |
 | `search`, `find`, `locate` | Enhanced search mode |
 | `analyze`, `investigate`, `debug` | Deep analysis mode |
 | `sciomc` | Parallel research orchestration |
@@ -474,8 +495,8 @@ analyze why the tests are failing
 # Autonomous execution
 autopilot: build a todo app with React
 
-# Parallel autopilot
-ultrapilot: build a fullstack todo app
+# Parallel autonomous execution (use team instead of deprecated ultrapilot)
+team 3:deep-executor "build a fullstack todo app"
 
 # Persistence mode
 ralph: refactor the authentication module

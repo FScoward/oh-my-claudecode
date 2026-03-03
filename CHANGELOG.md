@@ -1,3 +1,76 @@
+# oh-my-claudecode v4.6.0: Team Runtime Hardening, Security Fixes & PRD-Driven Ralph
+
+## Release Notes
+
+This release delivers 48 commits of team runtime stability improvements, security hardening, and new features including mandatory PRD mode for Ralph, a new deep-interview skill, and comprehensive team worker reliability enhancements. Version bumped from 4.5.3 to 4.6.0.
+
+### New Features
+
+- **Deep Interview Skill** (#1215): [Ouroboros](https://github.com/Q00/ouroboros)-inspired Socratic questioning skill for requirements elicitation and problem decomposition.
+- **Ralph PRD Mode Mandatory** (#1219): Ralph now auto-generates `prd.json` when none exists, making PRD-driven iteration the default behavior. Stories iterate until all acceptance criteria pass. Opt-out via `--no-prd`.
+- **Factcheck Sentinel Readiness Gate** (#1210): Wired factcheck sentinel readiness gate into team pipeline for improved verification reliability.
+- **Model Aliases Configuration** (#1211, #1213): Added `modelAliases` config to override agent definition defaults for flexible model routing.
+
+### Security Fixes
+
+- **CLI Path Trust & RC-Loading** (#1230): Tightened CLI path trust validation and restored explicit RC-loading opt-out via `OMC_TEAM_NO_RC` for team worker runtime hardening. Pinned validated absolute CLI binary paths across preflight/spawn.
+- **Binary Path Validation** (#1228): Hardened CLI binary validation and launch safety with proper `normalize` imports for binary path compatibility checks.
+
+### Team Runtime Fixes
+
+- **Transient Failure Retry** (#1209, #1243): Added retry logic for dead worker panes with proper failure retry accounting atomicity. Skip `done.json` retry backoff on `ENOENT` errors.
+- **Watchdog Improvements** (#1234, #1229): Restored `done.json` parse recovery in watchdog path and retry pending-task read on transient gaps.
+- **Startup Reliability** (#1228): Restored readiness-based startup for non-prompt workers and preserved team context on pane-ready rollback.
+- **Binary Path Handling** (#1236): Allow absolute `launchBinary` paths containing spaces.
+- **Leader Pane Stability** (#1205): Prevent leader pane crash when `omc-teams` workers are active.
+- **Artifact Convergence** (#1241): Prevent wait hang in team MCP via artifact convergence.
+
+### Bug Fixes
+
+- **Python REPL Orphan Process** (#1239): Resolved orphan process leak on Windows caused by inline `require` in `killProcessGroup`.
+- **Shell RC Sourcing** (#1207): Source shell RC files when launching tmux sessions for proper environment inheritance.
+- **Stop Hook Blocking** (#1216): Return `continue: false` when stop hook should block execution.
+- **State Mode Alignment** (#1233, #1235): Aligned deep-interview state mode with state tools enum.
+
+### Cleanup & Refactoring
+
+- **Dead Code Removal** (#1220): Removed deprecated agents/skills, synchronized PluginConfig, renamed `plan` to `omc-plan` for consistency.
+
+### Testing
+
+- **Watchdog Retry Tests**: Hardened test suite for watchdog retry functionality with deterministic wait helpers.
+- **Runtime CLI Tests**: Added comprehensive CLI path resolution and prompt-mode test coverage.
+- **Done Recovery Tests**: Added tests for `done.json` recovery scenarios.
+
+### Documentation
+
+- **Execution Mode Guide** (#1221, #1222): Updated mode selection guide to recommend Team mode first.
+- **Skill Documentation**: Updated all skill READMEs to reflect new naming and capabilities.
+
+---
+
+# oh-my-claudecode v4.5.3: Dev→Main Release Alignment & OMC Teams Shipping
+
+## Patch Notes
+
+This release formalizes the dev→main shipping workflow for OMC releases, bumps plugin/package metadata to 4.5.3, and validates release readiness with smoke and e2e-oriented test runs after loading the dev plugin in-session.
+
+### Release Process
+
+- **Dev→Main shipping flow**: release notes now explicitly capture dev as the integration branch and main as the shipping branch for final release publication.
+- **Version bump to 4.5.3**: updated package and plugin metadata to keep runtime, plugin manifest, marketplace metadata, and docs version markers aligned.
+
+### OMC Teams
+
+- **Ship `/omc-teams` with Codex workers**: release flow includes Codex-worker parallel review/validation as part of release readiness checks.
+
+### Verification
+
+- **Smoke test run**: execute smoke-focused Vitest suites before release.
+- **E2E test run**: execute e2e-scoped test selection (or explicit no-test result) as part of release gate.
+
+---
+
 # oh-my-claudecode v4.5.2: Security Hardening, Shared Memory Reliability & Team Stability
 
 ## Patch Notes

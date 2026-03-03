@@ -8,7 +8,7 @@
  */
 
 import { exec, execFile, execSync, execFileSync } from 'child_process';
-import { join, basename } from 'path';
+import { join, basename, isAbsolute, win32 } from 'path';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import { validateTeamName } from './team-name.js';
@@ -84,8 +84,30 @@ function assertSafeEnvKey(key: string): void {
   }
 }
 
+const DANGEROUS_LAUNCH_BINARY_CHARS = /[;&|`$()<>\n\r\t\0]/;
+
+function isAbsoluteLaunchBinaryPath(value: string): boolean {
+  return isAbsolute(value) || win32.isAbsolute(value);
+}
+
+function assertSafeLaunchBinary(launchBinary: string): void {
+  if (launchBinary.trim().length === 0) {
+    throw new Error('Invalid launchBinary: value cannot be empty');
+  }
+  if (launchBinary !== launchBinary.trim()) {
+    throw new Error('Invalid launchBinary: value cannot have leading/trailing whitespace');
+  }
+  if (DANGEROUS_LAUNCH_BINARY_CHARS.test(launchBinary)) {
+    throw new Error('Invalid launchBinary: contains dangerous shell metacharacters');
+  }
+  if (/\s/.test(launchBinary) && !isAbsoluteLaunchBinaryPath(launchBinary)) {
+    throw new Error('Invalid launchBinary: paths with spaces must be absolute');
+  }
+}
+
 function getLaunchWords(config: WorkerPaneConfig): string[] {
   if (config.launchBinary) {
+    assertSafeLaunchBinary(config.launchBinary);
     return [config.launchBinary, ...(config.launchArgs ?? [])];
   }
   if (config.launchCmd) {
@@ -97,6 +119,7 @@ function getLaunchWords(config: WorkerPaneConfig): string[] {
 export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
   const shell = getDefaultShell();
   const launchWords = getLaunchWords(config);
+  const shouldSourceRc = process.env.OMC_TEAM_NO_RC !== '1';
 
   if (process.platform === 'win32' && !isUnixLikeOnWindows()) {
     const envPrefix = Object.entries(config.envVars)
@@ -120,7 +143,7 @@ export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
 
     const shellName = shellNameFromPath(shell) || 'bash';
     const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
-    const script = rcFile
+    const script = shouldSourceRc && rcFile
       ? `[ -f ${shellEscape(rcFile)} ] && . ${shellEscape(rcFile)}; exec "$@"`
       : 'exec "$@"';
 
@@ -145,7 +168,7 @@ export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
   const shellName = shellNameFromPath(shell) || 'bash';
   const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
   // Quote rcFile to prevent shell injection if HOME contains metacharacters
-  const sourceCmd = rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
+  const sourceCmd = shouldSourceRc && rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
 
   return `env ${envString} ${shell} -c "${sourceCmd}exec ${launchWords[0]}"`;
 }
@@ -277,9 +300,7 @@ export async function createTeamSession(
   const { promisify } = await import('util');
   const execFileAsync = promisify(execFile);
 
-  if (!process.env.TMUX) {
-    throw new Error('Team mode requires running inside tmux. Start one: tmux new-session');
-  }
+  const inTmux = Boolean(process.env.TMUX);
 
   // Prefer the invoking pane from environment to avoid focus races when users
   // switch tmux windows during startup (issue #966).
@@ -288,7 +309,25 @@ export async function createTeamSession(
   let sessionAndWindow = '';
   let leaderPaneId = envPaneId;
 
-  if (envPaneId) {
+  if (!inTmux) {
+    // Backward-compatible fallback: create an isolated detached tmux session
+    // so workflows can run when launched outside an attached tmux client.
+    const detachedSessionName = `${TMUX_SESSION_PREFIX}-${sanitizeName(teamName)}-${Date.now().toString(36)}`;
+    const detachedResult = await execFileAsync('tmux', [
+      'new-session', '-d', '-P', '-F', '#S:0 #{pane_id}',
+      '-s', detachedSessionName,
+      '-c', cwd,
+    ]);
+    const detachedLine = detachedResult.stdout.trim();
+    const detachedMatch = detachedLine.match(/^(\S+)\s+(%\d+)$/);
+    if (!detachedMatch) {
+      throw new Error(`Failed to create detached tmux session: "${detachedLine}"`);
+    }
+    sessionAndWindow = detachedMatch[1];
+    leaderPaneId = detachedMatch[2];
+  }
+
+  if (inTmux && envPaneId) {
     try {
       const targetedContextResult = await execFileAsync('tmux', [
         'display-message', '-p', '-t', envPaneId, '#S:#I'
@@ -450,6 +489,39 @@ export function paneLooksReady(captured: string): boolean {
     line => /\bgpt-[\w.-]+\b/i.test(line) || /\b\d+% left\b/i.test(line)
   );
   return hasCodexHint;
+}
+
+export interface WaitForPaneReadyOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export async function waitForPaneReady(
+  paneId: string,
+  opts: WaitForPaneReadyOptions = {}
+): Promise<boolean> {
+  const envTimeout = Number.parseInt(process.env.OMC_SHELL_READY_TIMEOUT_MS ?? '', 10);
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs ?? 0) > 0
+    ? Number(opts.timeoutMs)
+    : (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 10_000);
+  const pollIntervalMs = Number.isFinite(opts.pollIntervalMs) && (opts.pollIntervalMs ?? 0) > 0
+    ? Number(opts.pollIntervalMs)
+    : 250;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const captured = await capturePaneAsync(paneId, promisifiedExecFile as never);
+    if (paneLooksReady(captured) && !paneHasActiveTask(captured)) {
+      return true;
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  console.warn(
+    `[tmux-session] waitForPaneReady: pane ${paneId} timed out after ${timeoutMs}ms ` +
+    `(set OMC_SHELL_READY_TIMEOUT_MS to tune)`
+  );
+  return false;
 }
 
 function paneTailContainsLiteralLine(captured: string, text: string): boolean {

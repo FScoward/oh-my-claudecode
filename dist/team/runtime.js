@@ -1,11 +1,11 @@
 import { mkdir, writeFile, readFile, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { buildWorkerArgv, validateCliAvailable, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs } from './model-contract.js';
+import { buildWorkerArgv, resolveValidatedBinaryPath, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs } from './model-contract.js';
 import { validateTeamName } from './team-name.js';
-import { createTeamSession, spawnWorkerInPane, sendToWorker, isWorkerAlive, killTeamSession, } from './tmux-session.js';
+import { createTeamSession, spawnWorkerInPane, sendToWorker, isWorkerAlive, killTeamSession, waitForPaneReady, } from './tmux-session.js';
 import { composeInitialInbox, ensureWorkerStateDir, writeWorkerOverlay, } from './worker-bootstrap.js';
-import { withTaskLock } from './task-file-ops.js';
+import { withTaskLock, writeTaskFailure, DEFAULT_MAX_TASK_RETRIES, } from './task-file-ops.js';
 function workerName(index) {
     return `worker-${index + 1}`;
 }
@@ -18,13 +18,36 @@ async function writeJson(filePath, data) {
     await writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
 }
 async function readJsonSafe(filePath) {
-    try {
-        const content = await readFile(filePath, 'utf-8');
-        return JSON.parse(content);
+    const isDoneSignalPath = filePath.endsWith('done.json');
+    const maxAttempts = isDoneSignalPath ? 4 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const content = await readFile(filePath, 'utf-8');
+            try {
+                return JSON.parse(content);
+            }
+            catch {
+                if (!isDoneSignalPath || attempt === maxAttempts) {
+                    return null;
+                }
+            }
+        }
+        catch (error) {
+            const isMissingDoneSignal = isDoneSignalPath
+                && typeof error === 'object'
+                && error !== null
+                && 'code' in error
+                && error.code === 'ENOENT';
+            if (isMissingDoneSignal) {
+                return null;
+            }
+            if (!isDoneSignalPath || attempt === maxAttempts) {
+                return null;
+            }
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
     }
-    catch {
-        return null;
-    }
+    return null;
 }
 function parseWorkerIndex(workerNameValue) {
     const match = workerNameValue.match(/^worker-(\d+)$/);
@@ -66,45 +89,80 @@ async function markTaskInProgress(root, taskId, owner, teamName, cwd) {
     // withTaskLock returns null if the lock could not be acquired — treat as not claimed
     return result ?? false;
 }
-async function resetTaskToPending(root, taskId) {
-    const task = await readTask(root, taskId);
-    if (!task)
-        return;
-    task.status = 'pending';
-    task.owner = null;
-    task.assignedAt = undefined;
-    await writeTask(root, task);
+async function resetTaskToPending(root, taskId, teamName, cwd) {
+    await withTaskLock(teamName, taskId, async () => {
+        const task = await readTask(root, taskId);
+        if (!task)
+            return;
+        task.status = 'pending';
+        task.owner = null;
+        task.assignedAt = undefined;
+        await writeTask(root, task);
+    }, { cwd });
 }
-async function markTaskFromDone(root, taskId, status, summary) {
-    const task = await readTask(root, taskId);
-    if (!task)
-        return;
-    task.status = status;
-    task.result = summary;
-    task.summary = summary;
-    if (status === 'completed') {
-        task.completedAt = new Date().toISOString();
-    }
-    else {
-        task.failedAt = new Date().toISOString();
-    }
-    await writeTask(root, task);
+async function markTaskFromDone(root, teamName, cwd, taskId, status, summary) {
+    await withTaskLock(teamName, taskId, async () => {
+        const task = await readTask(root, taskId);
+        if (!task)
+            return;
+        task.status = status;
+        task.result = summary;
+        task.summary = summary;
+        if (status === 'completed') {
+            task.completedAt = new Date().toISOString();
+        }
+        else {
+            task.failedAt = new Date().toISOString();
+        }
+        await writeTask(root, task);
+    }, { cwd });
 }
-async function markTaskFailedDeadPane(root, taskId, workerNameValue) {
-    const task = await readTask(root, taskId);
-    if (!task)
-        return;
-    task.status = 'failed';
-    task.owner = workerNameValue;
-    task.summary = `Worker pane died before done.json was written (${workerNameValue})`;
-    task.result = task.summary;
-    task.failedAt = new Date().toISOString();
-    await writeTask(root, task);
+async function applyDeadPaneTransition(runtime, workerNameValue, taskId) {
+    const root = stateRoot(runtime.cwd, runtime.teamName);
+    const transition = await withTaskLock(runtime.teamName, taskId, async () => {
+        const task = await readTask(root, taskId);
+        if (!task)
+            return { action: 'skipped' };
+        if (task.status === 'completed' || task.status === 'failed') {
+            return { action: 'skipped' };
+        }
+        if (task.status !== 'in_progress' || task.owner !== workerNameValue) {
+            return { action: 'skipped' };
+        }
+        const failure = await writeTaskFailure(runtime.teamName, taskId, `Worker pane died before done.json was written (${workerNameValue})`, { cwd: runtime.cwd });
+        const retryCount = failure.retryCount;
+        if (retryCount >= DEFAULT_MAX_TASK_RETRIES) {
+            task.status = 'failed';
+            task.owner = workerNameValue;
+            task.summary = `Worker pane died before done.json was written (${workerNameValue})`;
+            task.result = task.summary;
+            task.failedAt = new Date().toISOString();
+            await writeTask(root, task);
+            return { action: 'failed', retryCount };
+        }
+        task.status = 'pending';
+        task.owner = null;
+        task.assignedAt = undefined;
+        await writeTask(root, task);
+        return { action: 'requeued', retryCount };
+    }, { cwd: runtime.cwd });
+    return transition ?? { action: 'skipped' };
 }
 async function nextPendingTaskIndex(runtime) {
     const root = stateRoot(runtime.cwd, runtime.teamName);
+    const transientReadRetryAttempts = 3;
+    const transientReadRetryDelayMs = 15;
     for (let i = 0; i < runtime.config.tasks.length; i++) {
-        const task = await readTask(root, String(i + 1));
+        const taskId = String(i + 1);
+        let task = await readTask(root, taskId);
+        if (!task) {
+            for (let attempt = 1; attempt < transientReadRetryAttempts; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, transientReadRetryDelayMs));
+                task = await readTask(root, taskId);
+                if (task)
+                    break;
+            }
+        }
         if (task?.status === 'pending')
             return i;
     }
@@ -158,9 +216,10 @@ function buildInitialTaskInstruction(teamName, workerName, task, taskId) {
 export async function startTeam(config) {
     const { teamName, agentTypes, tasks, cwd } = config;
     validateTeamName(teamName);
-    // Validate CLIs are available
+    // Validate CLIs once and pin absolute binary paths for consistent spawn behavior.
+    const resolvedBinaryPaths = {};
     for (const agentType of [...new Set(agentTypes)]) {
-        validateCliAvailable(agentType);
+        resolvedBinaryPaths[agentType] = resolveValidatedBinaryPath(agentType);
     }
     const root = stateRoot(cwd, teamName);
     await mkdir(join(root, 'tasks'), { recursive: true });
@@ -206,6 +265,7 @@ export async function startTeam(config) {
         workerPaneIds: session.workerPaneIds, // initially empty []
         activeWorkers: new Map(),
         cwd,
+        resolvedBinaryPaths,
     };
     const maxConcurrentWorkers = agentTypes.length;
     for (let i = 0; i < maxConcurrentWorkers; i++) {
@@ -333,7 +393,7 @@ export function watchdogCliWorkers(runtime, intervalMs) {
                 // Process done.json first if present
                 if (signal) {
                     unresponsiveCounts.delete(wName);
-                    await markTaskFromDone(root, signal.taskId || active.taskId, signal.status, signal.summary);
+                    await markTaskFromDone(root, runtime.teamName, runtime.cwd, signal.taskId || active.taskId, signal.status, signal.summary);
                     try {
                         const { unlink } = await import('fs/promises');
                         await unlink(donePath);
@@ -350,11 +410,15 @@ export function watchdogCliWorkers(runtime, intervalMs) {
                     }
                     continue;
                 }
-                // Dead pane without done.json => fail task, do not requeue
+                // Dead pane without done.json => retry as transient failure when possible
                 const alive = aliveResults[i];
                 if (!alive) {
                     unresponsiveCounts.delete(wName);
-                    await markTaskFailedDeadPane(root, active.taskId, wName);
+                    const transition = await applyDeadPaneTransition(runtime, wName, active.taskId);
+                    if (transition.action === 'requeued') {
+                        const retryCount = transition.retryCount ?? 1;
+                        console.warn(`[watchdog] worker ${wName} dead pane — requeuing task ${active.taskId} (retry ${retryCount}/${DEFAULT_MAX_TASK_RETRIES})`);
+                    }
                     await killWorkerPane(runtime, wName, active.paneId);
                     if (!(await allTasksTerminal(runtime))) {
                         const nextTaskIndexValue = await nextPendingTaskIndex(runtime);
@@ -379,7 +443,10 @@ export function watchdogCliWorkers(runtime, intervalMs) {
                     else {
                         console.warn(`[watchdog] worker ${wName} unresponsive ${count} consecutive ticks — killing and reassigning task ${active.taskId}`);
                         unresponsiveCounts.delete(wName);
-                        await markTaskFailedDeadPane(root, active.taskId, wName);
+                        const transition = await applyDeadPaneTransition(runtime, wName, active.taskId);
+                        if (transition.action === 'requeued') {
+                            console.warn(`[watchdog] worker ${wName} stall-killed — requeuing task ${active.taskId} (retry ${transition.retryCount}/${DEFAULT_MAX_TASK_RETRIES})`);
+                        }
                         await killWorkerPane(runtime, wName, active.paneId);
                         if (!(await allTasksTerminal(runtime))) {
                             const nextTaskIndexValue = await nextPendingTaskIndex(runtime);
@@ -462,10 +529,16 @@ export async function spawnWorkerForTask(runtime, workerNameValue, taskIndex) {
     await composeInitialInbox(runtime.teamName, workerNameValue, instruction, runtime.cwd);
     const relInboxPath = `.omc/state/team/${runtime.teamName}/workers/${workerNameValue}/inbox.md`;
     const envVars = getModelWorkerEnv(runtime.teamName, workerNameValue, agentType);
+    const resolvedBinaryPath = runtime.resolvedBinaryPaths?.[agentType] ?? resolveValidatedBinaryPath(agentType);
+    if (!runtime.resolvedBinaryPaths) {
+        runtime.resolvedBinaryPaths = {};
+    }
+    runtime.resolvedBinaryPaths[agentType] = resolvedBinaryPath;
     const [launchBinary, ...launchArgs] = buildWorkerArgv(agentType, {
         teamName: runtime.teamName,
         workerName: workerNameValue,
         cwd: runtime.cwd,
+        resolvedBinaryPath,
     });
     // For prompt-mode agents (e.g. Gemini Ink TUI), pass instruction via CLI
     // flag so tmux send-keys never needs to interact with the TUI input widget.
@@ -497,14 +570,19 @@ export async function spawnWorkerForTask(runtime, workerNameValue, taskIndex) {
         // panes tracking is best-effort
     }
     if (!usePromptMode) {
-        // Interactive mode: wait for CLI startup, handle trust-confirm, then
+        // Interactive mode: wait for pane readiness, handle trust-confirm, then
         // send instruction via tmux send-keys.
-        await new Promise(r => setTimeout(r, 4000));
+        const paneReady = await waitForPaneReady(paneId);
+        if (!paneReady) {
+            await killWorkerPane(runtime, workerNameValue, paneId);
+            await resetTaskToPending(root, taskId, runtime.teamName, runtime.cwd);
+            throw new Error(`worker_pane_not_ready:${workerNameValue}`);
+        }
         if (agentType === 'gemini') {
             const confirmed = await notifyPaneWithRetry(runtime.sessionName, paneId, '1');
             if (!confirmed) {
                 await killWorkerPane(runtime, workerNameValue, paneId);
-                await resetTaskToPending(root, taskId);
+                await resetTaskToPending(root, taskId, runtime.teamName, runtime.cwd);
                 throw new Error(`worker_notify_failed:${workerNameValue}:trust-confirm`);
             }
             await new Promise(r => setTimeout(r, 800));
@@ -512,7 +590,7 @@ export async function spawnWorkerForTask(runtime, workerNameValue, taskIndex) {
         const notified = await notifyPaneWithRetry(runtime.sessionName, paneId, `Read and execute your task from: ${relInboxPath}`);
         if (!notified) {
             await killWorkerPane(runtime, workerNameValue, paneId);
-            await resetTaskToPending(root, taskId);
+            await resetTaskToPending(root, taskId, runtime.teamName, runtime.cwd);
             throw new Error(`worker_notify_failed:${workerNameValue}:initial-inbox`);
         }
     }

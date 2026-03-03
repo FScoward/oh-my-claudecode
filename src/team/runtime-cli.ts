@@ -7,10 +7,11 @@
  */
 
 import { readdirSync, readFileSync } from 'fs';
-import { writeFile, rename } from 'fs/promises';
+import { readFile, rename, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { startTeam, monitorTeam, shutdownTeam } from './runtime.js';
 import type { TeamConfig, TeamRuntime } from './runtime.js';
+import { waitForSentinelReadiness } from './sentinel-gate.js';
 
 interface CliInput {
   teamName: string;
@@ -19,6 +20,8 @@ interface CliInput {
   tasks: Array<{ subject: string; description: string }>;
   cwd: string;
   pollIntervalMs?: number;
+  sentinelGateTimeoutMs?: number;
+  sentinelGatePollIntervalMs?: number;
 }
 
 interface TaskResult {
@@ -33,6 +36,91 @@ interface CliOutput {
   taskResults: TaskResult[];
   duration: number;
   workerCount: number;
+}
+
+interface WatchdogFailedMarker {
+  failedAt: string | number;
+}
+
+type TerminalStatus = 'completed' | 'failed' | null;
+
+export function getTerminalStatus(
+  taskCounts: { pending: number; inProgress: number; completed: number; failed: number },
+  expectedTaskCount: number,
+): TerminalStatus {
+  const active = taskCounts.pending + taskCounts.inProgress;
+  const terminal = taskCounts.completed + taskCounts.failed;
+  if (active !== 0 || terminal !== expectedTaskCount) return null;
+  return taskCounts.failed > 0 ? 'failed' : 'completed';
+}
+
+function parseWatchdogFailedAt(marker: WatchdogFailedMarker): number {
+  if (typeof marker.failedAt === 'number') return marker.failedAt;
+  if (typeof marker.failedAt === 'string') {
+    const numeric = Number(marker.failedAt);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(marker.failedAt);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  throw new Error('watchdog marker missing valid failedAt');
+}
+
+export async function checkWatchdogFailedMarker(
+  stateRoot: string,
+  startTime: number,
+): Promise<{ failed: boolean; reason?: string }> {
+  const markerPath = join(stateRoot, 'watchdog-failed.json');
+  let raw: string;
+  try {
+    raw = await readFile(markerPath, 'utf-8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { failed: false };
+    return { failed: true, reason: `Failed to read watchdog marker: ${err}` };
+  }
+
+  let marker: WatchdogFailedMarker;
+  try {
+    marker = JSON.parse(raw) as WatchdogFailedMarker;
+  } catch (err) {
+    return { failed: true, reason: `Failed to parse watchdog marker: ${err}` };
+  }
+
+  let failedAt: number;
+  try {
+    failedAt = parseWatchdogFailedAt(marker);
+  } catch (err) {
+    return { failed: true, reason: `Invalid watchdog marker: ${err}` };
+  }
+
+  if (failedAt >= startTime) {
+    return { failed: true, reason: `Watchdog marked team failed at ${new Date(failedAt).toISOString()}` };
+  }
+
+  try {
+    await unlink(markerPath);
+  } catch {
+    // best-effort stale marker cleanup
+  }
+
+  return { failed: false };
+}
+
+export async function writeResultArtifact(
+  output: CliOutput,
+  finishedAt: string,
+  jobId: string | undefined = process.env.OMC_JOB_ID,
+  omcJobsDir: string | undefined = process.env.OMC_JOBS_DIR,
+): Promise<void> {
+  if (!jobId || !omcJobsDir) return;
+  const resultPath = join(omcJobsDir, `${jobId}-result.json`);
+  const tmpPath = `${resultPath}.tmp`;
+  await writeFile(
+    tmpPath,
+    JSON.stringify({ ...output, finishedAt }),
+    'utf-8',
+  );
+  await rename(tmpPath, resultPath);
 }
 
 async function writePanesFile(
@@ -108,6 +196,8 @@ async function main(): Promise<void> {
     tasks,
     cwd,
     pollIntervalMs = 5000,
+    sentinelGateTimeoutMs = 30_000,
+    sentinelGatePollIntervalMs = 250,
   } = input;
 
   const workerCount = input.workerCount ?? agentTypes.length;
@@ -165,6 +255,13 @@ async function main(): Promise<void> {
       duration,
       workerCount,
     };
+    const finishedAt = new Date().toISOString();
+
+    try {
+      await writeResultArtifact(output, finishedAt);
+    } catch (err) {
+      process.stderr.write(`[runtime-cli] Failed to persist result artifact: ${err}\n`);
+    }
 
     // 4. Write result to stdout
     process.stdout.write(JSON.stringify(output) + '\n');
@@ -193,6 +290,8 @@ async function main(): Promise<void> {
 
   // Persist pane IDs so MCP server can clean up explicitly via omc_run_team_cleanup.
   const jobId = process.env.OMC_JOB_ID;
+  const expectedTaskCount = tasks.length;
+  let mismatchStreak = 0;
   try {
     await writePanesFile(jobId, runtime.workerPaneIds, runtime.leaderPaneId);
   } catch (err) {
@@ -204,6 +303,13 @@ async function main(): Promise<void> {
     await new Promise(r => setTimeout(r, pollIntervalMs));
 
     if (!pollActive) break;
+
+    const watchdogCheck = await checkWatchdogFailedMarker(stateRoot, startTime);
+    if (watchdogCheck.failed) {
+      process.stderr.write(`[runtime-cli] ${watchdogCheck.reason ?? 'Watchdog failure marker detected'}\n`);
+      await doShutdown('failed');
+      return;
+    }
 
     let snap;
     try {
@@ -223,9 +329,51 @@ async function main(): Promise<void> {
       `[runtime-cli] phase=${snap.phase} pending=${snap.taskCounts.pending} inProgress=${snap.taskCounts.inProgress} completed=${snap.taskCounts.completed} failed=${snap.taskCounts.failed} dead=${snap.deadWorkers.length} monitorMs=${snap.monitorPerformance.totalMs} tasksMs=${snap.monitorPerformance.listTasksMs} workerMs=${snap.monitorPerformance.workerScanMs}\n`,
     );
 
-    // Check completion
-    if (snap.phase === 'completed') {
+    const observedTaskCount = snap.taskCounts.pending
+      + snap.taskCounts.inProgress
+      + snap.taskCounts.completed
+      + snap.taskCounts.failed;
+    if (observedTaskCount !== expectedTaskCount) {
+      mismatchStreak += 1;
+      process.stderr.write(
+        `[runtime-cli] Task-count mismatch observed=${observedTaskCount} expected=${expectedTaskCount} streak=${mismatchStreak}\n`,
+      );
+      if (mismatchStreak >= 2) {
+        process.stderr.write('[runtime-cli] Persistent task-count mismatch detected — failing fast\n');
+        await doShutdown('failed');
+        return;
+      }
+      continue;
+    }
+    mismatchStreak = 0;
+
+    const terminalStatus = getTerminalStatus(snap.taskCounts, expectedTaskCount);
+
+    // Check completion — enforce sentinel readiness gate before terminal success
+    if (terminalStatus === 'completed') {
+      const sentinelLogPath = join(cwd, 'sentinel_stop.jsonl');
+      const gateResult = await waitForSentinelReadiness({
+        workspace: cwd,
+        logPath: sentinelLogPath,
+        timeoutMs: sentinelGateTimeoutMs,
+        pollIntervalMs: sentinelGatePollIntervalMs,
+      });
+
+      if (!gateResult.ready) {
+        process.stderr.write(
+          `[runtime-cli] Sentinel gate blocked completion (timedOut=${gateResult.timedOut}, attempts=${gateResult.attempts}, elapsedMs=${gateResult.elapsedMs}): ${gateResult.blockers.join('; ')}\n`,
+        );
+        await doShutdown('failed');
+        return;
+      }
+
       await doShutdown('completed');
+      return;
+    }
+
+    if (terminalStatus === 'failed') {
+      process.stderr.write('[runtime-cli] Terminal failure detected from task counts\n');
+      await doShutdown('failed');
       return;
     }
 

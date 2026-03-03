@@ -15,6 +15,7 @@ import { tmpdir } from 'os';
 // Track all tmux calls made during spawn
 const tmuxCalls = vi.hoisted(() => ({
     args: [],
+    capturePaneText: '❯ ready\n',
 }));
 vi.mock('child_process', async (importOriginal) => {
     const actual = await importOriginal();
@@ -25,7 +26,7 @@ vi.mock('child_process', async (importOriginal) => {
             cb(null, '%42\n', '');
         }
         else if (args[0] === 'capture-pane') {
-            cb(null, '', '');
+            cb(null, tmuxCalls.capturePaneText, '');
         }
         else if (args[0] === 'display-message') {
             // pane_dead check → "0" means alive; pane_in_mode → "0" means not in copy mode
@@ -43,7 +44,7 @@ vi.mock('child_process', async (importOriginal) => {
             return { stdout: '%42\n', stderr: '' };
         }
         if (args[0] === 'capture-pane') {
-            return { stdout: '', stderr: '' };
+            return { stdout: tmuxCalls.capturePaneText, stderr: '' };
         }
         if (args[0] === 'display-message') {
             return { stdout: '0', stderr: '' };
@@ -52,10 +53,14 @@ vi.mock('child_process', async (importOriginal) => {
     };
     return {
         ...actual,
-        spawnSync: vi.fn((_cmd, args) => {
-            if (args?.[0] === '--version')
-                return { status: 0 };
-            return { status: 1 };
+        spawnSync: vi.fn((cmd, args = []) => {
+            if (args[0] === '--version')
+                return { status: 0, stdout: '', stderr: '' };
+            if (cmd === 'which' || cmd === 'where') {
+                const bin = args[0] ?? 'unknown';
+                return { status: 0, stdout: `/usr/bin/${bin}\n`, stderr: '' };
+            }
+            return { status: 0, stdout: '', stderr: '' };
         }),
         execFile: mockExecFile,
     };
@@ -77,6 +82,9 @@ function makeRuntime(cwd, agentType) {
         workerPaneIds: [],
         activeWorkers: new Map(),
         cwd,
+        resolvedBinaryPaths: {
+            [agentType]: `/usr/local/bin/${agentType}`,
+        },
     };
 }
 function setupTaskDir(cwd) {
@@ -96,6 +104,8 @@ describe('spawnWorkerForTask – prompt mode (Gemini & Codex)', () => {
     let cwd;
     beforeEach(() => {
         tmuxCalls.args = [];
+        tmuxCalls.capturePaneText = '❯ ready\n';
+        delete process.env.OMC_SHELL_READY_TIMEOUT_MS;
         cwd = mkdtempSync(join(tmpdir(), 'runtime-gemini-prompt-'));
         setupTaskDir(cwd);
     });
@@ -156,6 +166,26 @@ describe('spawnWorkerForTask – prompt mode (Gemini & Codex)', () => {
         const sendKeysCalls = tmuxCalls.args.filter(args => args[0] === 'send-keys' && args.includes('-l'));
         // Only one send-keys call: the launch command itself
         expect(sendKeysCalls.length).toBe(1);
+        rmSync(cwd, { recursive: true, force: true });
+    });
+    it('non-prompt worker waits for pane readiness before sending inbox instruction', async () => {
+        const runtime = makeRuntime(cwd, 'claude');
+        await spawnWorkerForTask(runtime, 'worker-1', 0);
+        const captureCalls = tmuxCalls.args.filter(args => args[0] === 'capture-pane');
+        expect(captureCalls.length).toBeGreaterThan(0);
+        const readInstructionCalls = tmuxCalls.args.filter(args => args[0] === 'send-keys' && args.includes('-l') && (args[args.length - 1] ?? '').includes('Read and execute your task from:'));
+        expect(readInstructionCalls.length).toBe(1);
+        rmSync(cwd, { recursive: true, force: true });
+    });
+    it('non-prompt worker throws when pane never becomes ready and resets task to pending', async () => {
+        const runtime = makeRuntime(cwd, 'claude');
+        tmuxCalls.capturePaneText = 'still booting\n';
+        process.env.OMC_SHELL_READY_TIMEOUT_MS = '40';
+        await expect(spawnWorkerForTask(runtime, 'worker-1', 0)).rejects.toThrow('worker_pane_not_ready:worker-1');
+        const taskPath = join(cwd, '.omc/state/team/test-team/tasks/1.json');
+        const task = JSON.parse(readFileSync(taskPath, 'utf-8'));
+        expect(task.status).toBe('pending');
+        expect(task.owner).toBeNull();
         rmSync(cwd, { recursive: true, force: true });
     });
 });

@@ -79,6 +79,21 @@ describe('buildWorkerStartCommand', () => {
         expect(cmd).toContain("env A='1' /bin/zsh -c");
         expect(cmd).toContain('[ -f "/home/tester/.zshrc" ] && source "/home/tester/.zshrc";');
     });
+    it('skips rc sourcing when OMC_TEAM_NO_RC=1', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+        vi.stubEnv('SHELL', '/bin/zsh');
+        vi.stubEnv('HOME', '/home/tester');
+        vi.stubEnv('OMC_TEAM_NO_RC', '1');
+        const cmd = buildWorkerStartCommand({
+            teamName: 't',
+            workerName: 'w',
+            envVars: { A: '1' },
+            launchCmd: 'node app.js',
+            cwd: '/tmp'
+        });
+        expect(cmd).toContain("env A='1' /bin/zsh -c");
+        expect(cmd).not.toContain('source "/home/tester/.zshrc"');
+    });
     it('builds a Windows startup command without POSIX constructs', () => {
         vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
         vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
@@ -123,6 +138,38 @@ describe('buildWorkerStartCommand', () => {
             cwd: '/tmp'
         });
         expect(cmd).toContain('/home/tester/.bashrc');
+    });
+    it('accepts absolute Windows launchBinary paths with spaces', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+        vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+        expect(() => buildWorkerStartCommand({
+            teamName: 't',
+            workerName: 'w',
+            envVars: { OMC_TEAM_WORKER: 't/w' },
+            launchBinary: 'C:\\Program Files\\OpenAI\\Codex\\codex.exe',
+            launchArgs: ['--full-auto'],
+            cwd: 'C:\\repo'
+        })).not.toThrow();
+    });
+    it('rejects relative launchBinary containing spaces', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+        expect(() => buildWorkerStartCommand({
+            teamName: 't',
+            workerName: 'w',
+            envVars: {},
+            launchBinary: 'Program Files/codex',
+            cwd: '/tmp'
+        })).toThrow('Invalid launchBinary: paths with spaces must be absolute');
+    });
+    it('rejects dangerous shell metacharacters in launchBinary', () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+        expect(() => buildWorkerStartCommand({
+            teamName: 't',
+            workerName: 'w',
+            envVars: {},
+            launchBinary: '/usr/bin/codex;touch /tmp/pwn',
+            cwd: '/tmp'
+        })).toThrow('Invalid launchBinary: contains dangerous shell metacharacters');
     });
 });
 describe('shouldAttemptAdaptiveRetry', () => {

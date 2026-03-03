@@ -1,16 +1,6 @@
 #!/usr/bin/env node
 /**
  * Team MCP Server - tmux CLI worker runtime tools
- *
- * Exposes three tools for running tmux-based teams (claude/codex/gemini workers):
- *   omc_run_team_start  - spawn workers in background, return jobId immediately
- *   omc_run_team_status - non-blocking poll for job completion
- *   omc_run_team_wait   - blocking wait: polls internally, returns when done (one call instead of N)
- *
- * __dirname in the CJS bundle (bridge/team-mcp.cjs) points to the bridge/
- * directory, where runtime-cli.cjs is co-located — works for all install paths.
- *
- * Built by: scripts/build-team-server.mjs → bridge/team-mcp.cjs
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -28,26 +18,16 @@ import { homedir } from 'os';
 import { killWorkerPanes } from '../team/tmux-session.js';
 import { validateTeamName } from '../team/team-name.js';
 import { NudgeTracker } from '../team/idle-nudge.js';
-
-// ---------------------------------------------------------------------------
-// Job state: in-memory Map (primary) + /tmp backup (survives MCP restart)
-// ---------------------------------------------------------------------------
-
-interface OmcTeamJob {
-  status: 'running' | 'completed' | 'failed' | 'timeout';
-  result?: string;
-  stderr?: string;
-  startedAt: number;
-  pid?: number;
-  paneIds?: string[];
-  leaderPaneId?: string;
-  teamName?: string;
-  cwd?: string;
-  cleanedUpAt?: string;
-}
+import {
+  clearScopedTeamState,
+  convergeJobWithResultArtifact,
+  isJobTerminal,
+  isPidAlive,
+} from './team-job-convergence.js';
+import type { OmcTeamJob } from './team-job-convergence.js';
 
 const omcTeamJobs = new Map<string, OmcTeamJob>();
-const OMC_JOBS_DIR = join(homedir(), '.omc', 'team-jobs');
+const OMC_JOBS_DIR = process.env.OMC_JOBS_DIR || join(homedir(), '.omc', 'team-jobs');
 
 function persistJob(jobId: string, job: OmcTeamJob): void {
   try {
@@ -76,9 +56,19 @@ function validateJobId(job_id: string): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Schemas
-// ---------------------------------------------------------------------------
+function saveJobState(jobId: string, job: OmcTeamJob): OmcTeamJob {
+  omcTeamJobs.set(jobId, job);
+  persistJob(jobId, job);
+  return job;
+}
+
+function makeJobResponse(jobId: string, job: OmcTeamJob, extra: Record<string, unknown> = {}): { content: Array<{ type: 'text'; text: string }> } {
+  const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
+  const out: Record<string, unknown> = { jobId, status: job.status, elapsedSeconds: elapsed, ...extra };
+  if (job.result) { try { out.result = JSON.parse(job.result) as unknown; } catch { out.result = job.result; } }
+  if (job.stderr) out.stderr = job.stderr;
+  return { content: [{ type: 'text', text: JSON.stringify(out) }] };
+}
 
 const startSchema = z.object({
   teamName: z.string().describe('Slug name for the team (e.g. "auth-review")'),
@@ -102,9 +92,10 @@ const waitSchema = z.object({
   nudge_message: z.string().optional().describe('Message sent as nudge (default: "Continue working on your assigned task.")'),
 });
 
-// ---------------------------------------------------------------------------
-// Tool handlers
-// ---------------------------------------------------------------------------
+const cleanupSchema = z.object({
+  job_id: z.string().describe('Job ID returned by omc_run_team_start'),
+  grace_ms: z.number().optional().describe('Grace period in ms before force-killing panes (default: 10000)'),
+});
 
 async function handleStart(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   if (
@@ -155,7 +146,6 @@ async function handleStart(args: unknown): Promise<{ content: Array<{ type: 'tex
       }
       job.result = stdout;
     }
-    // Only fall back to exit-code when stdout parsing did not set a status
     if (job.status === 'running') {
       if (code === 0) job.status = 'completed';
       else job.status = 'failed';
@@ -175,28 +165,44 @@ async function handleStart(args: unknown): Promise<{ content: Array<{ type: 'tex
   };
 }
 
-async function handleStatus(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+export async function handleStatus(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { job_id } = statusSchema.parse(args);
   validateJobId(job_id);
-  const job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
+
+  let job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
   if (!job) {
     return { content: [{ type: 'text', text: JSON.stringify({ error: `No job found: ${job_id}` }) }] };
   }
-  const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-  const out: Record<string, unknown> = { jobId: job_id, status: job.status, elapsedSeconds: elapsed };
-  if (job.result) { try { out.result = JSON.parse(job.result) as unknown; } catch { out.result = job.result; } }
-  if (job.stderr) out.stderr = job.stderr;
-  return { content: [{ type: 'text', text: JSON.stringify(out) }] };
+
+  // Precedence: artifact terminal > job.status/result > pid liveness.
+  const artifactConvergence = convergeJobWithResultArtifact(job, job_id, OMC_JOBS_DIR);
+  if (artifactConvergence.changed) {
+    job = saveJobState(job_id, artifactConvergence.job);
+    return makeJobResponse(job_id, job);
+  }
+
+  if (isJobTerminal(job)) {
+    return makeJobResponse(job_id, job);
+  }
+
+  if (job.pid != null && !isPidAlive(job.pid)) {
+    job = saveJobState(job_id, {
+      ...job,
+      status: 'failed',
+      result: job.result ?? JSON.stringify({ error: 'Process no longer alive (MCP restart?)' }),
+    });
+  }
+
+  return makeJobResponse(job_id, job);
 }
 
-async function handleWait(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+export async function handleWait(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { job_id, timeout_ms = 300_000, nudge_delay_ms, nudge_max_count, nudge_message } = waitSchema.parse(args);
   validateJobId(job_id);
-  // Cap at 1 hour — matches Codex/Gemini wait_for_job behaviour
-  const deadline = Date.now() + Math.min(timeout_ms, 3_600_000);
-  let pollDelay = 500; // ms; grows to 2000ms via 1.5× backoff
 
-  // Auto-nudge idle teammate panes (issue #1047)
+  const deadline = Date.now() + Math.min(timeout_ms, 3_600_000);
+  let pollDelay = 500;
+
   const nudgeTracker = new NudgeTracker({
     ...(nudge_delay_ms != null ? { delayMs: nudge_delay_ms } : {}),
     ...(nudge_max_count != null ? { maxCount: nudge_max_count } : {}),
@@ -204,41 +210,52 @@ async function handleWait(args: unknown): Promise<{ content: Array<{ type: 'text
   });
 
   while (Date.now() < deadline) {
-    const job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
+    let job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
     if (!job) {
       return { content: [{ type: 'text', text: JSON.stringify({ error: `No job found: ${job_id}` }) }] };
     }
-    // FIX 2: Detect orphan PIDs (e.g. after MCP restart) — if job is 'running' but
-    // the process is dead, mark it failed immediately rather than polling forever.
-    if (job.status === 'running' && job.pid != null) {
-      try {
-        process.kill(job.pid, 0);
-      } catch (e: unknown) {
-        if ((e as NodeJS.ErrnoException).code === 'ESRCH') {
-          job.status = 'failed';
-          if (!job.result) job.result = JSON.stringify({ error: 'Process no longer alive (MCP restart?)' });
-          persistJob(job_id, job);
-          const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-          return { content: [{ type: 'text', text: JSON.stringify({ jobId: job_id, status: 'failed', elapsedSeconds: elapsed, error: 'Process no longer alive (MCP restart?)' }) }] };
-        }
+
+    // Precedence: artifact terminal > job.status/result > pid liveness > timeout.
+    const artifactConvergence = convergeJobWithResultArtifact(job, job_id, OMC_JOBS_DIR);
+    if (artifactConvergence.changed) {
+      job = saveJobState(job_id, artifactConvergence.job);
+      const out = makeJobResponse(job_id, job);
+      if (nudgeTracker.totalNudges > 0) {
+        const payload = JSON.parse(out.content[0].text) as Record<string, unknown>;
+        payload.nudges = nudgeTracker.getSummary();
+        out.content[0].text = JSON.stringify(payload);
       }
+      return out;
     }
-    if (job.status !== 'running') {
-      const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-      const out: Record<string, unknown> = { jobId: job_id, status: job.status, elapsedSeconds: elapsed };
-      if (job.result) { try { out.result = JSON.parse(job.result) as unknown; } catch { out.result = job.result; } }
-      if (job.stderr) out.stderr = job.stderr;
-      if (nudgeTracker.totalNudges > 0) out.nudges = nudgeTracker.getSummary();
-      return { content: [{ type: 'text', text: JSON.stringify(out) }] };
+
+    if (isJobTerminal(job)) {
+      const out = makeJobResponse(job_id, job);
+      if (nudgeTracker.totalNudges > 0) {
+        const payload = JSON.parse(out.content[0].text) as Record<string, unknown>;
+        payload.nudges = nudgeTracker.getSummary();
+        out.content[0].text = JSON.stringify(payload);
+      }
+      return out;
     }
-    // Yield to Node.js event loop — lets child.on('close', ...) fire between polls.
-    // No deadlock: runtime-cli.cjs is an independent child process and never calls
-    // back into this MCP server.
+
+    if (job.pid != null && !isPidAlive(job.pid)) {
+      job = saveJobState(job_id, {
+        ...job,
+        status: 'failed',
+        result: job.result ?? JSON.stringify({ error: 'Process no longer alive (MCP restart?)' }),
+      });
+      const out = makeJobResponse(job_id, job, { error: 'Process no longer alive (MCP restart?)' });
+      if (nudgeTracker.totalNudges > 0) {
+        const payload = JSON.parse(out.content[0].text) as Record<string, unknown>;
+        payload.nudges = nudgeTracker.getSummary();
+        out.content[0].text = JSON.stringify(payload);
+      }
+      return out;
+    }
+
     await new Promise<void>(r => setTimeout(r, pollDelay));
     pollDelay = Math.min(Math.floor(pollDelay * 1.5), 2000);
 
-    // Auto-nudge idle panes (issue #1047): check worker panes for idle state
-    // and send continuation nudge via tmux send-keys.
     try {
       const panes = await loadPaneIds(job_id);
       if (panes?.paneIds?.length) {
@@ -248,21 +265,47 @@ async function handleWait(args: unknown): Promise<{ content: Array<{ type: 'text
           job.teamName ?? '',
         );
       }
-    } catch { /* nudge is best-effort — never fail the wait loop */ }
+    } catch { /* best-effort */ }
   }
 
-  // Timeout: leave workers running — caller must use omc_run_team_cleanup to stop them explicitly.
-  // Do NOT kill the process or panes here; the user may call omc_run_team_wait again to keep
-  // waiting, or omc_run_team_status to check progress.
-  const elapsed = ((Date.now() - (omcTeamJobs.get(job_id)?.startedAt ?? Date.now())) / 1000).toFixed(1);
-  const timeoutOut: Record<string, unknown> = { error: `Timed out waiting for job ${job_id} after ${(timeout_ms / 1000).toFixed(0)}s — workers are still running; call omc_run_team_wait again to keep waiting or omc_run_team_cleanup to stop them`, jobId: job_id, status: 'running', elapsedSeconds: elapsed };
+  const startedAt = omcTeamJobs.get(job_id)?.startedAt ?? Date.now();
+  const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+  const timeoutOut: Record<string, unknown> = {
+    error: `Timed out waiting for job ${job_id} after ${(timeout_ms / 1000).toFixed(0)}s — workers are still running; call omc_run_team_wait again to keep waiting or omc_run_team_cleanup to stop them`,
+    jobId: job_id,
+    status: 'running',
+    elapsedSeconds: elapsed,
+  };
   if (nudgeTracker.totalNudges > 0) timeoutOut.nudges = nudgeTracker.getSummary();
   return { content: [{ type: 'text', text: JSON.stringify(timeoutOut) }] };
 }
 
-// ---------------------------------------------------------------------------
-// MCP server
-// ---------------------------------------------------------------------------
+export async function handleCleanup(args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const { job_id, grace_ms } = cleanupSchema.parse(args);
+  validateJobId(job_id);
+
+  const job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
+  if (!job) return { content: [{ type: 'text', text: `Job ${job_id} not found` }] };
+
+  const panes = await loadPaneIds(job_id);
+  let paneCleanupMessage = 'No pane IDs recorded for this job — pane cleanup skipped.';
+  if (panes?.paneIds?.length) {
+    await killWorkerPanes({
+      paneIds: panes.paneIds,
+      leaderPaneId: panes.leaderPaneId,
+      teamName: job.teamName ?? '',
+      cwd: job.cwd ?? '',
+      graceMs: grace_ms ?? 10_000,
+    });
+    paneCleanupMessage = `Cleaned up ${panes.paneIds.length} worker pane(s).`;
+  }
+
+  job.cleanedUpAt = new Date().toISOString();
+  persistJob(job_id, job);
+
+  const cleanupOutcome = clearScopedTeamState(job);
+  return { content: [{ type: 'text', text: `${paneCleanupMessage} ${cleanupOutcome}` }] };
+}
 
 const TOOLS = [
   {
@@ -343,26 +386,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'omc_run_team_start') return await handleStart(args ?? {});
     if (name === 'omc_run_team_status') return await handleStatus(args ?? {});
     if (name === 'omc_run_team_wait') return await handleWait(args ?? {});
-    if (name === 'omc_run_team_cleanup') {
-      const { job_id, grace_ms } = (args ?? {}) as { job_id: string; grace_ms?: number };
-      validateJobId(job_id);
-      const job = omcTeamJobs.get(job_id) ?? loadJobFromDisk(job_id);
-      if (!job) return { content: [{ type: 'text', text: `Job ${job_id} not found` }] };
-      const panes = await loadPaneIds(job_id);
-      if (!panes?.paneIds?.length) {
-        return { content: [{ type: 'text', text: 'No pane IDs recorded for this job — nothing to clean up.' }] };
-      }
-      await killWorkerPanes({
-        paneIds: panes.paneIds,
-        leaderPaneId: panes.leaderPaneId,
-        teamName: job.teamName ?? '',
-        cwd: job.cwd ?? '',
-        graceMs: grace_ms ?? 10_000,
-      });
-      job.cleanedUpAt = new Date().toISOString();
-      persistJob(job_id, job);
-      return { content: [{ type: 'text', text: `Cleaned up ${panes.paneIds.length} worker pane(s).` }] };
-    }
+    if (name === 'omc_run_team_cleanup') return await handleCleanup(args ?? {});
     return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
   } catch (error) {
     return { content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
@@ -375,7 +399,9 @@ async function main() {
   console.error('OMC Team MCP Server running on stdio');
 }
 
-main().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+if (process.env.OMC_TEAM_SERVER_DISABLE_AUTOSTART !== '1' && process.env.NODE_ENV !== 'test') {
+  main().catch((error) => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  });
+}

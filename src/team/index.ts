@@ -173,6 +173,18 @@ export type { WorkerPermissions } from './permissions.js';
 
 export { TeamPaths, absPath, teamStateRoot } from './state-paths.js';
 
+export {
+  checkSentinelReadiness,
+  waitForSentinelReadiness,
+} from './sentinel-gate.js';
+
+export type {
+  SentinelReadinessOptions,
+  SentinelGateResult,
+  SentinelWaitOptions,
+  SentinelWaitResult,
+} from './sentinel-gate.js';
+
 // New tmux-based multi-CLI team modules
 // model-contract: getWorkerEnv is exported via worker-bootstrap (single source of truth)
 export type { CliAgentType, CliAgentContract, WorkerLaunchConfig } from './model-contract.js';
@@ -183,7 +195,13 @@ export {
   buildLaunchArgs,
   buildWorkerCommand,
   parseCliOutput,
+  // Deprecated backward-compat exports kept for downstream consumers.
+  shouldLoadShellRc,
+  validateCliBinaryPath,
+  resolveCliBinaryPath,
+  clearResolvedPathCache,
 } from './model-contract.js';
+export type { CliBinaryValidation } from './model-contract.js';
 
 // cli-detection: only export symbols not already covered by model-contract
 export type { CliInfo } from './cli-detection.js';
@@ -208,6 +226,10 @@ export {
   queueBroadcastMessage,
   readMailbox,
 } from './tmux-comm.js';
+
+// Deprecated backward-compat exports for older layout APIs.
+export { LayoutStabilizer } from './layout-stabilizer.js';
+export type { LayoutStabilizerOptions } from './layout-stabilizer.js';
 
 // phase-controller
 export type { TeamPhase, PhaseableTask } from './phase-controller.js';

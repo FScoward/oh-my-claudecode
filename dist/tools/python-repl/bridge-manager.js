@@ -7,7 +7,7 @@
  * - Graceful shutdown with signal escalation
  * - PID reuse detection via process identity verification
  */
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as path from 'path';
@@ -243,7 +243,7 @@ function killProcessGroup(pid, signal) {
         try {
             const force = signal === 'SIGKILL';
             const args = force ? '/F /T' : '/T';
-            require('child_process').execSync(`taskkill ${args} /PID ${pid}`, { stdio: 'ignore', timeout: 5000, windowsHide: true });
+            execSync(`taskkill ${args} /PID ${pid}`, { stdio: 'ignore', timeout: 5000, windowsHide: true });
             return true;
         }
         catch {

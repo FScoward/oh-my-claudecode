@@ -38,6 +38,16 @@ autopilot: build a REST API for managing tasks
 
 That's it. Everything else is automatic.
 
+### Not Sure Where to Start?
+
+If you're uncertain about requirements, have a vague idea, or want to micromanage the design:
+
+```
+/deep-interview "I want to build a task management app"
+```
+
+The deep interview uses Socratic questioning to clarify your thinking before any code is written. It exposes hidden assumptions and measures clarity across weighted dimensions, ensuring you know exactly what to build before execution begins.
+
 ## Team Mode (Recommended)
 
 Starting in **v4.1.7**, **Team** is the canonical orchestration surface in OMC. Legacy entrypoints like **swarm** and **ultrapilot** are still supported, but they now **route to Team under the hood**.
@@ -175,8 +185,9 @@ Optional shortcuts for power users. Natural language works fine without them.
 | `ulw` | Maximum parallelism | `ulw fix all errors` |
 | `plan` | Planning interview | `plan the API` |
 | `ralplan` | Iterative planning consensus | `ralplan this feature` |
-| `swarm` | Legacy keyword (routes to Team) | `swarm 5 agents: fix lint errors` |
-| `ultrapilot` | Legacy keyword (routes to Team) | `ultrapilot: build a fullstack app` |
+| `deep-interview` | Socratic requirements clarification | `deep-interview "vague idea"` |
+| `swarm` | **Deprecated** — use `team` instead | `swarm 5 agents: fix lint errors` |
+| `ultrapilot` | **Deprecated** — use `team` instead | `ultrapilot: build a fullstack app` |
 
 **Notes:**
 - **ralph includes ultrawork**: when you activate ralph mode, it automatically includes ultrawork's parallel execution.
@@ -260,7 +271,7 @@ MIT
 
 <div align="center">
 
-**Inspired by:** [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) • [claude-hud](https://github.com/ryanjoachim/claude-hud) • [Superpowers](https://github.com/NexTechFusion/Superpowers) • [everything-claude-code](https://github.com/affaan-m/everything-claude-code)
+**Inspired by:** [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) • [claude-hud](https://github.com/ryanjoachim/claude-hud) • [Superpowers](https://github.com/obra/superpowers) • [everything-claude-code](https://github.com/affaan-m/everything-claude-code) • [Ouroboros](https://github.com/Q00/ouroboros)
 
 **Zero learning curve. Maximum power.**
 

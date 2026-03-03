@@ -23,6 +23,8 @@ export interface TeamRuntime {
     workerPaneIds: string[];
     activeWorkers: Map<string, ActiveWorkerState>;
     cwd: string;
+    /** Preflight-validated absolute binary paths, keyed by agent type */
+    resolvedBinaryPaths?: Partial<Record<CliAgentType, string>>;
     stopWatchdog?: () => void;
 }
 export interface WorkerStatus {

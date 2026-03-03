@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { resolveToWorktreeRoot, getOmcRoot } from "../lib/worktree-paths.js";
 // Hot-path imports: needed on every/most hook invocations (keyword-detector, pre/post-tool-use)
-import { removeCodeBlocks, getAllKeywordsWithSizeCheck, applyRalplanGate, sanitizeForKeywordDetection, NON_LATIN_SCRIPT_PATTERN, detectDeprecatedKeywords } from "./keyword-detector/index.js";
+import { removeCodeBlocks, getAllKeywordsWithSizeCheck, applyRalplanGate, sanitizeForKeywordDetection, NON_LATIN_SCRIPT_PATTERN } from "./keyword-detector/index.js";
 import { processOrchestratorPreTool, processOrchestratorPostTool } from "./omc-orchestrator/index.js";
 import { normalizeHookInput } from "./bridge-normalize.js";
 import { addBackgroundTask, getRunningTaskCount, } from "../hud/background-tasks.js";
@@ -166,11 +166,6 @@ async function processKeywordDetector(input) {
     const sessionId = input.sessionId;
     const directory = resolveToWorktreeRoot(input.directory);
     const messages = [];
-    // Check for deprecated keywords and emit warnings (#1131)
-    const deprecationWarnings = detectDeprecatedKeywords(cleanedText);
-    if (deprecationWarnings.length > 0) {
-        messages.push(...deprecationWarnings);
-    }
     // Record prompt submission time in HUD state
     try {
         const hudState = readHudState(directory) || {
@@ -248,10 +243,29 @@ async function processKeywordDetector(input) {
         switch (keywordType) {
             case "ralph": {
                 // Lazy-load ralph module
-                const { createRalphLoopHook } = await import("./ralph/index.js");
+                const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd } = await import("./ralph/index.js");
+                // Handle --no-prd flag
+                const noPrd = detectNoPrd(promptText);
+                const cleanPrompt = noPrd ? stripNoPrd(promptText) : promptText;
+                // Auto-generate scaffold PRD if none exists and --no-prd not set
+                const existingPrd = findPrd(directory);
+                if (!noPrd && !existingPrd) {
+                    const { basename } = await import("path");
+                    const { execSync } = await import("child_process");
+                    const projectName = basename(directory);
+                    let branchName = 'ralph/task';
+                    try {
+                        branchName = execSync('git rev-parse --abbrev-ref HEAD', { cwd: directory, encoding: 'utf-8' }).trim();
+                    }
+                    catch {
+                        // Not a git repo or git not available — use fallback
+                    }
+                    initPrdFn(directory, projectName, branchName, cleanPrompt);
+                    initProgressFn(directory);
+                }
                 // Activate ralph state which also auto-activates ultrawork
                 const hook = createRalphLoopHook(directory);
-                hook.startLoop(sessionId, promptText);
+                hook.startLoop(sessionId, cleanPrompt);
                 messages.push(RALPH_MESSAGE);
                 break;
             }
@@ -304,9 +318,8 @@ async function processKeywordDetector(input) {
     };
 }
 /**
- * Process stop continuation hook
- * NOTE: Simplified to always return continue: true (soft enforcement only).
- * All continuation enforcement is now done via message injection, not blocking.
+ * Process stop continuation hook (legacy path).
+ * Always returns continue: true — real enforcement is in processPersistentMode().
  */
 async function processStopContinuation(_input) {
     // Always allow stop - no hard blocking
@@ -383,6 +396,7 @@ async function processPersistentMode(input) {
     const currentMessage = output.message ? `${output.message}\n` : "";
     return {
         ...output,
+        continue: false,
         message: `${currentMessage}<team-stage-continuation>
 
 [TEAM MODE CONTINUATION]
@@ -810,12 +824,31 @@ async function processPostToolUse(input) {
     if (toolName === "skill") {
         const skillName = getInvokedSkillName(input.toolInput);
         if (skillName === "ralph") {
-            const { createRalphLoopHook } = await import("./ralph/index.js");
-            const promptText = typeof input.prompt === "string" && input.prompt.trim().length > 0
+            const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd } = await import("./ralph/index.js");
+            const rawPrompt = typeof input.prompt === "string" && input.prompt.trim().length > 0
                 ? input.prompt
                 : "Ralph loop activated via Skill tool";
+            // Handle --no-prd flag
+            const noPrd = detectNoPrd(rawPrompt);
+            const cleanPrompt = noPrd ? stripNoPrd(rawPrompt) : rawPrompt;
+            // Auto-generate scaffold PRD if none exists and --no-prd not set
+            const existingPrd = findPrd(directory);
+            if (!noPrd && !existingPrd) {
+                const { basename } = await import("path");
+                const { execSync } = await import("child_process");
+                const projectName = basename(directory);
+                let branchName = 'ralph/task';
+                try {
+                    branchName = execSync('git rev-parse --abbrev-ref HEAD', { cwd: directory, encoding: 'utf-8' }).trim();
+                }
+                catch {
+                    // Not a git repo or git not available — use fallback
+                }
+                initPrdFn(directory, projectName, branchName, cleanPrompt);
+                initProgressFn(directory);
+            }
             const hook = createRalphLoopHook(directory);
-            hook.startLoop(input.sessionId, promptText);
+            hook.startLoop(input.sessionId, cleanPrompt);
         }
     }
     // Run orchestrator post-tool processing (remember tags, verification reminders, etc.)

@@ -22,6 +22,8 @@ import { atomicWriteJson, validateResolvedPath, ensureDirWithMode } from './fs-u
 import { getTaskStoragePath, getLegacyTaskStoragePath } from './state-paths.js';
 /** Default age (ms) after which a lock file is considered stale. */
 const DEFAULT_STALE_LOCK_MS = 30_000;
+const FAILURE_LOCK_RETRY_ATTEMPTS = 40;
+const FAILURE_LOCK_RETRY_DELAY_MS = 5;
 /**
  * Check if a process with the given PID is alive.
  * Returns false for PIDs <= 0 or if kill(pid, 0) throws ESRCH.
@@ -98,6 +100,21 @@ export function releaseTaskLock(handle) {
         unlinkSync(handle.path);
     }
     catch { /* already removed */ }
+}
+async function sleepAsync(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+async function acquireTaskLockWithRetry(teamName, taskId, opts) {
+    const attempts = opts?.attempts ?? FAILURE_LOCK_RETRY_ATTEMPTS;
+    const delayMs = opts?.delayMs ?? FAILURE_LOCK_RETRY_DELAY_MS;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        const handle = acquireTaskLock(teamName, taskId, opts);
+        if (handle)
+            return handle;
+        if (attempt < attempts - 1)
+            await sleepAsync(delayMs);
+    }
+    throw new Error(`Failed to acquire lock for ${taskId} after ${attempts} attempts`);
 }
 /**
  * Execute a function while holding an exclusive task lock.
@@ -345,6 +362,7 @@ export function areBlockersResolved(teamName, blockedBy, opts) {
 /**
  * Write failure sidecar for a task.
  * If sidecar already exists, increments retryCount.
+ * Returns the persisted sidecar payload.
  */
 export function writeTaskFailure(teamName, taskId, error, opts) {
     const filePath = failureSidecarPath(teamName, taskId, opts?.cwd);
@@ -356,6 +374,7 @@ export function writeTaskFailure(teamName, taskId, error, opts) {
         lastFailedAt: new Date().toISOString(),
     };
     atomicWriteJson(filePath, sidecar);
+    return sidecar;
 }
 /** Read failure sidecar if it exists */
 export function readTaskFailure(teamName, taskId, opts) {

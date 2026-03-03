@@ -34,6 +34,9 @@ export interface LockHandle {
 
 /** Default age (ms) after which a lock file is considered stale. */
 const DEFAULT_STALE_LOCK_MS = 30_000;
+const FAILURE_LOCK_RETRY_ATTEMPTS = 40;
+const FAILURE_LOCK_RETRY_DELAY_MS = 5;
+
 
 /**
  * Check if a process with the given PID is alive.
@@ -105,6 +108,27 @@ export function acquireTaskLock(
 export function releaseTaskLock(handle: LockHandle): void {
   try { closeSync(handle.fd); } catch { /* already closed */ }
   try { unlinkSync(handle.path); } catch { /* already removed */ }
+}
+
+async function sleepAsync(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function acquireTaskLockWithRetry(
+  teamName: string,
+  taskId: string,
+  opts?: { staleLockMs?: number; workerName?: string; cwd?: string; attempts?: number; delayMs?: number },
+): Promise<LockHandle> {
+  const attempts = opts?.attempts ?? FAILURE_LOCK_RETRY_ATTEMPTS;
+  const delayMs = opts?.delayMs ?? FAILURE_LOCK_RETRY_DELAY_MS;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const handle = acquireTaskLock(teamName, taskId, opts);
+    if (handle) return handle;
+    if (attempt < attempts - 1) await sleepAsync(delayMs);
+  }
+
+  throw new Error(`Failed to acquire lock for ${taskId} after ${attempts} attempts`);
 }
 
 /**
@@ -373,8 +397,9 @@ export function areBlockersResolved(teamName: string, blockedBy: string[], opts?
 /**
  * Write failure sidecar for a task.
  * If sidecar already exists, increments retryCount.
+ * Returns the persisted sidecar payload.
  */
-export function writeTaskFailure(teamName: string, taskId: string, error: string, opts?: { cwd?: string }): void {
+export function writeTaskFailure(teamName: string, taskId: string, error: string, opts?: { cwd?: string }): TaskFailureSidecar {
   const filePath = failureSidecarPath(teamName, taskId, opts?.cwd);
   const existing = readTaskFailure(teamName, taskId, opts);
   const sidecar: TaskFailureSidecar = {
@@ -384,6 +409,7 @@ export function writeTaskFailure(teamName: string, taskId: string, error: string
     lastFailedAt: new Date().toISOString(),
   };
   atomicWriteJson(filePath, sidecar);
+  return sidecar;
 }
 
 /** Read failure sidecar if it exists */
@@ -412,6 +438,7 @@ export function isTaskRetryExhausted(
   if (!failure) return false;
   return failure.retryCount >= maxRetries;
 }
+
 
 /** List all task IDs in a team directory, sorted ascending */
 export function listTaskIds(teamName: string, opts?: { cwd?: string }): string[] {
