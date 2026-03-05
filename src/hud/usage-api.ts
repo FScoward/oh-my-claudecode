@@ -375,10 +375,10 @@ function fetchUsageFromApi(accessToken: string): Promise<UsageApiResponse | null
  */
 function fetchUsageFromZai(): Promise<ZaiQuotaResponse | null> {
   return new Promise((resolve) => {
-    const baseUrl = process.env.ANTHROPIC_BASE_URL;
+    const baseUrl = 'https://api.anthropic.com';
     const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
 
-    if (!baseUrl || !authToken) {
+    if (!authToken) {
       resolve(null);
       return;
     }
@@ -583,7 +583,7 @@ export function parseZaiResponse(response: ZaiQuotaResponse): RateLimits | null 
  * - API call failed
  */
 export async function getUsage(): Promise<RateLimits | null> {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL;
+  const baseUrl = 'https://api.anthropic.com';
   const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const isZai = baseUrl != null && isZaiHost(baseUrl);
   const currentSource: 'anthropic' | 'zai' = isZai && authToken ? 'zai' : 'anthropic';

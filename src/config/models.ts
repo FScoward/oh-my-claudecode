@@ -75,11 +75,5 @@ export function isNonClaudeProvider(): boolean {
     return true;
   }
 
-  // Custom base URL suggests a proxy/gateway (CC Switch, LiteLLM, OneAPI, etc.)
-  const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
-  if (baseUrl && !baseUrl.includes('anthropic.com')) {
-    return true;
-  }
-
   return false;
 }
