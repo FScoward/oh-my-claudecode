@@ -18,6 +18,7 @@ import {
   HookInput,
   HookType,
 } from '../bridge.js';
+import { flushPendingWrites } from '../subagent-tracker/index.js';
 
 // ============================================================================
 // Hook Routing Tests
@@ -766,6 +767,101 @@ describe('processHook - Routing Matrix', () => {
       } finally {
         rmSync(tempDir, { recursive: true, force: true });
       }
+    });
+
+    it('setup-maintenance: hook type routing overrides conflicting trigger input', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-858-setup-maint-'));
+      try {
+        const rawInput = {
+          session_id: 'test-session-858',
+          cwd: tempDir,
+          transcript_path: join(tempDir, 'transcript.jsonl'),
+          permission_mode: 'default',
+          hook_event_name: 'Setup',
+          trigger: 'init',
+        } as unknown as HookInput;
+
+        const result = await processHook('setup-maintenance', rawInput);
+        expect(result.continue).toBe(true);
+        const out = result as unknown as Record<string, unknown>;
+        const specific = out.hookSpecificOutput as Record<string, unknown>;
+        expect(specific.hookEventName).toBe('Setup');
+        const context = String(specific.additionalContext ?? '');
+        expect(context).toContain('OMC maintenance completed:');
+        expect(context).not.toContain('OMC initialized:');
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('subagent start/stop: normalized optional fields survive routing lifecycle', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-858-subagent-'));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const startInput = {
+          session_id: 'test-session-858-subagent',
+          cwd: tempDir,
+          agent_id: 'agent-858',
+          agent_type: 'executor',
+          prompt: 'Investigate normalization edge regression in bridge routing',
+          model: 'gpt-5.3-codex-spark',
+        } as unknown as HookInput;
+
+        const start = await processHook('subagent-start', startInput);
+        expect(start.continue).toBe(true);
+
+        const stopInput = {
+          sessionId: 'test-session-858-subagent',
+          directory: tempDir,
+          agent_id: 'agent-858',
+          agent_type: 'executor',
+          output: 'routing complete with normalized fields',
+          success: false,
+        } as unknown as HookInput;
+
+        const stop = await processHook('subagent-stop', stopInput);
+        expect(stop.continue).toBe(true);
+
+        flushPendingWrites();
+
+        const trackingPath = join(tempDir, '.omc', 'state', 'subagent-tracking.json');
+        expect(existsSync(trackingPath)).toBe(true);
+
+        const tracking = JSON.parse(readFileSync(trackingPath, 'utf-8')) as {
+          agents: Array<Record<string, unknown>>;
+          total_failed: number;
+          total_completed: number;
+        };
+
+        const agent = tracking.agents.find((a) => a.agent_id === 'agent-858');
+        expect(agent).toBeDefined();
+        expect(agent?.task_description).toBe('Investigate normalization edge regression in bridge routing');
+        expect(agent?.model).toBe('gpt-5.3-codex-spark');
+        expect(agent?.status).toBe('failed');
+        expect(String(agent?.output_summary ?? '')).toContain('routing complete with normalized fields');
+        expect(tracking.total_failed).toBeGreaterThanOrEqual(1);
+        expect(tracking.total_completed).toBe(0);
+      } finally {
+        flushPendingWrites();
+        errorSpy.mockRestore();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('permission-request: canonical hookEventName wins over conflicting raw hook_event_name', async () => {
+      const rawInput = {
+        session_id: 'test-session-858',
+        cwd: '/tmp/test-routing',
+        tool_name: 'Bash',
+        tool_input: { command: 'git status' },
+        hook_event_name: 'NotPermissionRequest',
+      } as unknown as HookInput;
+
+      const result = await processHook('permission-request', rawInput);
+      expect(result.continue).toBe(true);
+      const out = result as unknown as Record<string, unknown>;
+      const specific = out.hookSpecificOutput as Record<string, unknown>;
+      expect(specific.hookEventName).toBe('PermissionRequest');
     });
   });
 });

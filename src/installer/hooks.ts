@@ -25,21 +25,20 @@ import { getConfigDir } from '../utils/config-dir.js';
  * fall back to __dirname which is natively available in CJS.
  */
 function getPackageDir(): string {
-  try {
-    if (import.meta?.url) {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = dirname(__filename);
-      // From src/installer/ or dist/installer/, go up two levels to package root
-      return join(__dirname, "..", "..");
-    }
-  } catch {
-    // import.meta.url unavailable — fall through to CJS path
-  }
-  // CJS bundle path: from bridge/ go up 1 level to package root
+  // CJS bundle path (bridge/cli.cjs): from bridge/ go up 1 level to package root
   if (typeof __dirname !== "undefined") {
     return join(__dirname, "..");
   }
-  return process.cwd();
+  // ESM path (works in dev via ts/dist)
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    // From src/installer/ or dist/installer/, go up two levels to package root
+    return join(__dirname, "..", "..");
+  } catch {
+    // import.meta.url unavailable — last resort
+    return process.cwd();
+  }
 }
 
 /**

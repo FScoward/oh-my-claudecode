@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -234,5 +234,183 @@ describe('spawnWorkerForTask – prompt mode (Gemini & Codex)', () => {
     expect(task.owner).toBeNull();
 
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('returns empty and skips spawn when task is already in_progress (claim already taken)', async () => {
+    const taskPath = join(cwd, '.omc/state/team/test-team/tasks/1.json');
+    writeFileSync(taskPath, JSON.stringify({
+      id: '1',
+      subject: 'Test task',
+      description: 'Do something',
+      status: 'in_progress',
+      owner: 'worker-2',
+    }), 'utf-8');
+
+    const runtime = makeRuntime(cwd, 'codex');
+    const paneId = await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    expect(paneId).toBe('');
+    expect(tmuxCalls.args.some(args => args[0] === 'split-window')).toBe(false);
+    expect(tmuxCalls.args.some(args => args[0] === 'send-keys')).toBe(false);
+    expect(runtime.activeWorkers.size).toBe(0);
+
+    const task = JSON.parse(readFileSync(taskPath, 'utf-8')) as { status: string; owner: string | null };
+    expect(task.status).toBe('in_progress');
+    expect(task.owner).toBe('worker-2');
+  });
+});
+
+describe('spawnWorkerForTask – model passthrough from environment variables', () => {
+  let cwd: string;
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    tmuxCalls.args = [];
+    tmuxCalls.capturePaneText = '❯ ready\n';
+    delete process.env.OMC_SHELL_READY_TIMEOUT_MS;
+    // Clear model env vars before each test
+    delete process.env.OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL;
+    delete process.env.OMC_CODEX_DEFAULT_MODEL;
+    delete process.env.OMC_EXTERNAL_MODELS_DEFAULT_GEMINI_MODEL;
+    delete process.env.OMC_GEMINI_DEFAULT_MODEL;
+    cwd = mkdtempSync(join(tmpdir(), 'runtime-model-passthrough-'));
+    setupTaskDir(cwd);
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('codex worker passes model from OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL', async () => {
+    process.env.OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL = 'gpt-4o';
+    const runtime = makeRuntime(cwd, 'codex');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    // Should contain --model flag with the model value
+    expect(launchCmd).toContain("'--model'");
+    expect(launchCmd).toContain("'gpt-4o'");
+  });
+
+  it('codex worker falls back to OMC_CODEX_DEFAULT_MODEL', async () => {
+    process.env.OMC_CODEX_DEFAULT_MODEL = 'o3-mini';
+    const runtime = makeRuntime(cwd, 'codex');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    expect(launchCmd).toContain("'--model'");
+    expect(launchCmd).toContain("'o3-mini'");
+  });
+
+  it('codex worker prefers OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL over legacy fallback', async () => {
+    process.env.OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL = 'gpt-4o';
+    process.env.OMC_CODEX_DEFAULT_MODEL = 'o3-mini';
+    const runtime = makeRuntime(cwd, 'codex');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    expect(launchCmd).toContain("'--model'");
+    expect(launchCmd).toContain("'gpt-4o'");
+    expect(launchCmd).not.toContain("'o3-mini'");
+  });
+
+  it('gemini worker passes model from OMC_EXTERNAL_MODELS_DEFAULT_GEMINI_MODEL', async () => {
+    process.env.OMC_EXTERNAL_MODELS_DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+    const runtime = makeRuntime(cwd, 'gemini');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    expect(launchCmd).toContain("'--model'");
+    expect(launchCmd).toContain("'gemini-2.0-flash'");
+  });
+
+  it('gemini worker falls back to OMC_GEMINI_DEFAULT_MODEL', async () => {
+    process.env.OMC_GEMINI_DEFAULT_MODEL = 'gemini-1.5-pro';
+    const runtime = makeRuntime(cwd, 'gemini');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    expect(launchCmd).toContain("'--model'");
+    expect(launchCmd).toContain("'gemini-1.5-pro'");
+  });
+
+  it('gemini worker prefers OMC_EXTERNAL_MODELS_DEFAULT_GEMINI_MODEL over legacy fallback', async () => {
+    process.env.OMC_EXTERNAL_MODELS_DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+    process.env.OMC_GEMINI_DEFAULT_MODEL = 'gemini-1.5-pro';
+    const runtime = makeRuntime(cwd, 'gemini');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    expect(launchCmd).toContain("'--model'");
+    expect(launchCmd).toContain("'gemini-2.0-flash'");
+    expect(launchCmd).not.toContain("'gemini-1.5-pro'");
+  });
+
+  it('claude worker does not pass model flag (not supported)', async () => {
+    process.env.OMC_EXTERNAL_MODELS_DEFAULT_CODEX_MODEL = 'gpt-4o';
+    const runtime = makeRuntime(cwd, 'claude');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    // Claude worker should not have --model flag
+    expect(launchCmd).not.toContain("'--model'");
+  });
+
+  it('codex worker does not pass model flag when no env var is set', async () => {
+    const runtime = makeRuntime(cwd, 'codex');
+
+    await spawnWorkerForTask(runtime, 'worker-1', 0);
+
+    const launchCall = tmuxCalls.args.find(
+      args => args[0] === 'send-keys' && args.includes('-l')
+    );
+    expect(launchCall).toBeDefined();
+    const launchCmd = launchCall![launchCall!.length - 1];
+
+    // Should not have --model flag when no env var is set
+    expect(launchCmd).not.toContain("'--model'");
   });
 });

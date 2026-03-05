@@ -460,4 +460,42 @@ describe('watchdogCliWorkers dead-pane retry behavior', { timeout: 15000 }, () =
       warnSpy.mock.calls.some(([msg]: [unknown]) => String(msg).includes('dead pane — requeuing task'))
     ).toBe(false);
   });
+
+  it('does not requeue or increment retries when dead-pane worker no longer owns the task', async () => {
+    const teamName = 'dead-pane-owner-race-team';
+    const root = join(cwd, '.omc', 'state', 'team', teamName);
+    mkdirSync(join(root, 'tasks'), { recursive: true });
+    mkdirSync(join(root, 'workers', 'worker-1'), { recursive: true });
+
+    writeFileSync(join(root, 'tasks', '1.json'), JSON.stringify({
+      id: '1',
+      subject: 'Task 1',
+      description: 'Do work',
+      status: 'in_progress',
+      owner: 'worker-2',
+      assignedAt: new Date().toISOString(),
+    }), 'utf-8');
+
+    const runtime = makeRuntimeWithTask(cwd, teamName, '1');
+    const stop = watchdogCliWorkers(runtime, 20);
+    try {
+      await waitFor(() => runtime.activeWorkers.size === 0);
+    } finally {
+      await stopWatchdogAndSettle(stop);
+    }
+
+    const task = await readJsonFileWithRetry<{
+      status: string;
+      owner: string | null;
+    }>(join(root, 'tasks', '1.json'));
+    const failure = readTaskFailure(teamName, '1', { cwd });
+
+    expect(task.status).toBe('in_progress');
+    expect(task.owner).toBe('worker-2');
+    expect(failure).toBeNull();
+    expect(tmuxMocks.spawnWorkerInPane).not.toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some(([msg]: [unknown]) => String(msg).includes('dead pane — requeuing task'))
+    ).toBe(false);
+  });
 });

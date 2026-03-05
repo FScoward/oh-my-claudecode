@@ -1,3 +1,119 @@
+# oh-my-claudecode v4.6.7: Bundled Path Resolution & Daemon Startup Fixes
+
+## Release Notes
+
+Patch release focused on bundled CJS runtime stability and daemon startup correctness.
+
+### Bug Fixes
+
+- **Bundled package-dir resolution**: Hardened `getPackageDir()` logic in agent prompt loaders to correctly resolve package root in bundled CJS runtime while preserving source/dist behavior.
+  - Updated `src/agents/utils.ts`
+  - Updated `src/agents/prompt-helpers.ts`
+  - Fixes #1322 and #1324
+
+- **Wait daemon bootstrap module path**: Fixed daemon child-process import path resolution so bundled `bridge/cli.cjs` launches the correct dist module instead of recursively importing CLI entry.
+  - Updated `src/features/rate-limit-wait/daemon.ts`
+  - Added shared resolver `src/utils/daemon-module-path.ts`
+  - Added regression tests in `src/__tests__/daemon-module-path.test.ts`
+  - Fixes #1323
+
+- **Reply listener daemon bootstrap module path**: Applied the same bundled module path fix to reply listener daemon startup.
+  - Updated `src/notifications/reply-listener.ts`
+
+- **Regression coverage**:
+  - Added `src/__tests__/package-dir-resolution-regression.test.ts`
+  - Regenerated bridge/dist artifacts
+
+---
+
+# oh-my-claudecode v4.6.5: Remove jsonc-parser Dependency
+
+## Release Notes
+
+Removed external `jsonc-parser` dependency by implementing a lightweight JSONC parser internally.
+
+### Bug Fixes
+
+- **Bundle jsonc-parser**: Replaced external `jsonc-parser` dependency with a custom implementation.
+  - Created `src/utils/jsonc.ts` with `parseJsonc()` and `stripJsoncComments()` functions
+  - Updated `src/config/loader.ts` to use the internal parser
+  - Removed `jsonc-parser` from external dependencies in `build-runtime-cli.mjs`
+  - Fixes #1316: `runtime-cli.cjs` failing with "Cannot find module 'jsonc-parser'" in plugin marketplace installs
+
+---
+
+# oh-my-claudecode v4.6.4: ESM/CJS Path Resolution Hotfix
+
+## Release Notes
+
+Hotfix for `getPackageDir()` path resolution in bundled CJS builds. Fixes the `import.meta?.url` check that was incorrectly transformed by esbuild.
+
+### Bug Fixes
+
+- **CJS Bundle Path Resolution**: Fixed `getPackageDir()` functions in multiple files to properly detect CJS bundle context.
+  - Reordered checks to prioritize `__dirname` (available in CJS) over `import.meta.url` (ESM)
+  - Fixed files: `src/agents/prompt-helpers.ts`, `src/agents/utils.ts`, `src/installer/index.ts`, `src/installer/hooks.ts`
+  - Fixed `src/hooks/bridge.ts` `isMainModule()` check to handle both ESM and CJS contexts
+  - Resolves #1314: `omc update` failing with `TypeError [ERR_INVALID_ARG_TYPE]`
+
+---
+
+# oh-my-claudecode v4.6.3: CLI import.meta.url Fix
+
+## Release Notes
+
+Critical hotfix for CLI runtime error caused by `import.meta.url` being undefined in CJS bundle.
+
+### Bug Fixes
+
+- **CLI Runtime Fix**: Fixed `fileURLToPath` error by injecting `import.meta.url` polyfill in CJS build.
+  - Added banner injection in `scripts/build-cli.mjs` to define `importMetaUrl` before bundle
+  - Used esbuild `define` to replace `import.meta.url` with the polyfill
+  - Fixes `TypeError [ERR_INVALID_ARG_TYPE]: The "path" argument must be of type string` when running `omc` CLI
+
+---
+
+# oh-my-claudecode v4.6.2: CLI Shebang Hotfix
+
+## Release Notes
+
+Hotfix release to resolve duplicate shebang issue in published v4.6.1 package.
+
+### Bug Fixes
+
+- **CLI Shebang Fix** (#1309): Removed duplicate shebang from `bridge/cli.cjs` build output.
+
+---
+
+# oh-my-claudecode v4.6.1: Security Hardening, Team Reliability & HUD Improvements
+
+## Release Notes
+
+This patch release delivers critical security fixes for SSRF and shell injection vulnerabilities, alongside team runtime stability improvements and HUD configurability enhancements. Version bumped from 4.6.0 to 4.6.1.
+
+### New Features
+
+- **Configurable Git Info Position** (#047d5638): HUD now supports `gitInfoPosition` config to display git information above or below the main panel.
+- **Harsh-Critic Opt-in** (#9f52cd1a): The harsh-critic agent is now opt-in via `features.harshCritic` configuration flag.
+
+### Security Fixes
+
+- **SSRF Protection** (#1304): Added SSRF protection for `ANTHROPIC_BASE_URL` to prevent unauthorized outbound requests.
+- **Shell Injection Prevention** (#9675babb): Validated model name and provider in `spawnCliProcess` to prevent shell injection attacks.
+- **Config Injection Fixes** (#0b2e0542): Hardened against shell and configuration injection vulnerabilities.
+
+### Bug Fixes
+
+- **Persistent Mode Cancel Signal** (#1306): Fixed cancel signal check before blocking stop hook.
+- **HUD Async I/O** (#1305): Converted file I/O to async to prevent event loop blocking.
+- **CLI Model Passthrough**: Fixed CLI worker model parameter passing in `omc-teams`.
+- **CLI Bundle** (#9d713bc4): Bundled CLI entry point to eliminate node_modules dependency.
+- **Memory Leak Prevention** (#bfd726cb): Added max-size caps to unbounded Maps and caches.
+- **Benchmark Hardening** (#469f914a): Hardened benchmark parser and calibrated keyword matching.
+- **Benchmark Retry Logic** (#3d6f56f7): Added retry with exponential backoff for API overload errors.
+
+---
+
 # oh-my-claudecode v4.6.0: Team Runtime Hardening, Security Fixes & PRD-Driven Ralph
 
 ## Release Notes

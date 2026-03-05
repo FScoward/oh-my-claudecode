@@ -19,8 +19,7 @@ await esbuild.build({
     'child_process', 'assert', 'module', 'net', 'tls',
     'dns', 'readline', 'tty', 'worker_threads',
     '@ast-grep/napi', 'better-sqlite3',
-    // Avoid bundling jsonc-parser's UMD internals into runtime-cli output,
-    // which can emit unresolved ./impl/* requires in CJS bundle.
+    // jsonc-parser has dynamic requires that don't bundle well; we use a custom parser
     'jsonc-parser',
   ],
 });

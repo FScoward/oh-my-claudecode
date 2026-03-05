@@ -10,6 +10,7 @@ export const DEFAULT_HUD_CONFIG = {
         cwdFormat: 'relative',
         gitRepo: false, // Disabled by default for backward compatibility
         gitBranch: false, // Disabled by default for backward compatibility
+        gitInfoPosition: 'above', // Git info above main HUD line (backward compatible)
         model: false, // Disabled by default for backward compatibility
         modelFormat: 'short', // Short names by default for backward compatibility
         omcLabel: true,
@@ -29,6 +30,7 @@ export const DEFAULT_HUD_CONFIG = {
         thinking: true,
         thinkingFormat: 'text', // Text format for backward compatibility
         apiKeySource: false, // Disabled by default
+        profile: true, // Show profile name when CLAUDE_CONFIG_DIR is set
         promptTime: true, // Show last prompt time by default
         sessionHealth: true,
         useBars: false, // Disabled by default for backwards compatibility
@@ -54,6 +56,7 @@ export const PRESET_CONFIGS = {
         cwdFormat: 'folder',
         gitRepo: false,
         gitBranch: false,
+        gitInfoPosition: 'above',
         model: false,
         modelFormat: 'short',
         omcLabel: true,
@@ -73,6 +76,7 @@ export const PRESET_CONFIGS = {
         thinking: false,
         thinkingFormat: 'text',
         apiKeySource: false,
+        profile: true,
         promptTime: false,
         sessionHealth: false,
         useBars: false,
@@ -85,6 +89,7 @@ export const PRESET_CONFIGS = {
         cwdFormat: 'relative',
         gitRepo: false,
         gitBranch: true,
+        gitInfoPosition: 'above',
         model: false,
         modelFormat: 'short',
         omcLabel: true,
@@ -104,6 +109,7 @@ export const PRESET_CONFIGS = {
         thinking: true,
         thinkingFormat: 'text',
         apiKeySource: false,
+        profile: true,
         promptTime: true,
         sessionHealth: true,
         useBars: true,
@@ -116,6 +122,7 @@ export const PRESET_CONFIGS = {
         cwdFormat: 'relative',
         gitRepo: true,
         gitBranch: true,
+        gitInfoPosition: 'above',
         model: false,
         modelFormat: 'short',
         omcLabel: true,
@@ -135,6 +142,7 @@ export const PRESET_CONFIGS = {
         thinking: true,
         thinkingFormat: 'text',
         apiKeySource: true,
+        profile: true,
         promptTime: true,
         sessionHealth: true,
         useBars: true,
@@ -147,6 +155,7 @@ export const PRESET_CONFIGS = {
         cwdFormat: 'relative',
         gitRepo: false,
         gitBranch: true,
+        gitInfoPosition: 'above',
         model: false,
         modelFormat: 'short',
         omcLabel: true,
@@ -166,6 +175,7 @@ export const PRESET_CONFIGS = {
         thinking: true,
         thinkingFormat: 'text',
         apiKeySource: false,
+        profile: true,
         promptTime: true,
         sessionHealth: true,
         useBars: false,
@@ -178,6 +188,7 @@ export const PRESET_CONFIGS = {
         cwdFormat: 'relative',
         gitRepo: true,
         gitBranch: true,
+        gitInfoPosition: 'above',
         model: false,
         modelFormat: 'short',
         omcLabel: true,
@@ -197,6 +208,7 @@ export const PRESET_CONFIGS = {
         thinking: true,
         thinkingFormat: 'text',
         apiKeySource: true,
+        profile: true,
         promptTime: true,
         sessionHealth: true,
         useBars: true,

@@ -33,8 +33,9 @@ import type {
 import { getRuntimePackageVersion } from "../lib/version.js";
 import { compareVersions } from "../features/auto-update.js";
 import { resolveToWorktreeRoot, resolveTranscriptPath } from "../lib/worktree-paths.js";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { join } from "path";
+import { writeFileSync, mkdirSync } from "fs";
+import { access, readFile } from "fs/promises";
+import { join, basename } from "path";
 import { homedir } from "os";
 import { getOmcRoot } from "../lib/worktree-paths.js";
 
@@ -140,7 +141,7 @@ async function main(watchMode = false): Promise<void> {
     }
 
     // Fetch rate limits from OAuth API (if available)
-    const rateLimits =
+    const rateLimitsResult =
       config.elements.rateLimits !== false ? await getUsage() : null;
 
     // Fetch custom rate limit buckets (if configured)
@@ -158,13 +159,14 @@ async function main(watchMode = false): Promise<void> {
     } catch {
       // Ignore version detection errors
     }
+    // Async file read to avoid blocking event loop (Issue #1273)
     try {
       const updateCacheFile = join(homedir(), '.omc', 'update-check.json');
-      if (existsSync(updateCacheFile)) {
-        const cached = JSON.parse(readFileSync(updateCacheFile, 'utf-8'));
-        if (cached?.latestVersion && omcVersion && compareVersions(omcVersion, cached.latestVersion) < 0) {
-          updateAvailable = cached.latestVersion;
-        }
+      await access(updateCacheFile);
+      const content = await readFile(updateCacheFile, 'utf-8');
+      const cached = JSON.parse(content);
+      if (cached?.latestVersion && omcVersion && compareVersions(omcVersion, cached.latestVersion) < 0) {
+        updateAvailable = cached.latestVersion;
       }
     } catch {
       // Ignore update cache read errors
@@ -183,7 +185,7 @@ async function main(watchMode = false): Promise<void> {
       backgroundTasks: getRunningTasks(hudState),
       cwd,
       lastSkill: transcriptData.lastActivatedSkill || null,
-      rateLimits,
+      rateLimitsResult,
       customBuckets,
       pendingPermission: transcriptData.pendingPermission || null,
       thinkingState: transcriptData.thinkingState || null,
@@ -201,6 +203,9 @@ async function main(watchMode = false): Promise<void> {
         : null,
       apiKeySource: config.elements.apiKeySource
         ? detectApiKeySource(cwd)
+        : null,
+      profileName: process.env.CLAUDE_CONFIG_DIR
+        ? basename(process.env.CLAUDE_CONFIG_DIR).replace(/^\./, '')
         : null,
     };
 
@@ -224,9 +229,7 @@ async function main(watchMode = false): Promise<void> {
     ) {
       try {
         const omcStateDir = join(getOmcRoot(cwd), 'state');
-        if (!existsSync(omcStateDir)) {
-          mkdirSync(omcStateDir, { recursive: true });
-        }
+        mkdirSync(omcStateDir, { recursive: true });
         const triggerFile = join(omcStateDir, 'compact-requested.json');
         writeFileSync(
           triggerFile,
