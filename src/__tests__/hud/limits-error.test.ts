@@ -26,4 +26,21 @@ describe('renderRateLimitsError', () => {
     // Verify yellow ANSI color code is present
     expect(result).toContain('\x1b[33m');
   });
+
+  it('returns dimmed [API 429] for rate_limited errors', () => {
+    const result = renderRateLimitsError({ rateLimits: null, error: 'rate_limited' });
+    expect(result).not.toBeNull();
+    expect(result).toContain('[API 429]');
+    // Verify dim ANSI code is present (not yellow)
+    expect(result).toContain('\x1b[2m');
+    expect(result).not.toContain('\x1b[33m');
+  });
+
+  it('suppresses [API 429] when stale rate limit data is available', () => {
+    const result = renderRateLimitsError({
+      rateLimits: { fiveHourPercent: 50, weeklyPercent: 30 },
+      error: 'rate_limited',
+    });
+    expect(result).toBeNull();
+  });
 });

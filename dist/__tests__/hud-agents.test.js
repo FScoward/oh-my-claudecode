@@ -207,12 +207,12 @@ describe('Agents Element', () => {
             { type: 'architect', model: 'opus', expected: 'A' },
             { type: 'explore', model: 'haiku', expected: 'e' },
             { type: 'executor', model: 'sonnet', expected: 'x' },
-            { type: 'deep-executor', model: 'opus', expected: 'X' },
+            { type: 'deep-executor', model: 'opus', expected: 'D' }, // deprecated: falls back to first char
             { type: 'debugger', model: 'sonnet', expected: 'g' },
             { type: 'verifier', model: 'sonnet', expected: 'v' },
             // Review Lane
             { type: 'style-reviewer', model: 'haiku', expected: 'y' },
-            { type: 'quality-reviewer', model: 'sonnet', expected: 'qr' },
+            { type: 'quality-reviewer', model: 'sonnet', expected: 'q' }, // deprecated: falls back to first char
             { type: 'api-reviewer', model: 'sonnet', expected: 'i' },
             { type: 'security-reviewer', model: 'sonnet', expected: 'k' },
             { type: 'performance-reviewer', model: 'sonnet', expected: 'o' },
@@ -220,7 +220,7 @@ describe('Agents Element', () => {
             // Domain Specialists
             { type: 'dependency-expert', model: 'sonnet', expected: 'l' },
             { type: 'test-engineer', model: 'sonnet', expected: 't' },
-            { type: 'build-fixer', model: 'sonnet', expected: 'b' },
+            { type: 'build-fixer', model: 'sonnet', expected: 'b' }, // deprecated: falls back to first char
             { type: 'designer', model: 'sonnet', expected: 'd' },
             { type: 'writer', model: 'haiku', expected: 'w' },
             { type: 'qa-tester', model: 'sonnet', expected: 'q' },
@@ -238,7 +238,7 @@ describe('Agents Element', () => {
             { type: 'planner', model: 'opus', expected: 'P' },
             { type: 'vision', model: 'sonnet', expected: 'v' },
             // Multi-char codes with opus tier (first char uppercase)
-            { type: 'quality-reviewer', model: 'opus', expected: 'Qr' },
+            { type: 'quality-reviewer', model: 'opus', expected: 'Q' }, // deprecated: falls back to first char uppercase
             { type: 'quality-strategist', model: 'opus', expected: 'Qs' },
             { type: 'product-manager', model: 'opus', expected: 'Pm' },
             { type: 'information-architect', model: 'opus', expected: 'Ia' },
@@ -319,25 +319,27 @@ describe('Agents Element', () => {
             expect(result.detailLines[0]).toContain('analyzing code');
         });
         it('should render multiple agents with correct tree characters', () => {
+            const now = Date.now();
             const agents = [
                 {
-                    ...createAgent('oh-my-claudecode:architect', 'opus'),
+                    ...createAgent('oh-my-claudecode:architect', 'opus', new Date(now - 1000)),
                     description: 'analyzing code',
                 },
                 {
-                    ...createAgent('oh-my-claudecode:explore', 'haiku'),
+                    ...createAgent('oh-my-claudecode:explore', 'haiku', new Date(now)),
                     description: 'searching files',
                 },
             ];
             const result = renderAgentsMultiLine(agents);
             expect(result.headerPart).toContain('2');
             expect(result.detailLines).toHaveLength(2);
-            // First agent uses ├─
+            // Freshest-first ordering: explore first, architect last
             expect(result.detailLines[0]).toContain('├─');
-            expect(result.detailLines[0]).toContain('A');
-            // Last agent uses └─
+            expect(result.detailLines[0]).toContain('e');
+            expect(result.detailLines[0]).toContain('searching files');
             expect(result.detailLines[1]).toContain('└─');
-            expect(result.detailLines[1]).toContain('e');
+            expect(result.detailLines[1]).toContain('A');
+            expect(result.detailLines[1]).toContain('analyzing code');
         });
         it('should limit to maxLines and show overflow indicator', () => {
             const agents = [

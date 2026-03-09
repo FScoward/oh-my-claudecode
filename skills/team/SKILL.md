@@ -21,7 +21,7 @@ The `swarm` compatibility alias was removed in #1131.
 ### Parameters
 
 - **N** - Number of teammate agents (1-20). Optional; defaults to auto-sizing based on task decomposition.
-- **agent-type** - OMC agent to spawn for the `team-exec` stage (e.g., executor, build-fixer, designer, codex, gemini). Optional; defaults to stage-aware routing. Use `codex` to spawn Codex CLI workers or `gemini` for Gemini CLI workers (requires respective CLIs installed). See Stage Agent Routing below.
+- **agent-type** - OMC agent to spawn for the `team-exec` stage (e.g., executor, debugger, designer, codex, gemini). Optional; defaults to stage-aware routing. Use `codex` to spawn Codex CLI workers or `gemini` for Gemini CLI workers (requires respective CLIs installed). See Stage Agent Routing below.
 - **task** - High-level task to decompose and distribute among teammates
 - **ralph** - Optional modifier. When present, wraps the team pipeline in Ralph's persistence loop (retry on failure, architect verification before completion). See Team + Ralph Composition below.
 
@@ -29,7 +29,7 @@ The `swarm` compatibility alias was removed in #1131.
 
 ```bash
 /team 5:executor "fix all TypeScript errors across the project"
-/team 3:build-fixer "fix build errors in src/"
+/team 3:debugger "fix build errors in src/"
 /team 4:designer "implement responsive layouts for all page components"
 /team "refactor the auth module with security review"
 /team ralph "build a complete REST API for user management"
@@ -102,9 +102,9 @@ Each pipeline stage uses **specialized agents** -- not just executors. The lead 
 |-------|----------------|-----------------|-------------------|
 | **team-plan** | `explore` (haiku), `planner` (opus) | `analyst` (opus), `architect` (opus) | Use `analyst` for unclear requirements. Use `architect` for systems with complex boundaries. |
 | **team-prd** | `analyst` (opus) | `critic` (opus) | Use `critic` to challenge scope. |
-| **team-exec** | `executor` (sonnet) | `deep-executor` (opus), `build-fixer` (sonnet), `designer` (sonnet), `writer` (haiku), `test-engineer` (sonnet) | Match agent to subtask type. Use `deep-executor` for complex autonomous work, `designer` for UI, `build-fixer` for compilation issues, `writer` for docs, `test-engineer` for test creation. |
-| **team-verify** | `verifier` (sonnet) | `test-engineer` (sonnet), `security-reviewer` (sonnet), `code-reviewer` (opus), `quality-reviewer` (sonnet) | Always run `verifier`. Add `security-reviewer` for auth/crypto changes. Add `code-reviewer` for >20 files or architectural changes. Add `quality-reviewer` (model=haiku) for style/formatting checks. |
-| **team-fix** | `executor` (sonnet) | `build-fixer` (sonnet), `debugger` (sonnet), `deep-executor` (opus) | Use `build-fixer` for type/build errors. Use `debugger` for regression isolation. Use `deep-executor` for complex multi-file fixes. |
+| **team-exec** | `executor` (sonnet) | `executor` (opus), `debugger` (sonnet), `designer` (sonnet), `writer` (haiku), `test-engineer` (sonnet) | Match agent to subtask type. Use `executor` (model=opus) for complex autonomous work, `designer` for UI, `debugger` for compilation issues, `writer` for docs, `test-engineer` for test creation. |
+| **team-verify** | `verifier` (sonnet) | `test-engineer` (sonnet), `security-reviewer` (sonnet), `code-reviewer` (opus) | Always run `verifier`. Add `security-reviewer` for auth/crypto changes. Add `code-reviewer` for >20 files or architectural changes. `code-reviewer` also covers style/formatting checks. |
+| **team-fix** | `executor` (sonnet) | `debugger` (sonnet), `executor` (opus) | Use `debugger` for type/build errors and regression isolation. Use `executor` (model=opus) for complex multi-file fixes. |
 
 **Routing rules:**
 
@@ -134,7 +134,7 @@ Each pipeline stage uses **specialized agents** -- not just executors. The lead 
   - Exit (fail): fix tasks are generated and control moves to `team-fix`.
 - **team-fix**
   - Entry: verification found defects/regressions/incomplete criteria.
-  - Agents: `executor`/`build-fixer`/`debugger` depending on defect type.
+  - Agents: `executor`/`debugger` depending on defect type.
   - Exit: fixes are complete and flow returns to `team-exec` then `team-verify`.
 
 ### Verify/Fix Loop and Stop Conditions
@@ -439,6 +439,7 @@ When spawning teammates, include this preamble in the prompt to establish the wo
 ```
 You are a TEAM WORKER in team "{team_name}". Your name is "{worker_name}".
 You report to the team lead ("team-lead").
+You are not the leader and must not perform leader orchestration actions.
 
 == WORK PROTOCOL ==
 
@@ -474,10 +475,22 @@ Do NOT mark the task as completed. Leave it in_progress so the lead can reassign
 
 == RULES ==
 - NEVER spawn sub-agents or use the Task tool
+- NEVER run tmux pane/session orchestration commands (for example `tmux split-window`, `tmux new-session`)
+- NEVER run team spawning/orchestration skills or commands (for example `$team`, `$ultrawork`, `$autopilot`, `$ralph`, `omc team ...`, `omx team ...`)
 - ALWAYS use absolute file paths
 - ALWAYS report progress via SendMessage to "team-lead"
 - Use SendMessage with type "message" only -- never "broadcast"
 ```
+
+### Agent-Type Prompt Injection (Worker-Specific Addendum)
+
+When composing teammate prompts, append a short addendum based on worker type:
+
+- `claude_worker`: Emphasize strict TaskList/TaskUpdate/SendMessage loop and no orchestration commands.
+- `codex_worker`: Emphasize CLI API lifecycle (`omc team api ... --json`) and explicit failure ACKs with stderr.
+- `gemini_worker`: Emphasize bounded file ownership and milestone ACKs after each completed sub-step.
+
+This addendum must preserve the core rule: **worker = executor only, never leader/orchestrator**.
 
 ## Communication Patterns
 
@@ -833,6 +846,27 @@ When team is linked to ralph, cancellation follows dependency order:
 - **Force cancel (`--force`):** Clears both `team` and `ralph` state unconditionally via `state_clear`.
 
 If teammates are unresponsive, `TeamDelete` may fail. In that case, the cancel skill should wait briefly and retry, or inform the user to manually clean up `~/.claude/teams/{team_name}/` and `~/.claude/tasks/{team_name}/`.
+
+## Runtime V2 (Event-Driven)
+
+When `OMC_RUNTIME_V2=1` is set, the team runtime uses an event-driven architecture instead of the legacy done.json polling watchdog:
+
+- **No done.json**: Task completion is detected via CLI API lifecycle transitions (claim-task, transition-task-status)
+- **Snapshot-based monitoring**: Each poll cycle takes a point-in-time snapshot of tasks and workers, computes deltas, and emits events
+- **Event log**: All team events are appended to `.omc/state/team/{teamName}/events.jsonl`
+- **Worker status files**: Workers write status to `.omc/state/team/{teamName}/workers/{name}/status.json`
+- **Preserved**: Sentinel gate (blocks premature completion), circuit breaker (dead worker detection), failure sidecars
+
+The v2 runtime is feature-flagged and can be enabled per-session. The legacy v1 runtime remains the default.
+
+## Dynamic Scaling
+
+When `OMC_TEAM_SCALING_ENABLED=1` is set, the team supports mid-session scaling:
+
+- **scale_up**: Add workers to a running team (respects max_workers limit)
+- **scale_down**: Remove idle workers with graceful drain (workers finish current task before removal)
+- File-based scaling lock prevents concurrent scale operations
+- Monotonic worker index counter ensures unique worker names across scale events
 
 ## Configuration
 

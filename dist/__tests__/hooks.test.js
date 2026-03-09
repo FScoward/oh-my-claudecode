@@ -495,9 +495,10 @@ describe('Team staged workflow integration', () => {
             directory: testDir,
         });
         expect(result.continue).toBe(false);
-        expect(result.message).toContain('[TEAM MODE CONTINUATION]');
+        // checkTeamPipeline() in persistent-mode now handles team enforcement
+        expect(result.message).toContain('team-pipeline-continuation');
         expect(result.message).toContain('team-verify');
-        expect(result.message).toContain('Continue verification');
+        expect(result.message).toContain('Continue working');
     });
     it('enforces fix stage continuation while active and non-terminal', async () => {
         writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'), JSON.stringify({
@@ -511,9 +512,26 @@ describe('Team staged workflow integration', () => {
             directory: testDir,
         });
         expect(result.continue).toBe(false);
-        expect(result.message).toContain('[TEAM MODE CONTINUATION]');
+        // checkTeamPipeline() in persistent-mode now handles team enforcement
+        expect(result.message).toContain('team-pipeline-continuation');
         expect(result.message).toContain('team-fix');
-        expect(result.message).toContain('fix loop');
+        expect(result.message).toContain('Continue working');
+    });
+    it('skips Team stage continuation on authentication stop reasons', async () => {
+        writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'), JSON.stringify({
+            active: true,
+            session_id: sessionId,
+            stage: 'team-verify',
+            team_name: 'delivery-team'
+        }));
+        const result = await processHook('persistent-mode', {
+            sessionId,
+            directory: testDir,
+            stopReason: 'oauth_expired',
+        });
+        expect(result.continue).toBe(true);
+        expect(result.message || '').not.toContain('[TEAM MODE CONTINUATION]');
+        expect(result.message || '').toContain('AUTHENTICATION ERROR');
     });
     it('allows terminal cleanup when Team stage is cancelled', async () => {
         writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'), JSON.stringify({
@@ -523,6 +541,60 @@ describe('Team staged workflow integration', () => {
             status: 'cancelled',
             team_name: 'delivery-team'
         }));
+        const result = await processHook('persistent-mode', {
+            sessionId,
+            directory: testDir,
+        });
+        expect(result.continue).toBe(true);
+        expect(result.message || '').not.toContain('[TEAM MODE CONTINUATION]');
+    });
+    it('fails open when Team stage is missing', async () => {
+        writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'), JSON.stringify({
+            active: true,
+            session_id: sessionId,
+            team_name: 'delivery-team'
+        }));
+        const result = await processHook('persistent-mode', {
+            sessionId,
+            directory: testDir,
+        });
+        expect(result.continue).toBe(true);
+        expect(result.message || '').not.toContain('[TEAM MODE CONTINUATION]');
+    });
+    it('fails open when Team stage is unknown or malformed', async () => {
+        writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'), JSON.stringify({
+            active: true,
+            session_id: sessionId,
+            stage: { bad: true },
+            team_name: 'delivery-team'
+        }));
+        const malformedResult = await processHook('persistent-mode', {
+            sessionId,
+            directory: testDir,
+        });
+        expect(malformedResult.continue).toBe(true);
+        expect(malformedResult.message || '').not.toContain('[TEAM MODE CONTINUATION]');
+        writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'), JSON.stringify({
+            active: true,
+            session_id: sessionId,
+            stage: 'team-unknown',
+            team_name: 'delivery-team'
+        }));
+        const unknownResult = await processHook('persistent-mode', {
+            sessionId,
+            directory: testDir,
+        });
+        expect(unknownResult.continue).toBe(true);
+        expect(unknownResult.message || '').not.toContain('[TEAM MODE CONTINUATION]');
+    });
+    it('trips Team continuation circuit breaker after max stop reinforcements', async () => {
+        writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'), JSON.stringify({
+            active: true,
+            session_id: sessionId,
+            stage: 'team-exec',
+            team_name: 'delivery-team'
+        }));
+        writeFileSync(join(testDir, '.omc', 'state', 'sessions', sessionId, 'team-pipeline-stop-breaker.json'), JSON.stringify({ count: 20, updated_at: new Date().toISOString() }, null, 2));
         const result = await processHook('persistent-mode', {
             sessionId,
             directory: testDir,
@@ -1235,6 +1307,43 @@ describe('Mutual Exclusion - UltraQA and Ralph', () => {
             expect(cleared).toBe(true);
             expect(isUltraQAActive(testDir)).toBe(false);
         });
+    });
+});
+// ===========================================================================
+// Skill-Active State Clearing on Skill Completion
+// ===========================================================================
+describe('Skill-active state lifecycle', () => {
+    let testDir;
+    beforeEach(() => {
+        testDir = join(tmpdir(), `hooks-skill-clear-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        mkdirSync(testDir, { recursive: true });
+        execSync('git init', { cwd: testDir, stdio: 'pipe' });
+    });
+    afterEach(() => {
+        rmSync(testDir, { recursive: true, force: true });
+    });
+    it('clearSkillActiveState removes active skill state', async () => {
+        const { writeSkillActiveState, readSkillActiveState, clearSkillActiveState } = await import('../hooks/skill-state/index.js');
+        const sessionId = 'test-skill-clear-session';
+        writeSkillActiveState(testDir, 'code-review', sessionId);
+        // Verify state exists
+        const stateBefore = readSkillActiveState(testDir, sessionId);
+        expect(stateBefore).not.toBeNull();
+        expect(stateBefore?.active).toBe(true);
+        expect(stateBefore?.skill_name).toBe('code-review');
+        // Clear the state (as bridge.ts processPostToolUse does on Skill completion)
+        const cleared = clearSkillActiveState(testDir, sessionId);
+        expect(cleared).toBe(true);
+        // Verify state is cleared
+        const stateAfter = readSkillActiveState(testDir, sessionId);
+        expect(stateAfter).toBeNull();
+    });
+    it('clearSkillActiveState is safe to call when no state exists', async () => {
+        const { clearSkillActiveState, readSkillActiveState } = await import('../hooks/skill-state/index.js');
+        // Should not throw even when no state file exists
+        clearSkillActiveState(testDir, 'no-such-session');
+        const state = readSkillActiveState(testDir, 'no-such-session');
+        expect(state).toBeNull();
     });
 });
 //# sourceMappingURL=hooks.test.js.map

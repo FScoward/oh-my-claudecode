@@ -6,15 +6,10 @@ describe('Builtin Skills', () => {
         clearSkillsCache();
     });
     describe('createBuiltinSkills()', () => {
-        it('should return correct number of skills (36)', () => {
+        it('should return correct number of skills (33 including aliases)', () => {
             const skills = createBuiltinSkills();
-            // 36 skills: analyze, autopilot, build-fix, cancel, ccg, code-review, configure-notifications,
-            // configure-openclaw, deep-interview, deepinit, omc-doctor, external-context, omc-help, hud,
-            // learn-about-omc, learner, mcp-setup, note, omc-setup, omc-teams, omc-plan,
-            // project-session-manager, psm, ralph, ralph-init, ralplan, release, sciomc,
-            // omc-security-review, skill, tdd, team, trace, ultraqa, ultrawork, writer-memory
-            // (swarm alias removed in #1131, pipeline/ultrapilot/omc-review removed in cleanup)
-            expect(skills).toHaveLength(36);
+            // 33 entries: 32 canonical skills + 1 deprecated alias (psm)
+            expect(skills).toHaveLength(33);
         });
         it('should return an array of BuiltinSkill objects', () => {
             const skills = createBuiltinSkills();
@@ -57,12 +52,11 @@ describe('Builtin Skills', () => {
         it('should have valid skill names', () => {
             const skills = createBuiltinSkills();
             const expectedSkills = [
-                'analyze',
+                'ask-codex',
+                'ask-gemini',
                 'autopilot',
-                'build-fix',
                 'cancel',
                 'ccg',
-                'code-review',
                 'configure-notifications',
                 'configure-openclaw',
                 'deep-interview',
@@ -85,9 +79,7 @@ describe('Builtin Skills', () => {
                 'ralplan',
                 'release',
                 'sciomc',
-                'omc-security-review',
                 'skill',
-                'tdd',
                 'team',
                 'trace',
                 'ultraqa',
@@ -129,14 +121,15 @@ describe('Builtin Skills', () => {
     describe('listBuiltinSkillNames()', () => {
         it('should return canonical skill names by default', () => {
             const names = listBuiltinSkillNames();
-            expect(names).toHaveLength(35);
+            expect(names).toHaveLength(32);
+            expect(names).toContain('ask-codex');
+            expect(names).toContain('ask-gemini');
             expect(names).toContain('autopilot');
             expect(names).toContain('cancel');
             expect(names).toContain('ccg');
             expect(names).toContain('configure-notifications');
             expect(names).toContain('ralph');
             expect(names).toContain('ultrawork');
-            expect(names).toContain('analyze');
             expect(names).toContain('omc-plan');
             expect(names).toContain('deepinit');
             expect(names).toContain('release');
@@ -157,6 +150,7 @@ describe('Builtin Skills', () => {
         it('should include aliases when explicitly requested', () => {
             const names = listBuiltinSkillNames({ includeAliases: true });
             // swarm alias removed in #1131, psm still exists
+            expect(names).toHaveLength(33);
             expect(names).not.toContain('swarm');
             expect(names).toContain('psm');
         });
@@ -166,7 +160,7 @@ describe('Builtin Skills', () => {
             const skills = createBuiltinSkills();
             const bareNativeNames = [
                 'compact', 'clear', 'help', 'config', 'plan',
-                'review', 'doctor', 'init', 'memory', 'security-review',
+                'review', 'doctor', 'init', 'memory',
             ];
             const skillNames = skills.map((s) => s.name.toLowerCase());
             for (const native of bareNativeNames) {
