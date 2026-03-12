@@ -8,10 +8,10 @@ Complete reference for oh-my-claudecode. For quick start, see the main [README.m
 
 - [Installation](#installation)
 - [Configuration](#configuration)
-- [CLI Commands: ask/team](#cli-commands-askteam)
+- [CLI Commands: ask/team/session](#cli-commands-askteamsession)
 - [Legacy MCP Team Runtime Tools (Deprecated)](#legacy-mcp-team-runtime-tools-deprecated)
 - [Agents (28 Total)](#agents-28-total)
-- [Skills (33 Total)](#skills-33-total)
+- [Skills (34 Total)](#skills-34-total)
 - [Slash Commands](#slash-commands)
 - [Hooks System](#hooks-system)
 - [Magic Keywords](#magic-keywords)
@@ -190,7 +190,7 @@ Tag behavior:
 
 ---
 
-## CLI Commands: ask/team
+## CLI Commands: ask/team/session
 
 ### `omc ask`
 
@@ -217,6 +217,19 @@ omc team api claim-task --input '{"team_name":"auth-review","task_id":"1","worke
 ```
 
 Supported entrypoints: direct start (`omc team [N:agent] "<task>"`), `status`, `shutdown`, and `api`.
+
+### `omc session search`
+
+```bash
+omc session search "team leader stale"
+omc session search notify-hook --since 7d
+omc session search provider-routing --project all --json
+```
+
+- Defaults to the current project/worktree scope
+- Use `--project all` to search across all local Claude project transcripts
+- Supports `--limit`, `--session`, `--since`, `--context`, `--case-sensitive`, and `--json`
+- MCP/tool surface: `session_search` returns structured JSON for agents and automations
 
 ---
 
@@ -299,7 +312,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | UI component                 | `designer`                    | sonnet |
 | Complex UI system            | `designer-high`               | opus   |
 | Write docs/comments          | `writer`                      | haiku  |
-| Research docs/APIs           | `document-specialist`         | sonnet |
+| Research docs/APIs           | `document-specialist` (repo docs first; optional Context Hub / `chub`) | sonnet |
 | Analyze images/diagrams      | `vision`                      | sonnet |
 | Strategic planning           | `planner`                     | opus   |
 | Review/critique plan         | `critic`                      | opus   |
@@ -319,19 +332,21 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 
 ---
 
-## Skills (33 Total)
+## Skills (34 Total)
 
-Includes **32 canonical skills + 1 deprecated alias** (`psm`).
+Includes **33 canonical skills + 1 deprecated alias** (`psm`).
 
 | Skill                     | Description                                                      | Manual Command                              |
 | ------------------------- | ---------------------------------------------------------------- | ------------------------------------------- |
 | `ask-codex`               | Ask Codex via `omc ask codex` and store an ask artifact          | `/oh-my-claudecode:ask-codex`               |
+| `ai-slop-cleaner`         | Anti-slop cleanup workflow with optional reviewer-only `--review` pass | `/oh-my-claudecode:ai-slop-cleaner`         |
 | `ask-gemini`              | Ask Gemini via `omc ask gemini` and store an ask artifact        | `/oh-my-claudecode:ask-gemini`              |
 | `autopilot`               | Full autonomous execution from idea to working code              | `/oh-my-claudecode:autopilot`               |
 | `cancel`                  | Unified cancellation for active modes                            | `/oh-my-claudecode:cancel`                  |
 | `ccg`                     | Tri-model workflow via `ask-codex` + `ask-gemini`, then Claude synthesis | `/oh-my-claudecode:ccg`                     |
 | `configure-notifications` | Configure notifications (Discord/Telegram/Slack/OpenClaw)        | `/oh-my-claudecode:configure-notifications` |
-| `configure-openclaw`      | Configure OpenClaw notification bridge                           | `/oh-my-claudecode:configure-openclaw`      |
+| `configure-openclaw`      | Configure OpenClaw gateway (deprecated, use configure-notifications) | `/oh-my-claudecode:configure-openclaw`      |
+| _OpenClaw routing_        | Normalized native/HTTP routing contract for clawhip consumers    | [`docs/OPENCLAW-ROUTING.md`](./OPENCLAW-ROUTING.md) |
 | `deep-interview`          | Socratic deep interview with ambiguity gating                    | `/oh-my-claudecode:deep-interview`          |
 | `deepinit`                | Generate hierarchical AGENTS.md docs                             | `/oh-my-claudecode:deepinit`                |
 | `external-context`        | Parallel document-specialist research                            | `/oh-my-claudecode:external-context`        |
@@ -351,6 +366,7 @@ Includes **32 canonical skills + 1 deprecated alias** (`psm`).
 | `ralph-init`              | Initialize PRD for structured ralph execution                    | `/oh-my-claudecode:ralph-init`              |
 | `ralplan`                 | Consensus planning alias for `/omc-plan --consensus`             | `/oh-my-claudecode:ralplan`                 |
 | `release`                 | Automated release workflow                                       | `/oh-my-claudecode:release`                 |
+| `setup`                   | Unified setup entrypoint for install, diagnostics, and MCP configuration | `/oh-my-claudecode:setup`              |
 | `sciomc`                  | Parallel scientist orchestration                                 | `/oh-my-claudecode:sciomc`                  |
 | `skill`                   | Manage local skills (list/add/remove/search/edit)                | `/oh-my-claudecode:skill`                   |
 | `team`                    | Coordinated multi-agent workflow                                 | `/oh-my-claudecode:team`                    |
@@ -369,11 +385,12 @@ All installed skills are available as slash commands with the prefix `/oh-my-cla
 
 | Command                                     | Description                                                                                   |
 | ------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `/oh-my-claudecode:ai-slop-cleaner <target>`  | Run the anti-slop cleanup workflow (`--review` for reviewer-only pass)                       |
 | `/oh-my-claudecode:autopilot <task>`        | Full autonomous execution                                                                     |
 | `/oh-my-claudecode:ultrawork <task>`        | Maximum performance mode with parallel agents                                                 |
 | `/oh-my-claudecode:team <N>:<agent> <task>` | Coordinated native team workflow                                                              |
 | `/oh-my-claudecode:ralph-init <task>`       | Initialize PRD for structured task tracking                                                   |
-| `/oh-my-claudecode:ralph <task>`            | Self-referential loop until task completion                                                   |
+| `/oh-my-claudecode:ralph <task>`            | Self-referential loop until task completion (`--critic=architect|critic|codex`)               |
 | `/oh-my-claudecode:ultraqa <goal>`          | Autonomous QA cycling workflow                                                                |
 | `/oh-my-claudecode:omc-plan <description>`  | Start planning session (supports consensus structured deliberation)                           |
 | `/oh-my-claudecode:ralplan <description>`   | Iterative planning with consensus structured deliberation (`--deliberate` for high-risk mode) |
@@ -383,6 +400,7 @@ All installed skills are available as slash commands with the prefix `/oh-my-cla
 | `/oh-my-claudecode:learner`                 | Extract reusable skill from session                                                           |
 | `/oh-my-claudecode:note <content>`          | Save notes to notepad.md                                                                      |
 | `/oh-my-claudecode:cancel`                  | Unified cancellation                                                                          |
+| `/oh-my-claudecode:setup`                   | Unified setup entrypoint (`setup`, `setup doctor`, `setup mcp`)                              |
 | `/oh-my-claudecode:omc-setup`               | One-time setup wizard                                                                         |
 | `/oh-my-claudecode:omc-doctor`              | Diagnose and fix installation issues                                                          |
 | `/oh-my-claudecode:omc-help`                | Show OMC usage guide                                                                          |
@@ -391,6 +409,19 @@ All installed skills are available as slash commands with the prefix `/oh-my-cla
 | `/oh-my-claudecode:mcp-setup`               | Configure MCP servers                                                                         |
 | `/oh-my-claudecode:trace`                   | Show orchestration trace timeline                                                             |
 | `/oh-my-claudecode:psm <arguments>`         | Deprecated alias for project session manager                                                  |
+
+### Skill Pipeline Metadata (Preview)
+
+Built-in skills and slash-loaded skills can now declare a lightweight pipeline/handoff contract in frontmatter:
+
+```yaml
+pipeline: [deep-interview, omc-plan, autopilot]
+next-skill: omc-plan
+next-skill-args: --consensus --direct
+handoff: .omc/specs/deep-interview-{slug}.md
+```
+
+When present, OMC appends a standardized **Skill Pipeline** section to the rendered skill prompt so the current stage, handoff artifact, and explicit next `Skill("oh-my-claudecode:...")` invocation are carried forward consistently.
 
 ---
 
@@ -505,6 +536,7 @@ Use these trigger phrases in natural language prompts to activate enhanced modes
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `ultrawork`, `ulw`                                      | Activates parallel agent orchestration                                                        |
 | `autopilot`, `build me`, `I want a`                     | Full autonomous execution                                                                     |
+| `deslop`, `anti-slop`, cleanup/refactor + slop smells         | Anti-slop cleanup workflow (`ai-slop-cleaner`)                                               |
 | `ralph`, `don't stop`, `must complete`                  | Persistence until verified complete                                                           |
 | `ccg`, `claude-codex-gemini`                            | Claude-Codex-Gemini orchestration                                                             |
 | `ralplan`                                               | Iterative planning consensus with structured deliberation (`--deliberate` for high-risk mode) |
@@ -557,8 +589,8 @@ stopomc
 | Platform    | Install Method              | Hook Type      |
 | ----------- | --------------------------- | -------------- |
 | **Windows** | WSL2 recommended (see note) | Node.js (.mjs) |
-| **macOS**   | curl or npm                 | Bash (.sh)     |
-| **Linux**   | curl or npm                 | Bash (.sh)     |
+| **macOS**   | Claude Code Plugin          | Bash (.sh)     |
+| **Linux**   | Claude Code Plugin          | Bash (.sh)     |
 
 > **Note**: Bash hooks are fully portable across macOS and Linux (no GNU-specific dependencies).
 
@@ -622,28 +654,28 @@ For complete documentation, see **[Performance Monitoring Guide](./PERFORMANCE-M
 | Feature                 | Description                                     | Access                               |
 | ----------------------- | ----------------------------------------------- | ------------------------------------ |
 | **Agent Observatory**   | Real-time agent status, efficiency, bottlenecks | HUD / API                            |
-| **Token Analytics**     | Cost tracking, usage reports, budget warnings   | HUD (`analytics` preset), `omc cost` |
+| **Session-End Summaries** | Persisted per-session summaries and callback payloads | `.omc/sessions/*.json`, `session-end` |
 | **Session Replay**      | Event timeline for post-session analysis        | `.omc/state/agent-replay-*.jsonl`    |
+| **Session Search**      | Search prior local transcript/session artifacts  | `omc session search`, `session_search` |
 | **Intervention System** | Auto-detection of stale agents, cost overruns   | Automatic                            |
 
 ### CLI Commands
 
 ```bash
-omc                # Default analytics dashboard
-omc cost daily     # Daily cost report
-omc cost weekly    # Weekly cost report
-omc backfill       # Import historical transcript data
-# Agent breakdown: use HUD observatory / replay logs
+omc hud                              # Render the current HUD statusline
+omc team status <team-name>          # Inspect a running team job
+tail -20 .omc/state/agent-replay-*.jsonl
+ls .omc/sessions/*.json
 ```
 
-### HUD Analytics Preset
+### HUD Presets
 
-Enable detailed cost tracking in your status line:
+Enable a supported preset for agent and context visibility in your status line:
 
 ```json
 {
   "omcHud": {
-    "preset": "analytics"
+    "preset": "focused"
   }
 }
 ```
@@ -740,11 +772,13 @@ To manually update, re-run the plugin install command or use Claude Code's built
 
 ### Uninstall
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claudecode/main/scripts/uninstall.sh | bash
+Use Claude Code's plugin management:
+
+```
+/plugin uninstall oh-my-claudecode@oh-my-claudecode
 ```
 
-Or manually:
+Or manually remove the installed files:
 
 ```bash
 rm ~/.claude/agents/{architect,document-specialist,explore,designer,writer,vision,critic,analyst,executor,qa-tester}.md

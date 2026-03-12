@@ -27,7 +27,7 @@ import {
   getRunningTaskCount,
 } from "../hud/background-tasks.js";
 import { readHudState, writeHudState } from "../hud/state.js";
-import { loadConfig } from "../config/loader.js";
+import { compactOmcStartupGuidance, loadConfig } from "../config/loader.js";
 import { writeSkillActiveState } from "./skill-state/index.js";
 import {
   ULTRAWORK_MESSAGE,
@@ -35,6 +35,8 @@ import {
   SEARCH_MESSAGE,
   ANALYZE_MESSAGE,
   TDD_MESSAGE,
+  CODE_REVIEW_MESSAGE,
+  SECURITY_REVIEW_MESSAGE,
   RALPH_MESSAGE,
   PROMPT_TRANSLATION_MESSAGE,
 } from "../installer/hooks.js";
@@ -525,11 +527,13 @@ async function processKeywordDetector(input: HookInput): Promise<HookOutput> {
     switch (keywordType) {
       case "ralph": {
         // Lazy-load ralph module
-        const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd } = await import("./ralph/index.js");
+        const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd, detectCriticModeFlag, stripCriticModeFlag } = await import("./ralph/index.js");
 
         // Handle --no-prd flag
         const noPrd = detectNoPrd(promptText);
-        const cleanPrompt = noPrd ? stripNoPrd(promptText) : promptText;
+        const criticMode = detectCriticModeFlag(promptText) ?? undefined;
+        const promptWithoutCriticFlag = stripCriticModeFlag(promptText);
+        const cleanPrompt = noPrd ? stripNoPrd(promptWithoutCriticFlag) : promptWithoutCriticFlag;
 
         // Auto-generate scaffold PRD if none exists and --no-prd not set
         const existingPrd = findPrd(directory);
@@ -549,7 +553,7 @@ async function processKeywordDetector(input: HookInput): Promise<HookOutput> {
 
         // Activate ralph state which also auto-activates ultrawork
         const hook = createRalphLoopHook(directory);
-        hook.startLoop(sessionId, cleanPrompt);
+        hook.startLoop(sessionId, cleanPrompt, criticMode ? { criticMode } : undefined);
 
         messages.push(RALPH_MESSAGE);
         break;
@@ -578,6 +582,14 @@ async function processKeywordDetector(input: HookInput): Promise<HookOutput> {
 
       case "tdd":
         messages.push(TDD_MESSAGE);
+        break;
+
+      case "code-review":
+        messages.push(CODE_REVIEW_MESSAGE);
+        break;
+
+      case "security-review":
+        messages.push(SECURITY_REVIEW_MESSAGE);
         break;
 
       // For modes without dedicated message constants, return generic activation message
@@ -674,6 +686,13 @@ async function processPersistentMode(input: HookInput): Promise<HookOutput> {
     toolName: input.toolName,
     tool_input: (input as Record<string, unknown>).tool_input,
     toolInput: input.toolInput,
+    reason: (input as Record<string, unknown>).reason as string | undefined,
+    transcript_path: (input as Record<string, unknown>).transcript_path as
+      | string
+      | undefined,
+    transcriptPath: (input as Record<string, unknown>).transcriptPath as
+      | string
+      | undefined,
   };
 
   const result = await checkPersistentModes(sessionId, directory, stopContext);
@@ -917,7 +936,7 @@ Treat this as prior-session context only. Prioritize the user's newest request, 
   const agentsMdPath = join(directory, 'AGENTS.md');
   if (existsSync(agentsMdPath)) {
     try {
-      let agentsContent = readFileSync(agentsMdPath, 'utf-8').trim();
+      let agentsContent = compactOmcStartupGuidance(readFileSync(agentsMdPath, 'utf-8')).trim();
       if (agentsContent) {
         // Truncate to ~5000 tokens (20000 chars) to avoid context bloat
         const MAX_AGENTS_CHARS = 20000;
@@ -960,6 +979,27 @@ Please continue working on these tasks.
 ---
 
 `);
+  }
+
+  // Bedrock/Vertex/proxy override: tell the LLM not to pass model on Task calls.
+  // This prevents the LLM from following the static CLAUDE.md instruction
+  // "Pass model on Task calls: haiku, sonnet, opus" which produces invalid
+  // model IDs on non-standard providers. (issues #1135, #1201)
+  try {
+    const sessionConfig = loadConfig();
+    if (sessionConfig.routing?.forceInherit) {
+      messages.push(`<system-reminder>
+
+[MODEL ROUTING OVERRIDE — NON-STANDARD PROVIDER DETECTED]
+
+This environment uses a non-standard model provider (AWS Bedrock, Google Vertex AI, or a proxy).
+Do NOT pass the \`model\` parameter on Task/Agent calls. Omit it entirely so agents inherit the parent session's model.
+The CLAUDE.md instruction "Pass model on Task calls: haiku, sonnet, opus" does NOT apply here.
+
+</system-reminder>`);
+    }
+  } catch {
+    // Non-blocking: config load failure must never break session start
   }
 
   if (messages.length > 0) {
@@ -1077,24 +1117,37 @@ function processPreToolUse(input: HookInput): HookOutput {
   const preToolMessages = enforcementResult.message ? [enforcementResult.message] : [];
   let modifiedToolInput: Record<string, unknown> | undefined;
 
-  // Force-inherit: strip `model` parameter from Task calls so agents inherit
-  // the user's Claude Code model setting instead of OMC per-agent routing (issue #1135)
+  // Force-inherit: deny Task calls that carry a `model` parameter when
+  // forceInherit is enabled (Bedrock, Vertex, CC Switch, etc.).
+  // Claude Code's hook protocol does not support modifiedInput, so we cannot
+  // silently strip the model. Instead, deny the call so Claude retries without
+  // the model param, letting agents inherit the parent session's model.
+  // (issues #1135, #1201)
   if (input.toolName === "Task") {
     const originalTaskInput = input.toolInput as Record<string, unknown> | undefined;
-    const nextTaskInput = originalTaskInput ? { ...originalTaskInput } : {};
-    let changed = false;
+    const taskModel = originalTaskInput?.model;
 
-    if (nextTaskInput.model) {
+    if (taskModel) {
       const config = loadConfig();
       if (config.routing?.forceInherit) {
-        delete nextTaskInput.model;
-        changed = true;
+        // Use permissionDecision:"deny" — the only PreToolUse mechanism
+        // Claude Code supports for blocking a specific tool call with
+        // feedback. modifiedInput is NOT supported by the hook protocol.
+        const denyReason = `[MODEL ROUTING] This environment uses a non-standard provider (Bedrock/Vertex/proxy). Do NOT pass the \`model\` parameter on Task calls — remove \`model\` and retry so agents inherit the parent session's model. The model "${taskModel}" is not valid for this provider.`;
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: denyReason,
+          },
+        } as HookOutput & { hookSpecificOutput: Record<string, unknown> };
       }
     }
 
-    if (nextTaskInput.run_in_background === true) {
-      const subagentType = typeof nextTaskInput.subagent_type === "string"
-        ? nextTaskInput.subagent_type
+    if (originalTaskInput?.run_in_background === true) {
+      const subagentType = typeof originalTaskInput.subagent_type === "string"
+        ? originalTaskInput.subagent_type
         : undefined;
       const permissionFallback = getBackgroundTaskPermissionFallback(directory, subagentType);
 
@@ -1106,10 +1159,6 @@ function processPreToolUse(input: HookInput): HookOutput {
           message: reason,
         };
       }
-    }
-
-    if (changed) {
-      modifiedToolInput = nextTaskInput;
     }
   }
 
@@ -1289,12 +1338,14 @@ function processPreToolUse(input: HookInput): HookOutput {
     }
   }
 
-  // Wake OpenClaw gateway for pre-tool-use (non-blocking, fires only for allowed tools)
-  if (input.sessionId) {
+  // Wake OpenClaw gateway for pre-tool-use (non-blocking, fires only for allowed tools).
+  // AskUserQuestion already has a dedicated high-signal OpenClaw event.
+  if (input.sessionId && input.toolName !== "AskUserQuestion") {
     _openclaw.wake("pre-tool-use", {
       sessionId: input.sessionId,
       projectPath: directory,
       toolName: input.toolName,
+      toolInput: input.toolInput,
     });
   }
 
@@ -1343,7 +1394,7 @@ async function processPostToolUse(input: HookInput): Promise<HookOutput> {
   if (toolName === "skill") {
     const skillName = getInvokedSkillName(input.toolInput);
     if (skillName === "ralph") {
-      const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd } = await import("./ralph/index.js");
+      const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd, detectCriticModeFlag, stripCriticModeFlag } = await import("./ralph/index.js");
       const rawPrompt =
         typeof input.prompt === "string" && input.prompt.trim().length > 0
           ? input.prompt
@@ -1351,7 +1402,9 @@ async function processPostToolUse(input: HookInput): Promise<HookOutput> {
 
       // Handle --no-prd flag
       const noPrd = detectNoPrd(rawPrompt);
-      const cleanPrompt = noPrd ? stripNoPrd(rawPrompt) : rawPrompt;
+      const criticMode = detectCriticModeFlag(rawPrompt) ?? undefined;
+      const promptWithoutCriticFlag = stripCriticModeFlag(rawPrompt);
+      const cleanPrompt = noPrd ? stripNoPrd(promptWithoutCriticFlag) : promptWithoutCriticFlag;
 
       // Auto-generate scaffold PRD if none exists and --no-prd not set
       const existingPrd = findPrd(directory);
@@ -1370,7 +1423,7 @@ async function processPostToolUse(input: HookInput): Promise<HookOutput> {
       }
 
       const hook = createRalphLoopHook(directory);
-      hook.startLoop(input.sessionId, cleanPrompt);
+      hook.startLoop(input.sessionId, cleanPrompt, criticMode ? { criticMode } : undefined);
     }
 
     // Clear skill-active state on skill completion to prevent false-blocking.
@@ -1402,12 +1455,15 @@ async function processPostToolUse(input: HookInput): Promise<HookOutput> {
     }
   }
 
-  // Wake OpenClaw gateway for post-tool-use (non-blocking, fires for all tools)
-  if (input.sessionId) {
+  // Wake OpenClaw gateway for post-tool-use (non-blocking, fires for all tools).
+  // AskUserQuestion already emitted a dedicated question.requested signal.
+  if (input.sessionId && input.toolName !== "AskUserQuestion") {
     _openclaw.wake("post-tool-use", {
       sessionId: input.sessionId,
       projectPath: directory,
       toolName: input.toolName,
+      toolInput: input.toolInput,
+      toolOutput: input.toolOutput,
     });
   }
 
@@ -1542,7 +1598,13 @@ export async function processHook(
           hook_event_name: "SessionEnd",
           reason: (rawSE.reason as SessionEndInput["reason"]) ?? "other",
         };
-        return await handleSessionEnd(sessionEndInput);
+        const result = await handleSessionEnd(sessionEndInput);
+        _openclaw.wake("session-end", {
+          sessionId: sessionEndInput.session_id,
+          projectPath: sessionEndInput.cwd,
+          reason: sessionEndInput.reason,
+        });
+        return result;
       }
 
       case "subagent-start": {

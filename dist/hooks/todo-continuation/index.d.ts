@@ -72,6 +72,8 @@ export interface StopContext {
     end_turn_reason?: string;
     /** End turn reason (from API) - camelCase variant */
     endTurnReason?: string;
+    /** Generic reason field from some stop-hook payloads */
+    reason?: string;
     /** Whether user explicitly requested stop - snake_case variant */
     user_requested?: boolean;
     /** Whether user explicitly requested stop - camelCase variant */
@@ -86,6 +88,10 @@ export interface StopContext {
     tool_input?: unknown;
     /** Tool input from hook payload (camelCase) */
     toolInput?: unknown;
+    /** Transcript path from hook payload (snake_case) */
+    transcript_path?: string;
+    /** Transcript path from hook payload (camelCase) */
+    transcriptPath?: string;
 }
 export interface TodoContinuationHook {
     checkIncomplete: (sessionId?: string) => Promise<IncompleteTodosResult>;

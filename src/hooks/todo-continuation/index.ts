@@ -110,6 +110,8 @@ export interface StopContext {
   end_turn_reason?: string;
   /** End turn reason (from API) - camelCase variant */
   endTurnReason?: string;
+  /** Generic reason field from some stop-hook payloads */
+  reason?: string;
   /** Whether user explicitly requested stop - snake_case variant */
   user_requested?: boolean;
   /** Whether user explicitly requested stop - camelCase variant */
@@ -124,6 +126,24 @@ export interface StopContext {
   tool_input?: unknown;
   /** Tool input from hook payload (camelCase) */
   toolInput?: unknown;
+  /** Transcript path from hook payload (snake_case) */
+  transcript_path?: string;
+  /** Transcript path from hook payload (camelCase) */
+  transcriptPath?: string;
+}
+
+function getStopReasonFields(context?: StopContext): string[] {
+  if (!context) return [];
+
+  return [
+    context.stop_reason,
+    context.stopReason,
+    context.end_turn_reason,
+    context.endTurnReason,
+    context.reason,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.toLowerCase().replace(/[\s-]+/g, '_'));
 }
 
 export interface TodoContinuationHook {
@@ -226,17 +246,14 @@ export function isExplicitCancelCommand(context?: StopContext): boolean {
  * See: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/213
  */
 export function isContextLimitStop(context?: StopContext): boolean {
-  if (!context) return false;
-
-  const reason = (context.stop_reason ?? context.stopReason ?? '').toLowerCase();
-  const endTurnReason = (context.end_turn_reason ?? context.endTurnReason ?? '').toLowerCase();
-
   const contextPatterns = [
     'context_limit', 'context_window', 'context_exceeded', 'context_full',
     'max_context', 'token_limit', 'max_tokens', 'conversation_too_long', 'input_too_long'
   ];
 
-  return contextPatterns.some(p => reason.includes(p) || endTurnReason.includes(p));
+  return getStopReasonFields(context).some((value) =>
+    contextPatterns.some((pattern) => value.includes(pattern))
+  );
 }
 
 /**

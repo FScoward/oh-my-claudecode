@@ -5,6 +5,7 @@ import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { executeTeamApiOperation as executeCanonicalTeamApiOperation, resolveTeamApiOperation } from '../team/api-interop.js';
+import { cleanupTeamWorktrees } from '../team/git-worktree.js';
 import { killWorkerPanes, killTeamSession } from '../team/tmux-session.js';
 import { validateTeamName } from '../team/team-name.js';
 import { monitorTeam, resumeTeam, shutdownTeam } from '../team/runtime.js';
@@ -476,6 +477,11 @@ export async function cleanupTeamJob(jobId: string, graceMs = 10_000): Promise<T
     recursive: true,
     force: true,
   }).catch(() => undefined);
+  try {
+    cleanupTeamWorktrees(job.teamName, job.cwd);
+  } catch {
+    // best-effort for dormant team-owned worktree infrastructure
+  }
 
   writeJobToDisk(jobId, {
     ...job,

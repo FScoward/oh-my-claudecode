@@ -103,13 +103,20 @@ export interface RalphLoopState {
   current_story_id?: string;
   /** Whether ultrawork is linked/auto-activated with ralph */
   linked_ultrawork?: boolean;
+  /** Reviewer mode for Ralph completion verification */
+  critic_mode?: RalphCriticMode;
 }
+
+export const RALPH_CRITIC_MODES = ['architect', 'critic', 'codex'] as const;
+export type RalphCriticMode = typeof RALPH_CRITIC_MODES[number];
 
 export interface RalphLoopOptions {
   /** Maximum iterations (default: 10) */
   maxIterations?: number;
   /** Disable auto-activation of ultrawork (default: false - ultrawork is enabled) */
   disableUltrawork?: boolean;
+  /** Reviewer mode for Ralph completion verification */
+  criticMode?: RalphCriticMode;
 }
 
 export interface RalphLoopHook {
@@ -123,6 +130,7 @@ export interface RalphLoopHook {
 }
 
 const DEFAULT_MAX_ITERATIONS = 10;
+const DEFAULT_RALPH_CRITIC_MODE: RalphCriticMode = 'architect';
 
 /**
  * Read Ralph Loop state from disk
@@ -233,6 +241,38 @@ export function stripNoPrdFlag(prompt: string): string {
 }
 
 /**
+ * Normalize a Ralph critic mode flag value.
+ */
+export function normalizeRalphCriticMode(value: string | null | undefined): RalphCriticMode | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return (RALPH_CRITIC_MODES as readonly string[]).includes(normalized)
+    ? normalized as RalphCriticMode
+    : null;
+}
+
+/**
+ * Detect --critic=<mode> flag (case-insensitive).
+ */
+export function detectCriticModeFlag(prompt: string): RalphCriticMode | null {
+  const match = prompt.match(/--critic(?:=|\s+)([^\s]+)/i);
+  return normalizeRalphCriticMode(match?.[1]);
+}
+
+/**
+ * Strip --critic=<mode> flag from prompt text and trim whitespace.
+ */
+export function stripCriticModeFlag(prompt: string): string {
+  return prompt
+    .replace(/--critic(?:=|\s+)([^\s]+)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * Create a Ralph Loop hook instance
  */
 export function createRalphLoopHook(directory: string): RalphLoopHook {
@@ -261,6 +301,7 @@ export function createRalphLoopHook(directory: string): RalphLoopHook {
       session_id: sessionId,
       project_path: directory,
       linked_ultrawork: enableUltrawork,
+      critic_mode: options?.criticMode ?? detectCriticModeFlag(prompt) ?? DEFAULT_RALPH_CRITIC_MODE,
     };
 
     const ralphSuccess = writeRalphState(directory, state, sessionId);

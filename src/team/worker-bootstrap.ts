@@ -12,13 +12,34 @@ export interface WorkerBootstrapParams {
   cwd: string;
 }
 
-export function generateTriggerMessage(teamName: string, workerName: string): string {
-  return `Read and follow the instructions in .omc/state/team/${teamName}/workers/${workerName}/inbox.md`;
+function buildInstructionPath(...parts: string[]): string {
+  return join(...parts).replaceAll('\\', '/');
 }
 
-export function generateMailboxTriggerMessage(teamName: string, workerName: string, count = 1): string {
+export function generateTriggerMessage(
+  teamName: string,
+  workerName: string,
+  teamStateRoot = '.omc/state',
+): string {
+  const inboxPath = buildInstructionPath(teamStateRoot, 'team', teamName, 'workers', workerName, 'inbox.md');
+  if (teamStateRoot !== '.omc/state') {
+    return `Read ${inboxPath}, work now, report progress.`;
+  }
+  return `Read ${inboxPath}, start work now, then report concrete progress (not ACK-only).`;
+}
+
+export function generateMailboxTriggerMessage(
+  teamName: string,
+  workerName: string,
+  count = 1,
+  teamStateRoot = '.omc/state',
+): string {
   const normalizedCount = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
-  return `You have ${normalizedCount} new message(s). Check .omc/state/team/${teamName}/mailbox/${workerName}.json`;
+  const mailboxPath = buildInstructionPath(teamStateRoot, 'team', teamName, 'mailbox', `${workerName}.json`);
+  if (teamStateRoot !== '.omc/state') {
+    return `${normalizedCount} new msg(s): check ${mailboxPath}, act and report progress.`;
+  }
+  return `You have ${normalizedCount} new message(s). Check ${mailboxPath}, act now, and reply with concrete progress (not ACK-only).`;
 }
 
 function agentTypeGuidance(agentType: CliAgentType): string {

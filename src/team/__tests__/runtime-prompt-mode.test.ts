@@ -134,6 +134,8 @@ describe('spawnWorkerForTask – prompt mode (Gemini & Codex)', () => {
     expect(launchCmd).toContain("'-i'");
     // Should contain the inbox path reference
     expect(launchCmd).toContain('.omc/state/team/test-team/workers/worker-1/inbox.md');
+    expect(launchCmd).toContain('start work now');
+    expect(launchCmd).toContain('concrete progress');
 
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -185,6 +187,8 @@ describe('spawnWorkerForTask – prompt mode (Gemini & Codex)', () => {
     expect(launchCmd).not.toContain("'-i'");
     // Should contain the inbox path as a positional argument
     expect(launchCmd).toContain('.omc/state/team/test-team/workers/worker-1/inbox.md');
+    expect(launchCmd).toContain('start work now');
+    expect(launchCmd).toContain('concrete progress');
 
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -215,7 +219,7 @@ describe('spawnWorkerForTask – prompt mode (Gemini & Codex)', () => {
     expect(captureCalls.length).toBeGreaterThan(0);
 
     const readInstructionCalls = tmuxCalls.args.filter(
-      args => args[0] === 'send-keys' && args.includes('-l') && (args[args.length - 1] ?? '').includes('Read and execute your task from:')
+      args => args[0] === 'send-keys' && args.includes('-l') && (args[args.length - 1] ?? '').includes('start work now')
     );
     expect(readInstructionCalls.length).toBe(1);
 

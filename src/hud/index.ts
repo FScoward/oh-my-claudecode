@@ -25,6 +25,7 @@ import { getUsage } from "./usage-api.js";
 import { executeCustomProvider } from "./custom-rate-provider.js";
 import { render } from "./render.js";
 import { detectApiKeySource } from "./elements/api-key-source.js";
+import { refreshMissionBoardState } from "./mission-board.js";
 import { sanitizeOutput } from "./sanitize.js";
 import type {
   HudRenderContext,
@@ -68,10 +69,12 @@ async function calculateSessionHealth(
  * Main HUD entry point
  * @param watchMode - true when called from the --watch polling loop (stdin is TTY)
  */
-async function main(watchMode = false): Promise<void> {
+async function main(watchMode = false, skipInit = false): Promise<void> {
   try {
     // Initialize HUD state (cleanup stale/orphaned tasks)
-    await initializeHUDState();
+    if (!skipInit) {
+      await initializeHUDState();
+    }
 
     // Read stdin from Claude Code
     let stdin = await readStdin();
@@ -178,6 +181,11 @@ async function main(watchMode = false): Promise<void> {
       }
     }
 
+    const missionBoardEnabled = config.missionBoard?.enabled ?? config.elements.missionBoard ?? false;
+    const missionBoard = missionBoardEnabled
+      ? await refreshMissionBoardState(cwd, config.missionBoard)
+      : null;
+
     // Build render context
     const context: HudRenderContext = {
       contextPercent: getContextPercent(stdin),
@@ -190,6 +198,7 @@ async function main(watchMode = false): Promise<void> {
       todos: transcriptData.todos,
       backgroundTasks: getRunningTasks(hudState),
       cwd,
+      missionBoard,
       lastSkill: transcriptData.lastActivatedSkill || null,
       rateLimitsResult,
       customBuckets,

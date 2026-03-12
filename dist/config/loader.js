@@ -347,6 +347,36 @@ export function loadConfig() {
     }
     return config;
 }
+const OMC_STARTUP_COMPACTABLE_SECTIONS = [
+    'agent_catalog',
+    'skills',
+    'team_compositions',
+];
+function looksLikeOmcGuidance(content) {
+    return content.includes('<guidance_schema_contract>')
+        && /oh-my-(claudecode|codex)/i.test(content)
+        && OMC_STARTUP_COMPACTABLE_SECTIONS.some(section => content.includes(`<${section}>`) && content.includes(`</${section}>`));
+}
+export function compactOmcStartupGuidance(content) {
+    if (!looksLikeOmcGuidance(content)) {
+        return content;
+    }
+    let compacted = content;
+    let removedAny = false;
+    for (const section of OMC_STARTUP_COMPACTABLE_SECTIONS) {
+        const pattern = new RegExp(`\n*<${section}>[\\s\\S]*?<\/${section}>\n*`, 'g');
+        const next = compacted.replace(pattern, '\n\n');
+        removedAny = removedAny || next !== compacted;
+        compacted = next;
+    }
+    if (!removedAny) {
+        return content;
+    }
+    return compacted
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/\n\n---\n\n---\n\n/g, '\n\n---\n\n')
+        .trim();
+}
 /**
  * Find and load AGENTS.md or CLAUDE.md files for context injection
  */
@@ -385,7 +415,7 @@ export function loadContextFromFiles(files) {
     const contexts = [];
     for (const file of files) {
         try {
-            const content = readFileSync(file, 'utf-8');
+            const content = compactOmcStartupGuidance(readFileSync(file, 'utf-8'));
             contexts.push(`## Context from ${file}\n\n${content}`);
         }
         catch (error) {

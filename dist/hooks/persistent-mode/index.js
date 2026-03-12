@@ -17,7 +17,7 @@ import { getClaudeConfigDir } from '../../utils/paths.js';
 import { readUltraworkState, writeUltraworkState, incrementReinforcement, deactivateUltrawork, getUltraworkPersistenceMessage } from '../ultrawork/index.js';
 import { resolveToWorktreeRoot, resolveSessionStatePath, getOmcRoot } from '../../lib/worktree-paths.js';
 import { readModeState } from '../../lib/mode-state-io.js';
-import { readRalphState, writeRalphState, incrementRalphIteration, clearRalphState, getPrdCompletionStatus, getRalphContext, readVerificationState, recordArchitectFeedback, getArchitectVerificationPrompt, getArchitectRejectionContinuationPrompt, detectArchitectApproval, detectArchitectRejection, clearVerificationState, } from '../ralph/index.js';
+import { readRalphState, writeRalphState, incrementRalphIteration, clearRalphState, getPrdCompletionStatus, getRalphContext, readVerificationState, startVerification, recordArchitectFeedback, getArchitectVerificationPrompt, getArchitectRejectionContinuationPrompt, detectArchitectApproval, detectArchitectRejection, clearVerificationState, } from '../ralph/index.js';
 import { checkIncompleteTodos, getNextPendingTodo, isUserAbort, isContextLimitStop, isRateLimitStop, isExplicitCancelCommand, isAuthenticationError } from '../todo-continuation/index.js';
 import { TODO_CONTINUATION_PROMPT } from '../../installer/hooks.js';
 import { isAutopilotActive } from '../autopilot/index.js';
@@ -226,6 +226,7 @@ export function recordIdleNotificationSent(stateDir, sessionId) {
 }
 /** Max bytes to read from the tail of a transcript for architect approval detection. */
 const TRANSCRIPT_TAIL_BYTES = 32 * 1024; // 32 KB
+const CRITICAL_CONTEXT_STOP_PERCENT = 95;
 /**
  * Read the tail of a potentially large transcript file.
  * Architect approval/rejection markers appear near the end of the conversation,
@@ -246,6 +247,37 @@ function readTranscriptTail(transcriptPath) {
     finally {
         closeSync(fd);
     }
+}
+function estimateTranscriptContextPercent(transcriptPath) {
+    if (!transcriptPath || !existsSync(transcriptPath)) {
+        return 0;
+    }
+    try {
+        const content = readTranscriptTail(transcriptPath);
+        const windowMatches = [...content.matchAll(/"context_window"\s{0,5}:\s{0,5}(\d+)/g)];
+        const inputMatches = [...content.matchAll(/"input_tokens"\s{0,5}:\s{0,5}(\d+)/g)];
+        const lastWindow = windowMatches.at(-1)?.[1];
+        const lastInput = inputMatches.at(-1)?.[1];
+        if (!lastWindow || !lastInput) {
+            return 0;
+        }
+        const contextWindow = parseInt(lastWindow, 10);
+        const inputTokens = parseInt(lastInput, 10);
+        if (!Number.isFinite(contextWindow) || contextWindow <= 0 || !Number.isFinite(inputTokens)) {
+            return 0;
+        }
+        return Math.round((inputTokens / contextWindow) * 100);
+    }
+    catch {
+        return 0;
+    }
+}
+function isCriticalContextStop(stopContext) {
+    if (isContextLimitStop(stopContext)) {
+        return true;
+    }
+    const transcriptPath = stopContext?.transcript_path ?? stopContext?.transcriptPath;
+    return estimateTranscriptContextPercent(transcriptPath) >= CRITICAL_CONTEXT_STOP_PERCENT;
 }
 /**
  * Check for architect approval in session transcript
@@ -377,19 +409,6 @@ async function checkRalphLoop(sessionId, directory, cancelInProgress) {
             };
         }
     }
-    // Check for PRD-based completion (all stories have passes: true)
-    const prdStatus = getPrdCompletionStatus(workingDir);
-    if (prdStatus.hasPrd && prdStatus.allComplete) {
-        // All PRD stories complete - allow completion
-        clearRalphState(workingDir, sessionId);
-        clearVerificationState(workingDir, sessionId);
-        deactivateUltrawork(workingDir, sessionId);
-        return {
-            shouldBlock: false,
-            message: `[RALPH LOOP COMPLETE - PRD] All ${prdStatus.status?.total || 0} stories are complete! Great work!`,
-            mode: 'none'
-        };
-    }
     // Check for existing verification state (architect verification in progress)
     const verificationState = readVerificationState(workingDir, sessionId);
     if (verificationState?.pending) {
@@ -402,9 +421,14 @@ async function checkRalphLoop(sessionId, directory, cancelInProgress) {
                 clearVerificationState(workingDir, sessionId);
                 clearRalphState(workingDir, sessionId);
                 deactivateUltrawork(workingDir, sessionId);
+                const criticLabel = verificationState.critic_mode === 'codex'
+                    ? 'Codex critic'
+                    : verificationState.critic_mode === 'critic'
+                        ? 'Critic'
+                        : 'Architect';
                 return {
                     shouldBlock: false,
-                    message: `[RALPH LOOP VERIFIED COMPLETE] Architect verified task completion after ${state.iteration} iteration(s). Excellent work!`,
+                    message: `[RALPH LOOP VERIFIED COMPLETE] ${criticLabel} verified task completion after ${state.iteration} iteration(s). Excellent work!`,
                     mode: 'none'
                 };
             }
@@ -428,7 +452,7 @@ async function checkRalphLoop(sessionId, directory, cancelInProgress) {
                 }
             }
         }
-        // Verification still pending - remind to spawn architect
+        // Verification still pending - remind to run the selected reviewer
         // Get current story for story-aware verification
         const prdInfo = getPrdCompletionStatus(workingDir);
         const currentStory = prdInfo.nextStory ?? undefined;
@@ -436,6 +460,21 @@ async function checkRalphLoop(sessionId, directory, cancelInProgress) {
         return {
             shouldBlock: true,
             message: verificationPrompt,
+            mode: 'ralph',
+            metadata: {
+                iteration: state.iteration,
+                maxIterations: state.max_iterations
+            }
+        };
+    }
+    // Check for PRD-based completion (all stories have passes: true).
+    // Enter a verification phase instead of clearing Ralph immediately.
+    const prdStatus = getPrdCompletionStatus(workingDir);
+    if (prdStatus.hasPrd && prdStatus.allComplete) {
+        const startedVerification = startVerification(workingDir, `All ${prdStatus.status?.total || 0} PRD stories are marked passes: true.`, state.prompt, state.critic_mode, sessionId);
+        return {
+            shouldBlock: true,
+            message: getArchitectVerificationPrompt(startedVerification),
             mode: 'ralph',
             metadata: {
                 iteration: state.iteration,
@@ -474,7 +513,7 @@ CRITICAL INSTRUCTIONS:
 1. Review your progress and the original task
 ${prdInstruction}
 3. Continue from where you left off
-4. When FULLY complete (after Architect verification), run \`/oh-my-claudecode:cancel\` to cleanly exit and clean up state files. If cancel fails, retry with \`/oh-my-claudecode:cancel --force\`.
+4. When FULLY complete (after ${state.critic_mode === 'codex' ? 'Codex critic' : state.critic_mode === 'critic' ? 'Critic' : 'Architect'} verification), run \`/oh-my-claudecode:cancel\` to cleanly exit and clean up state files. If cancel fails, retry with \`/oh-my-claudecode:cancel --force\`.
 5. Do NOT stop until the task is truly done
 
 ${newState.prompt ? `Original task: ${newState.prompt}` : ''}
@@ -816,10 +855,10 @@ ${TODO_CONTINUATION_PROMPT}
 export async function checkPersistentModes(sessionId, directory, stopContext // NEW: from todo-continuation types
 ) {
     const workingDir = resolveToWorktreeRoot(directory);
-    // CRITICAL: Never block context-limit stops.
-    // Blocking these causes a deadlock where Claude Code cannot compact.
+    // CRITICAL: Never block context-limit/critical-context stops.
+    // Blocking these causes a deadlock where Claude Code cannot compact or exit.
     // See: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/213
-    if (isContextLimitStop(stopContext)) {
+    if (isCriticalContextStop(stopContext)) {
         return {
             shouldBlock: false,
             message: '',

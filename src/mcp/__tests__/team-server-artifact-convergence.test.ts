@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { createWorkerWorktree } from '../../team/git-worktree.js';
 
-vi.mock('../../team/tmux-session.js', () => ({
-  killWorkerPanes: vi.fn(async () => undefined),
-}));
+vi.mock('../../team/tmux-session.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../team/tmux-session.js')>();
+  return {
+    ...actual,
+    killWorkerPanes: vi.fn(async () => undefined),
+  };
+});
 
 const originalEnv = { ...process.env };
 
@@ -124,5 +130,40 @@ describe('team-server artifact convergence + scoped cleanup', () => {
 
     expect(existsSync(teamOneDir)).toBe(false);
     expect(existsSync(teamTwoDir)).toBe(true);
+  });
+
+  it('handleCleanup also removes dormant scoped team worktrees when present', async () => {
+    const { handleCleanup } = await importTeamServerWithJobsDir(jobsDir);
+
+    const jobId = 'omc-art4';
+    const cwd = join(testRoot, 'workspace-worktree');
+    mkdirSync(cwd, { recursive: true });
+    execFileSync('git', ['init'], { cwd, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd, stdio: 'pipe' });
+    writeFileSync(join(cwd, 'README.md'), 'hello\n', 'utf-8');
+    execFileSync('git', ['add', 'README.md'], { cwd, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd, stdio: 'pipe' });
+
+    const teamOneDir = join(cwd, '.omc', 'state', 'team', 'team-one');
+    mkdirSync(teamOneDir, { recursive: true });
+    const worktree = createWorkerWorktree('team-one', 'worker1', cwd);
+    expect(existsSync(worktree.path)).toBe(true);
+
+    writeFileSync(
+      join(jobsDir, `${jobId}.json`),
+      JSON.stringify({ status: 'running', startedAt: Date.now(), cwd, teamName: 'team-one' }),
+      'utf-8',
+    );
+    writeFileSync(
+      join(jobsDir, `${jobId}-panes.json`),
+      JSON.stringify({ paneIds: ['%2'], leaderPaneId: '%1' }),
+      'utf-8',
+    );
+
+    await handleCleanup({ job_id: jobId, grace_ms: 0 });
+
+    expect(existsSync(worktree.path)).toBe(false);
+    expect(existsSync(teamOneDir)).toBe(false);
   });
 });

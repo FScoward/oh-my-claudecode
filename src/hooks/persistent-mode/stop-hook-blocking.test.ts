@@ -10,6 +10,17 @@ import {
 } from "./index.js";
 import { activateUltrawork, deactivateUltrawork } from "../ultrawork/index.js";
 
+function writeTranscriptWithContext(filePath: string, contextWindow: number, inputTokens: number): void {
+  writeFileSync(
+    filePath,
+    `${JSON.stringify({
+      usage: { context_window: contextWindow, input_tokens: inputTokens },
+      context_window: contextWindow,
+      input_tokens: inputTokens,
+    })}\n`
+  );
+}
+
 describe("Stop Hook Blocking Contract", () => {
   describe("createHookOutput", () => {
     it("returns continue: false when shouldBlock is true", () => {
@@ -167,6 +178,38 @@ describe("Stop Hook Blocking Contract", () => {
       expect(output.continue).toBe(true);
     });
 
+    it("allows stop for critical transcript context even with active autopilot", async () => {
+      const sessionId = "test-autopilot-critical-context";
+      const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
+      const transcriptPath = join(tempDir, "transcript.jsonl");
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(
+        join(sessionDir, "autopilot-state.json"),
+        JSON.stringify({
+          active: true,
+          phase: "execution",
+          session_id: sessionId,
+          iteration: 2,
+          max_iterations: 20,
+          reinforcement_count: 0,
+          last_checked_at: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+        })
+      );
+      writeTranscriptWithContext(transcriptPath, 1000, 960);
+
+      const result = await checkPersistentModes(sessionId, tempDir, {
+        transcript_path: transcriptPath,
+        stop_reason: "end_turn",
+      });
+      expect(result.shouldBlock).toBe(false);
+      expect(result.mode).toBe("none");
+
+      const output = createHookOutput(result);
+      expect(output.continue).toBe(true);
+      expect(output.message).toBeUndefined();
+    });
+
     it("blocks stop for active ralph loop", async () => {
       const sessionId = "test-ralph-block";
       const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
@@ -318,6 +361,34 @@ describe("Stop Hook Blocking Contract", () => {
         stop_reason: "context_limit",
       });
       expect(output.continue).toBe(true);
+    });
+
+    it("returns continue: true for critical transcript context when autopilot is active", () => {
+      const sessionId = "autopilot-critical-context-mjs";
+      const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
+      const transcriptPath = join(tempDir, "transcript.jsonl");
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(
+        join(sessionDir, "autopilot-state.json"),
+        JSON.stringify({
+          active: true,
+          phase: "execution",
+          session_id: sessionId,
+          reinforcement_count: 0,
+          last_checked_at: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+        })
+      );
+      writeTranscriptWithContext(transcriptPath, 1000, 960);
+
+      const output = runScript({
+        directory: tempDir,
+        sessionId,
+        transcript_path: transcriptPath,
+        stop_reason: "end_turn",
+      });
+      expect(output.continue).toBe(true);
+      expect(output.decision).toBeUndefined();
     });
 
     it("returns continue: true for user abort", () => {
@@ -501,6 +572,34 @@ describe("Stop Hook Blocking Contract", () => {
       expect(output.continue).toBe(true);
     });
 
+    it("returns continue: true for critical transcript context when autopilot is active", () => {
+      const sessionId = "autopilot-critical-context-cjs";
+      const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
+      const transcriptPath = join(tempDir, "transcript.jsonl");
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(
+        join(sessionDir, "autopilot-state.json"),
+        JSON.stringify({
+          active: true,
+          phase: "execution",
+          session_id: sessionId,
+          reinforcement_count: 0,
+          last_checked_at: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+        })
+      );
+      writeTranscriptWithContext(transcriptPath, 1000, 960);
+
+      const output = runScript({
+        directory: tempDir,
+        sessionId,
+        transcript_path: transcriptPath,
+        stop_reason: "end_turn",
+      });
+      expect(output.continue).toBe(true);
+      expect(output.decision).toBeUndefined();
+    });
+
     it("fails open for unknown Team phase in cjs script", () => {
       const sessionId = "team-phase-cjs";
       const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
@@ -536,6 +635,14 @@ describe("Stop Hook Blocking Contract", () => {
           reinforcement_count: 20,
           last_checked_at: new Date().toISOString(),
           started_at: new Date().toISOString(),
+        })
+      );
+      // Priority 2.5 uses a separate stop-breaker file for circuit breaking
+      writeFileSync(
+        join(sessionDir, "team-pipeline-stop-breaker.json"),
+        JSON.stringify({
+          count: 21, // exceeds TEAM_PIPELINE_STOP_BLOCKER_MAX (20)
+          updated_at: new Date().toISOString(),
         })
       );
 

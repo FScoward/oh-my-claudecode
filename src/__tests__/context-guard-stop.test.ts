@@ -52,4 +52,18 @@ describe('context-guard-stop safe recovery messaging (issue #1373)', () => {
     expect(String(out.reason)).toContain('Run /compact immediately');
     expect(String(out.reason)).toContain('.omc/state');
   });
+
+  it('fails open at critical context exhaustion to avoid stop-hook deadlock', () => {
+    writeTranscriptWithContext(transcriptPath, 1000, 960); // 96%
+
+    const out = runContextGuardStop({
+      session_id: `session-${Date.now()}`,
+      transcript_path: transcriptPath,
+      cwd: tempDir,
+      stop_reason: 'end_turn',
+    });
+
+    expect(out.continue).toBe(true);
+    expect(out.decision).toBeUndefined();
+  });
 });

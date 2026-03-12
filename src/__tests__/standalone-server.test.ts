@@ -22,12 +22,12 @@ describe('standalone-server tool composition', () => {
   ];
 
   it('should have the expected total tool count', () => {
-    // 12 LSP + 2 AST + 1 python + 5 state + 6 notepad + 4 memory + 2 trace = 32
-    expect(expectedTools).toHaveLength(32);
+    // 12 LSP + 2 AST + 1 python + 5 state + 6 notepad + 4 memory + 3 trace = 33
+    expect(expectedTools).toHaveLength(33);
   });
 
-  it('should include 2 trace tools', () => {
-    expect(traceTools).toHaveLength(2);
+  it('should include 3 trace tools', () => {
+    expect(traceTools).toHaveLength(3);
   });
 
   it('should include trace_timeline tool', () => {
@@ -38,6 +38,11 @@ describe('standalone-server tool composition', () => {
   it('should include trace_summary tool', () => {
     const names = traceTools.map(t => t.name);
     expect(names).toContain('trace_summary');
+  });
+
+  it('should include session_search tool', () => {
+    const names = traceTools.map(t => t.name);
+    expect(names).toContain('session_search');
   });
 
   it('should have no duplicate tool names', () => {

@@ -16,9 +16,10 @@
  * assignTask, resumeTeam as discrete operations driven by the caller.
  */
 
+import { execFile } from 'child_process';
 import { join, resolve } from 'path';
 import { existsSync } from 'fs';
-import { mkdir, rm, readdir, writeFile } from 'fs/promises';
+import { mkdir, rm, readdir, readFile, writeFile } from 'fs/promises';
 import { performance } from 'perf_hooks';
 import { TeamPaths, absPath, teamStateRoot } from './state-paths.js';
 import {
@@ -61,7 +62,7 @@ import {
 } from './model-contract.js';
 import {
   createTeamSession, spawnWorkerInPane, sendToWorker,
-  waitForPaneReady, type WorkerPaneConfig,
+  waitForPaneReady, paneHasActiveTask, paneLooksReady, type WorkerPaneConfig,
 } from './tmux-session.js';
 import {
   composeInitialInbox,
@@ -70,6 +71,7 @@ import {
   generateTriggerMessage,
 } from './worker-bootstrap.js';
 import { queueInboxInstruction, type DispatchOutcome } from './mcp-comm.js';
+import { cleanupTeamWorktrees } from './git-worktree.js';
 
 // ---------------------------------------------------------------------------
 // Feature flag
@@ -151,6 +153,8 @@ interface ShutdownGateCounts {
   allowed: boolean;
 }
 
+const MONITOR_SIGNAL_STALE_MS = 30_000;
+
 // ---------------------------------------------------------------------------
 // Helper: sanitize team name
 // ---------------------------------------------------------------------------
@@ -171,6 +175,40 @@ async function isWorkerPaneAlive(paneId: string | undefined): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function captureWorkerPane(paneId: string | undefined): Promise<string> {
+  if (!paneId) return '';
+  return await new Promise((resolve) => {
+    execFile('tmux', ['capture-pane', '-t', paneId, '-p', '-S', '-80'], (err, stdout) => {
+      if (err) resolve('');
+      else resolve(stdout ?? '');
+    });
+  });
+}
+
+function isFreshTimestamp(value: string | undefined, maxAgeMs: number = MONITOR_SIGNAL_STALE_MS): boolean {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  return Date.now() - parsed <= maxAgeMs;
+}
+
+function findOutstandingWorkerTask(
+  worker: WorkerInfo,
+  taskById: Map<string, TeamTask>,
+  inProgressByOwner: Map<string, TeamTask[]>,
+): TeamTask | null {
+  if (typeof worker.assigned_tasks === 'object') {
+    for (const taskId of worker.assigned_tasks) {
+      const task = taskById.get(taskId);
+      if (task && (task.status === 'pending' || task.status === 'in_progress')) {
+        return task;
+      }
+    }
+  }
+  const owned = inProgressByOwner.get(worker.name) ?? [];
+  return owned[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +319,58 @@ interface SpawnV2WorkerResult {
   startupFailureReason?: string;
 }
 
+function hasWorkerStatusProgress(status: WorkerStatus, taskId: string): boolean {
+  if (status.current_task_id === taskId) return true;
+  return ['working', 'blocked', 'done', 'failed'].includes(status.state);
+}
+
+async function hasWorkerTaskClaimEvidence(
+  teamName: string,
+  workerName: string,
+  cwd: string,
+  taskId: string,
+): Promise<boolean> {
+  try {
+    const raw = await readFile(absPath(cwd, TeamPaths.taskFile(teamName, taskId)), 'utf-8');
+    const task = JSON.parse(raw) as TeamTask;
+    return task.owner === workerName && ['in_progress', 'completed', 'failed'].includes(task.status);
+  } catch {
+    return false;
+  }
+}
+
+async function hasClaudeStartupEvidence(
+  teamName: string,
+  workerName: string,
+  taskId: string,
+  cwd: string,
+): Promise<boolean> {
+  const [hasClaimEvidence, status] = await Promise.all([
+    hasWorkerTaskClaimEvidence(teamName, workerName, cwd, taskId),
+    readWorkerStatus(teamName, workerName, cwd),
+  ]);
+  return hasClaimEvidence || hasWorkerStatusProgress(status, taskId);
+}
+
+async function waitForClaudeStartupEvidence(
+  teamName: string,
+  workerName: string,
+  taskId: string,
+  cwd: string,
+  attempts = 3,
+  delayMs = 250,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (await hasClaudeStartupEvidence(teamName, workerName, taskId, cwd)) {
+      return true;
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return false;
+}
+
 /**
  * Spawn a single v2 worker in a tmux pane.
  * Writes CLI API inbox (no done.json), waits for ready, sends inbox path.
@@ -353,7 +443,7 @@ async function spawnV2Worker(opts: SpawnV2WorkerOptions): Promise<SpawnV2WorkerR
   // For prompt-mode agents (codex, gemini), pass instruction via CLI flag
   if (usePromptMode) {
     const promptArgs = getPromptModeArgs(
-      opts.agentType, `Read and execute your task from: ${relInboxPath}`,
+      opts.agentType, inboxTriggerMessage,
     );
     launchArgs.push(...promptArgs);
   }
@@ -422,6 +512,38 @@ async function spawnV2Worker(opts: SpawnV2WorkerOptions): Promise<SpawnV2WorkerR
       startupAssigned: false,
       startupFailureReason: dispatchOutcome.reason,
     };
+  }
+
+  if (opts.agentType === 'claude') {
+    const settled = await waitForClaudeStartupEvidence(
+      opts.teamName,
+      opts.workerName,
+      opts.taskId,
+      opts.cwd,
+    );
+    if (!settled) {
+      const renotified = await notifyStartupInbox(opts.sessionName, paneId, inboxTriggerMessage);
+      if (!renotified.ok) {
+        return {
+          paneId,
+          startupAssigned: false,
+          startupFailureReason: `${renotified.reason}:startup_evidence_missing`,
+        };
+      }
+      const settledAfterRetry = await waitForClaudeStartupEvidence(
+        opts.teamName,
+        opts.workerName,
+        opts.taskId,
+        opts.cwd,
+      );
+      if (!settledAfterRetry) {
+        return {
+          paneId,
+          startupAssigned: false,
+          startupFailureReason: 'claude_startup_evidence_missing',
+        };
+      }
+    }
   }
 
   return {
@@ -753,17 +875,20 @@ export async function monitorTeamV2(
   const workerSignals = await Promise.all(
     config.workers.map(async (worker) => {
       const alive = await isWorkerPaneAlive(worker.pane_id);
-      const [status, heartbeat] = await Promise.all([
+      const [status, heartbeat, paneCapture] = await Promise.all([
         readWorkerStatus(sanitized, worker.name, cwd),
         readWorkerHeartbeat(sanitized, worker.name, cwd),
+        alive ? captureWorkerPane(worker.pane_id) : Promise.resolve(''),
       ]);
-      return { worker, alive, status, heartbeat };
+      return { worker, alive, status, heartbeat, paneCapture };
     }),
   );
   const workerScanMs = performance.now() - workerScanStartMs;
 
-  for (const { worker: w, alive, status, heartbeat } of workerSignals) {
+  for (const { worker: w, alive, status, heartbeat, paneCapture } of workerSignals) {
     const currentTask = status.current_task_id ? taskById.get(status.current_task_id) ?? null : null;
+    const outstandingTask = currentTask ?? findOutstandingWorkerTask(w, taskById, inProgressByOwner);
+    const expectedTaskId = status.current_task_id ?? outstandingTask?.id ?? w.assigned_tasks[0] ?? '';
     const previousTurns = previousSnapshot ? (previousSnapshot.workerTurnCountByName[w.name] ?? 0) : null;
     const previousTaskId = previousSnapshot?.workerTaskIdByName[w.name] ?? '';
     const currentTaskId = status.current_task_id ?? '';
@@ -795,9 +920,29 @@ export async function monitorTeamV2(
       }
     }
 
-    if (alive && turnsWithoutProgress > 5) {
+    const paneSuggestsIdle = alive && paneLooksReady(paneCapture) && !paneHasActiveTask(paneCapture);
+    const statusFresh = isFreshTimestamp(status.updated_at);
+    const heartbeatFresh = isFreshTimestamp(heartbeat?.last_turn_at);
+    const hasWorkStartEvidence = expectedTaskId !== '' && hasWorkerStatusProgress(status, expectedTaskId);
+
+    let stallReason: string | null = null;
+    if (paneSuggestsIdle && expectedTaskId !== '' && !hasWorkStartEvidence) {
+      stallReason = 'no_work_start_evidence';
+    } else if (paneSuggestsIdle && expectedTaskId !== '' && (!statusFresh || !heartbeatFresh)) {
+      stallReason = 'stale_or_missing_worker_reports';
+    } else if (paneSuggestsIdle && turnsWithoutProgress > 5) {
+      stallReason = 'no_meaningful_turn_progress';
+    }
+
+    if (stallReason) {
       nonReportingWorkers.push(w.name);
-      recommendations.push(`Send reminder to non-reporting ${w.name}`);
+      if (stallReason === 'no_work_start_evidence') {
+        recommendations.push(`Investigate ${w.name}: assigned work but no work-start evidence; pane is idle at prompt`);
+      } else if (stallReason === 'stale_or_missing_worker_reports') {
+        recommendations.push(`Investigate ${w.name}: pane is idle while status/heartbeat are stale or missing`);
+      } else {
+        recommendations.push(`Investigate ${w.name}: no meaningful turn progress and pane is idle at prompt`);
+      }
     }
   }
 
@@ -1035,6 +1180,11 @@ export async function shutdownTeamV2(
   }
 
   // 6. Clean up state
+  try {
+    cleanupTeamWorktrees(sanitized, cwd);
+  } catch (err) {
+    process.stderr.write(`[team/runtime-v2] worktree cleanup: ${err}\n`);
+  }
   await cleanupTeamState(sanitized, cwd);
 }
 

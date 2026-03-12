@@ -122,6 +122,24 @@ function findLineAnchoredMarker(content, marker, fromEnd = false) {
         return match ? match.index : -1;
     }
 }
+function escapeRegex(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function createLineAnchoredMarkerRegex(marker, flags = 'gm') {
+    return new RegExp(`^${escapeRegex(marker)}$`, flags);
+}
+function stripGeneratedUserCustomizationHeaders(content) {
+    return content.replace(/^<!-- User customizations(?: \([^)]+\))? -->\r?\n?/gm, '');
+}
+function trimClaudeUserContent(content) {
+    if (content.trim().length === 0) {
+        return '';
+    }
+    return content
+        .replace(/^(?:[ \t]*\r?\n)+/, '')
+        .replace(/(?:\r?\n[ \t]*)+$/, '')
+        .replace(/(?:\r?\n){3,}/g, '\n\n');
+}
 /**
  * Read hudEnabled from .omc-config.json without importing auto-update
  * (avoids circular dependency since auto-update imports from installer)
@@ -275,6 +293,53 @@ export function isProjectScopedPlugin() {
     const normalizedGlobalBase = globalPluginBase.replace(/\\/g, '/').replace(/\/$/, '');
     return !normalizedPluginRoot.startsWith(normalizedGlobalBase);
 }
+function directoryHasMarkdownFiles(directory) {
+    if (!existsSync(directory)) {
+        return false;
+    }
+    try {
+        return readdirSync(directory).some(file => file.endsWith('.md'));
+    }
+    catch {
+        return false;
+    }
+}
+function getInstalledOmcPluginRoots() {
+    const pluginRoots = new Set();
+    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT?.trim();
+    if (pluginRoot) {
+        pluginRoots.add(pluginRoot);
+    }
+    const installedPluginsPath = join(CLAUDE_CONFIG_DIR, 'plugins', 'installed_plugins.json');
+    if (!existsSync(installedPluginsPath)) {
+        return Array.from(pluginRoots);
+    }
+    try {
+        const raw = JSON.parse(readFileSync(installedPluginsPath, 'utf-8'));
+        const plugins = raw.plugins ?? raw;
+        for (const [pluginId, entries] of Object.entries(plugins)) {
+            if (!pluginId.toLowerCase().includes('oh-my-claudecode') || !Array.isArray(entries)) {
+                continue;
+            }
+            for (const entry of entries) {
+                if (typeof entry?.installPath === 'string' && entry.installPath.trim().length > 0) {
+                    pluginRoots.add(entry.installPath.trim());
+                }
+            }
+        }
+    }
+    catch {
+        // Ignore unreadable plugin registry and fall back to env-based detection.
+    }
+    return Array.from(pluginRoots);
+}
+/**
+ * Detect whether an installed Claude Code plugin already provides OMC agent
+ * markdown files, so the legacy ~/.claude/agents copy can be skipped.
+ */
+export function hasPluginProvidedAgentFiles() {
+    return getInstalledOmcPluginRoots().some(pluginRoot => directoryHasMarkdownFiles(join(pluginRoot, 'agents')));
+}
 /**
  * Get the package root directory.
  * Works for both ESM (dist/installer/) and CJS bundles (bridge/).
@@ -414,6 +479,9 @@ export function mergeClaudeMd(existingContent, omcContent, version) {
     const START_MARKER = '<!-- OMC:START -->';
     const END_MARKER = '<!-- OMC:END -->';
     const USER_CUSTOMIZATIONS = '<!-- User customizations -->';
+    const OMC_BLOCK_PATTERN = new RegExp(`^${escapeRegex(START_MARKER)}\\r?\\n[\\s\\S]*?^${escapeRegex(END_MARKER)}(?:\\r?\\n)?`, 'gm');
+    const markerStartRegex = createLineAnchoredMarkerRegex(START_MARKER);
+    const markerEndRegex = createLineAnchoredMarkerRegex(END_MARKER);
     // Idempotency guard: strip markers from omcContent if already present
     // This handles the case where docs/CLAUDE.md ships with markers
     let cleanOmcContent = omcContent;
@@ -432,23 +500,20 @@ export function mergeClaudeMd(existingContent, omcContent, version) {
     if (!existingContent) {
         return `${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}\n`;
     }
-    // Case 2: Existing content has both markers - replace content between markers
-    // Use line-anchored search to avoid matching markers inside code blocks
-    const startIndex = findLineAnchoredMarker(existingContent, START_MARKER);
-    const endIndex = findLineAnchoredMarker(existingContent, END_MARKER, true);
-    if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-        // Extract content before START_MARKER and after END_MARKER
-        const beforeMarker = existingContent.substring(0, startIndex);
-        const afterMarker = existingContent.substring(endIndex + END_MARKER.length);
-        return `${beforeMarker}${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}${afterMarker}`;
-    }
-    // Case 3: Corrupted markers (exactly one present, or both present but in wrong order)
-    if ((startIndex !== -1) !== (endIndex !== -1) || (startIndex !== -1 && endIndex !== -1 && endIndex < startIndex)) {
+    const strippedExistingContent = existingContent.replace(OMC_BLOCK_PATTERN, '');
+    const hasResidualStartMarker = markerStartRegex.test(strippedExistingContent);
+    const hasResidualEndMarker = markerEndRegex.test(strippedExistingContent);
+    // Case 2: Corrupted markers (unmatched markers remain after removing complete blocks)
+    if (hasResidualStartMarker || hasResidualEndMarker) {
         // Handle corrupted state - backup will be created by caller
         return `${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}\n\n<!-- User customizations (recovered from corrupted markers) -->\n${existingContent}`;
     }
-    // Case 4: No markers - wrap omcContent in markers, preserve existing after user customizations header
-    return `${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}\n\n${USER_CUSTOMIZATIONS}\n${existingContent}`;
+    const preservedUserContent = trimClaudeUserContent(stripGeneratedUserCustomizationHeaders(strippedExistingContent));
+    if (!preservedUserContent) {
+        return `${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}\n`;
+    }
+    // Case 3: Preserve only user-authored content that lives outside OMC markers
+    return `${START_MARKER}\n${versionMarker}${cleanOmcContent}\n${END_MARKER}\n\n${USER_CUSTOMIZATIONS}\n${preservedUserContent}`;
 }
 /**
  * Install OMC agents, commands, skills, and hooks
@@ -492,6 +557,8 @@ export function install(options = {}) {
     // Check if running as a plugin
     const runningAsPlugin = isRunningAsPlugin();
     const projectScoped = isProjectScopedPlugin();
+    const pluginProvidesAgentFiles = hasPluginProvidedAgentFiles();
+    const shouldInstallLegacyAgents = !runningAsPlugin && !pluginProvidesAgentFiles;
     const allowPluginHookRefresh = runningAsPlugin && options.refreshHooksInPlugin && !projectScoped;
     if (runningAsPlugin) {
         log('Detected Claude Code plugin context - skipping agent/command file installation');
@@ -506,6 +573,9 @@ export function install(options = {}) {
             }
         }
         // Don't return early - continue to install HUD (unless project-scoped)
+    }
+    else if (pluginProvidesAgentFiles) {
+        log('Detected installed OMC plugin agent definitions - skipping legacy ~/.claude/agents sync');
     }
     // Check Claude installation (optional)
     if (!options.skipClaudeCheck && !isClaudeInstalled()) {
@@ -528,7 +598,7 @@ export function install(options = {}) {
         if (!runningAsPlugin) {
             // Create directories
             log('Creating directories...');
-            if (!existsSync(AGENTS_DIR)) {
+            if (shouldInstallLegacyAgents && !existsSync(AGENTS_DIR)) {
                 mkdirSync(AGENTS_DIR, { recursive: true });
             }
             // NOTE: COMMANDS_DIR creation removed - commands/ deprecated in v4.1.16 (#582)
@@ -539,17 +609,22 @@ export function install(options = {}) {
                 mkdirSync(HOOKS_DIR, { recursive: true });
             }
             // Install agents
-            log('Installing agent definitions...');
-            for (const [filename, content] of Object.entries(loadAgentDefinitions())) {
-                const filepath = join(AGENTS_DIR, filename);
-                if (existsSync(filepath) && !options.force) {
-                    log(`  Skipping ${filename} (already exists)`);
+            if (shouldInstallLegacyAgents) {
+                log('Installing agent definitions...');
+                for (const [filename, content] of Object.entries(loadAgentDefinitions())) {
+                    const filepath = join(AGENTS_DIR, filename);
+                    if (existsSync(filepath) && !options.force) {
+                        log(`  Skipping ${filename} (already exists)`);
+                    }
+                    else {
+                        writeFileSync(filepath, content);
+                        result.installedAgents.push(filename);
+                        log(`  Installed ${filename}`);
+                    }
                 }
-                else {
-                    writeFileSync(filepath, content);
-                    result.installedAgents.push(filename);
-                    log(`  Installed ${filename}`);
-                }
+            }
+            else {
+                log('Skipping legacy agent file installation (plugin-provided agents are available)');
             }
             // Skip command installation - all commands are now plugin-scoped skills
             // Commands are accessible via the plugin system (${CLAUDE_PLUGIN_ROOT}/commands/)
@@ -916,7 +991,7 @@ export function install(options = {}) {
  * Check if OMC is already installed
  */
 export function isInstalled() {
-    return existsSync(VERSION_FILE) && existsSync(AGENTS_DIR);
+    return existsSync(VERSION_FILE) && (existsSync(AGENTS_DIR) || hasPluginProvidedAgentFiles());
 }
 /**
  * Get installation info

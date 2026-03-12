@@ -8,6 +8,13 @@ vi.mock('child_process', async (importOriginal) => {
         spawnSync: vi.fn(actual.spawnSync),
     };
 });
+function setProcessPlatform(platform) {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    return () => {
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    };
+}
 describe('model-contract', () => {
     describe('backward-compat API shims', () => {
         it('shouldLoadShellRc returns false for non-interactive compatibility mode', () => {
@@ -98,6 +105,21 @@ describe('model-contract', () => {
             expect(args).toContain('--model');
             expect(args).toContain('gpt-4');
         });
+        it('normalizes full Claude model ID to alias for claude agent (issue #1415)', () => {
+            const args = buildLaunchArgs('claude', { teamName: 't', workerName: 'w', cwd: '/tmp', model: 'claude-sonnet-4-6' });
+            expect(args).toContain('--model');
+            expect(args).toContain('sonnet');
+            expect(args).not.toContain('claude-sonnet-4-6');
+        });
+        it('normalizes Bedrock model ID to alias for claude agent (issue #1415)', () => {
+            const args = buildLaunchArgs('claude', { teamName: 't', workerName: 'w', cwd: '/tmp', model: 'us.anthropic.claude-opus-4-6-v1:0' });
+            expect(args).toContain('--model');
+            expect(args).toContain('opus');
+        });
+        it('does not normalize non-Claude models for codex/gemini agents', () => {
+            const args = buildLaunchArgs('codex', { teamName: 't', workerName: 'w', cwd: '/tmp', model: 'gpt-4o' });
+            expect(args).toContain('gpt-4o');
+        });
     });
     describe('getWorkerEnv', () => {
         it('returns correct env vars', () => {
@@ -179,26 +201,45 @@ describe('model-contract', () => {
     describe('isCliAvailable', () => {
         it('checks version without shell:true for standard binaries', () => {
             const mockSpawnSync = vi.mocked(spawnSync);
+            clearResolvedPathCache();
             mockSpawnSync
                 .mockReturnValueOnce({ status: 1, stdout: '', stderr: '', pid: 0, output: [], signal: null })
                 .mockReturnValueOnce({ status: 0, stdout: '', stderr: '', pid: 0, output: [], signal: null });
             isCliAvailable('codex');
             expect(mockSpawnSync).toHaveBeenNthCalledWith(1, 'which', ['codex'], { timeout: 5000, encoding: 'utf8' });
-            expect(mockSpawnSync).toHaveBeenNthCalledWith(2, 'codex', ['--version'], { timeout: 5000 });
+            expect(mockSpawnSync).toHaveBeenNthCalledWith(2, 'codex', ['--version'], { timeout: 5000, shell: false });
+            clearResolvedPathCache();
             mockSpawnSync.mockRestore();
         });
         it('uses COMSPEC for .cmd binaries on win32', () => {
             const mockSpawnSync = vi.mocked(spawnSync);
-            vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+            const restorePlatform = setProcessPlatform('win32');
             vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+            clearResolvedPathCache();
             mockSpawnSync
                 .mockReturnValueOnce({ status: 0, stdout: 'C:\\Tools\\codex.cmd\n', stderr: '', pid: 0, output: [], signal: null })
                 .mockReturnValueOnce({ status: 0, stdout: '', stderr: '', pid: 0, output: [], signal: null });
             isCliAvailable('codex');
             expect(mockSpawnSync).toHaveBeenNthCalledWith(1, 'where', ['codex'], { timeout: 5000, encoding: 'utf8' });
             expect(mockSpawnSync).toHaveBeenNthCalledWith(2, 'C:\\Windows\\System32\\cmd.exe', ['/d', '/s', '/c', '"C:\\Tools\\codex.cmd" --version'], { timeout: 5000 });
+            restorePlatform();
+            clearResolvedPathCache();
             mockSpawnSync.mockRestore();
             vi.unstubAllEnvs();
+        });
+        it('uses shell:true for unresolved binaries on win32', () => {
+            const mockSpawnSync = vi.mocked(spawnSync);
+            const restorePlatform = setProcessPlatform('win32');
+            clearResolvedPathCache();
+            mockSpawnSync
+                .mockReturnValueOnce({ status: 1, stdout: '', stderr: '', pid: 0, output: [], signal: null })
+                .mockReturnValueOnce({ status: 0, stdout: '', stderr: '', pid: 0, output: [], signal: null });
+            isCliAvailable('gemini');
+            expect(mockSpawnSync).toHaveBeenNthCalledWith(1, 'where', ['gemini'], { timeout: 5000, encoding: 'utf8' });
+            expect(mockSpawnSync).toHaveBeenNthCalledWith(2, 'gemini', ['--version'], { timeout: 5000, shell: true });
+            restorePlatform();
+            clearResolvedPathCache();
+            mockSpawnSync.mockRestore();
         });
     });
     describe('prompt mode (headless TUI bypass)', () => {

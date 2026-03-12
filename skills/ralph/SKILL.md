@@ -1,6 +1,6 @@
 ---
 name: ralph
-description: Self-referential loop until task completion with architect verification
+description: Self-referential loop until task completion with configurable verification reviewer
 ---
 
 [RALPH + ULTRAWORK - ITERATION {{ITERATION}}/{{MAX}}]
@@ -8,14 +8,14 @@ description: Self-referential loop until task completion with architect verifica
 Your previous attempt did not output the completion promise. Continue working on the task.
 
 <Purpose>
-Ralph is a PRD-driven persistence loop that keeps working on a task until ALL user stories in prd.json have passes: true and are architect-verified. It wraps ultrawork's parallel execution with session persistence, automatic retry on failure, structured story tracking, and mandatory verification before completion.
+Ralph is a PRD-driven persistence loop that keeps working on a task until ALL user stories in prd.json have passes: true and are reviewer-verified. It wraps ultrawork's parallel execution with session persistence, automatic retry on failure, structured story tracking, and mandatory verification before completion.
 </Purpose>
 
 <Use_When>
 - Task requires guaranteed completion with verification (not just "do your best")
 - User says "ralph", "don't stop", "must complete", "finish this", or "keep going until done"
 - Work may span multiple iterations and needs persistence across retries
-- Task benefits from structured PRD-driven execution with architect sign-off
+- Task benefits from structured PRD-driven execution with reviewer sign-off
 </Use_When>
 
 <Do_Not_Use_When>
@@ -30,13 +30,15 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 1. Structuring work into discrete user stories with testable acceptance criteria (prd.json)
 2. Iterating story-by-story until each one passes
 3. Tracking progress and learnings across iterations (progress.txt)
-4. Requiring fresh architect verification against specific acceptance criteria before completion
+4. Requiring fresh reviewer verification against specific acceptance criteria before completion
 </Why_This_Exists>
 
 <PRD_Mode>
 By default, ralph operates in PRD mode. A scaffold `prd.json` is auto-generated when ralph starts if none exists.
 
 **Opt-out:** If `{{PROMPT}}` contains `--no-prd`, skip PRD generation and work in legacy mode (no story tracking, generic verification). Use this for trivial quick fixes.
+
+**Reviewer selection:** Pass `--critic=architect`, `--critic=critic`, or `--critic=codex` in the Ralph prompt to choose the completion reviewer for that run. `architect` remains the default.
 </PRD_Mode>
 
 <Execution_Policy>
@@ -84,20 +86,24 @@ By default, ralph operates in PRD mode. A scaffold `prd.json` is auto-generated 
    b. If NOT all complete, loop back to Step 2 (pick next story)
    c. If ALL complete, proceed to Step 7 (architect verification)
 
-7. **Architect verification** (tiered, against acceptance criteria):
+7. **Reviewer verification** (tiered, against acceptance criteria):
    - <5 files, <100 lines with full tests: STANDARD tier minimum (architect-medium / Sonnet)
    - Standard changes: STANDARD tier (architect-medium / Sonnet)
    - >20 files or security/architectural changes: THOROUGH tier (architect / Opus)
+   - If `--critic=critic`, use the Claude `critic` agent for the approval pass
+   - If `--critic=codex`, run `omc ask codex --agent-prompt critic "..."` for the approval pass
    - Ralph floor: always at least STANDARD, even for small changes
-   - The architect verifies against the SPECIFIC acceptance criteria from prd.json, not vague "is it done?"
+   - The selected reviewer verifies against the SPECIFIC acceptance criteria from prd.json, not vague "is it done?"
 
 8. **On approval**: Run `/oh-my-claudecode:cancel` to cleanly exit and clean up all state files
 
-9. **On rejection**: Fix the issues raised, re-verify at the same tier, then loop back to check if the story needs to be marked incomplete
+9. **On rejection**: Fix the issues raised, re-verify with the same reviewer, then loop back to check if the story needs to be marked incomplete
 </Steps>
 
 <Tool_Usage>
-- Use `Task(subagent_type="oh-my-claudecode:architect", ...)` for verification cross-checks when changes are security-sensitive, architectural, or involve complex multi-system integration
+- Use `Task(subagent_type="oh-my-claudecode:architect", ...)` for architect verification cross-checks when changes are security-sensitive, architectural, or involve complex multi-system integration
+- Use `Task(subagent_type="oh-my-claudecode:critic", ...)` when `--critic=critic`
+- Use `omc ask codex --agent-prompt critic "..."` when `--critic=codex`
 - Skip architect consultation for simple feature additions, well-tested changes, or time-critical verification
 - Proceed with architect agent verification alone -- never block on unavailable tools
 - Use `state_write` / `state_read` for ralph mode state persistence between iterations
@@ -171,7 +177,7 @@ Why bad: Did not refine scaffold criteria into task-specific ones. This is PRD t
 - Stop and report when a fundamental blocker requires user input (missing credentials, unclear requirements, external service down)
 - Stop when the user says "stop", "cancel", or "abort" -- run `/oh-my-claudecode:cancel`
 - Continue working when the hook system sends "The boulder never stops" -- this means the iteration continues
-- If architect rejects verification, fix the issues and re-verify (do not stop)
+- If the selected reviewer rejects verification, fix the issues and re-verify (do not stop)
 - If the same issue recurs across 3+ iterations, report it as a potential fundamental problem
 </Escalation_And_Stop_Conditions>
 
@@ -184,7 +190,7 @@ Why bad: Did not refine scaffold criteria into task-specific ones. This is PRD t
 - [ ] Fresh build output shows success
 - [ ] lsp_diagnostics shows 0 errors on affected files
 - [ ] progress.txt records implementation details and learnings
-- [ ] Architect verification passed (STANDARD tier minimum) against specific acceptance criteria
+- [ ] Selected reviewer verification passed against specific acceptance criteria
 - [ ] `/oh-my-claudecode:cancel` run for clean state cleanup
 </Final_Checklist>
 

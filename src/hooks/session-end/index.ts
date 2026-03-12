@@ -2,7 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { triggerStopCallbacks } from './callbacks.js';
+import { getOMCConfig } from '../../features/auto-update.js';
+import { buildConfigFromEnv, getEnabledPlatforms, getNotificationConfig } from '../../notifications/config.js';
 import { notify } from '../../notifications/index.js';
+import type { NotificationPlatform } from '../../notifications/types.js';
 import { cleanupBridgeSessions } from '../../tools/python-repl/bridge-manager.js';
 import { resolveToWorktreeRoot, getOmcRoot, validateSessionId, isValidTranscriptPath, resolveSessionStatePath } from '../../lib/worktree-paths.js';
 import { SESSION_END_MODE_STATE_FILES, SESSION_METRICS_MODE_FILES } from '../../lib/mode-names.js';
@@ -30,6 +33,41 @@ export interface SessionMetrics {
 
 export interface HookOutput {
   continue: boolean;
+}
+
+type LegacyStopCallbackPlatform = 'file' | 'telegram' | 'discord';
+
+function hasExplicitNotificationConfig(profileName?: string): boolean {
+  const config = getOMCConfig();
+
+  if (profileName) {
+    const profile = config.notificationProfiles?.[profileName];
+    if (profile && typeof profile.enabled === 'boolean') {
+      return true;
+    }
+  }
+
+  if (config.notifications && typeof config.notifications.enabled === 'boolean') {
+    return true;
+  }
+
+  return buildConfigFromEnv() !== null;
+}
+
+function getLegacyPlatformsCoveredByNotifications(
+  enabledPlatforms: NotificationPlatform[]
+): LegacyStopCallbackPlatform[] {
+  const overlappingPlatforms: LegacyStopCallbackPlatform[] = [];
+
+  if (enabledPlatforms.includes('telegram')) {
+    overlappingPlatforms.push('telegram');
+  }
+
+  if (enabledPlatforms.includes('discord')) {
+    overlappingPlatforms.push('discord');
+  }
+
+  return overlappingPlatforms;
 }
 
 /**
@@ -240,6 +278,73 @@ export function cleanupTransientState(directory: string): number {
   };
 
   removeTmpFiles(omcDir);
+
+  // Remove transient state files that accumulate across sessions
+  const stateDir = path.join(omcDir, 'state');
+  if (fs.existsSync(stateDir)) {
+    const transientPatterns = [
+      /^agent-replay-.*\.jsonl$/,
+      /^last-tool-error\.json$/,
+      /^hud-state\.json$/,
+      /^hud-stdin-cache\.json$/,
+      /^idle-notif-cooldown\.json$/,
+      /^.*-stop-breaker\.json$/,
+    ];
+
+    try {
+      const stateFiles = fs.readdirSync(stateDir);
+      for (const file of stateFiles) {
+        if (transientPatterns.some(p => p.test(file))) {
+          try {
+            fs.unlinkSync(path.join(stateDir, file));
+            filesRemoved++;
+          } catch (_error) {
+            // Ignore removal errors
+          }
+        }
+      }
+    } catch (_error) {
+      // Ignore errors
+    }
+
+    // Clean up cancel signal files and empty session directories
+    const sessionsDir = path.join(stateDir, 'sessions');
+    if (fs.existsSync(sessionsDir)) {
+      try {
+        const sessionDirs = fs.readdirSync(sessionsDir);
+        for (const sid of sessionDirs) {
+          const sessionDir = path.join(sessionsDir, sid);
+          try {
+            const stat = fs.statSync(sessionDir);
+            if (!stat.isDirectory()) continue;
+
+            const sessionFiles = fs.readdirSync(sessionDir);
+            for (const file of sessionFiles) {
+              if (/^cancel-signal/.test(file) || /stop-breaker/.test(file)) {
+                try {
+                  fs.unlinkSync(path.join(sessionDir, file));
+                  filesRemoved++;
+                } catch (_error) { /* ignore */ }
+              }
+            }
+
+            // Remove empty session directories
+            const remaining = fs.readdirSync(sessionDir);
+            if (remaining.length === 0) {
+              try {
+                fs.rmdirSync(sessionDir);
+                filesRemoved++;
+              } catch (_error) { /* ignore */ }
+              }
+          } catch (_error) {
+            // Ignore per-session errors
+          }
+        }
+      } catch (_error) {
+        // Ignore errors
+      }
+    }
+  }
 
   return filesRemoved;
 }
@@ -454,27 +559,46 @@ export async function processSessionEnd(input: SessionEndInput): Promise<HookOut
     // Ignore cleanup errors
   }
 
-  // Trigger stop hook callbacks (#395)
+  const profileName = process.env.OMC_NOTIFY_PROFILE;
+  const notificationConfig = getNotificationConfig(profileName);
+  const shouldUseNewNotificationSystem = Boolean(
+    notificationConfig && hasExplicitNotificationConfig(profileName)
+  );
+  const enabledNotificationPlatforms = shouldUseNewNotificationSystem && notificationConfig
+    ? getEnabledPlatforms(notificationConfig, 'session-end')
+    : [];
+
+  // Trigger stop hook callbacks (#395). When an explicit session-end notification
+  // config already covers Discord/Telegram, skip the overlapping legacy callback
+  // path so session-end is only dispatched once per platform.
   await triggerStopCallbacks(metrics, {
     session_id: input.session_id,
     cwd: input.cwd,
+  }, {
+    skipPlatforms: shouldUseNewNotificationSystem
+      ? getLegacyPlatformsCoveredByNotifications(enabledNotificationPlatforms)
+      : [],
   });
 
-  // Trigger new notification system (in addition to legacy callbacks)
-  try {
-    await notify('session-end', {
-      sessionId: input.session_id,
-      projectPath: input.cwd,
-      durationMs: metrics.duration_ms,
-      agentsSpawned: metrics.agents_spawned,
-      agentsCompleted: metrics.agents_completed,
-      modesUsed: metrics.modes_used,
-      reason: metrics.reason,
-      timestamp: metrics.ended_at,
-      profileName: process.env.OMC_NOTIFY_PROFILE,
-    });
-  } catch {
-    // Notification failures should never block session end
+  // Trigger the new notification system when session-end notifications come
+  // from an explicit notifications/profile/env config. Legacy stopHookCallbacks
+  // are already handled above and must not be dispatched twice.
+  if (shouldUseNewNotificationSystem) {
+    try {
+      await notify('session-end', {
+        sessionId: input.session_id,
+        projectPath: input.cwd,
+        durationMs: metrics.duration_ms,
+        agentsSpawned: metrics.agents_spawned,
+        agentsCompleted: metrics.agents_completed,
+        modesUsed: metrics.modes_used,
+        reason: metrics.reason,
+        timestamp: metrics.ended_at,
+        profileName,
+      });
+    } catch {
+      // Notification failures should never block session end
+    }
   }
 
 

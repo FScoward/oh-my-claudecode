@@ -110,6 +110,7 @@ export {
   type InjectionStrategy,
   type InjectionResult
 } from './features/index.js';
+export { searchSessionHistory, parseSinceSpec, type SessionHistoryMatch, type SessionHistorySearchOptions, type SessionHistorySearchReport } from './features/index.js';
 
 // Agent module exports (modular agent system)
 export {

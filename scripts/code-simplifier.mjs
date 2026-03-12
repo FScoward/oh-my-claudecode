@@ -129,7 +129,7 @@ async function main() {
     }
 
     process.stdout.write(
-      JSON.stringify({ decision: 'block', reason: buildMessage(files) }) + '\n',
+      JSON.stringify({ continue: false, decision: 'block', reason: buildMessage(files) }) + '\n',
     );
   } catch (error) {
     try {

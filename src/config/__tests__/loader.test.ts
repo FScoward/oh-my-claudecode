@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadConfig } from '../loader.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { compactOmcStartupGuidance, loadConfig, loadContextFromFiles } from '../loader.js';
 import { saveAndClear, restore } from './test-helpers.js';
 
 const ALL_KEYS = [
@@ -101,4 +104,64 @@ describe('loadConfig() — auto-forceInherit for non-standard providers', () => 
     expect(config.agents?.explore?.model).toBe('claude-haiku-4-5-custom');
   });
 
+});
+
+describe('startup context compaction', () => {
+  it('compacts only OMC-style guidance in loadContextFromFiles while preserving key sections', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'omc-loader-context-'));
+
+    try {
+      const omcAgentsPath = join(tempDir, 'AGENTS.md');
+      const omcGuidance = `# oh-my-codex - Intelligent Multi-Agent Orchestration
+
+<guidance_schema_contract>
+schema
+</guidance_schema_contract>
+
+<operating_principles>
+- keep this
+</operating_principles>
+
+<agent_catalog>
+- verbose agent catalog
+- verbose agent catalog
+</agent_catalog>
+
+<skills>
+- verbose skills catalog
+- verbose skills catalog
+</skills>
+
+<team_compositions>
+- verbose team compositions
+</team_compositions>
+
+<verification>
+- verify this stays
+</verification>`;
+
+      writeFileSync(omcAgentsPath, omcGuidance);
+
+      const loaded = loadContextFromFiles([omcAgentsPath]);
+
+      expect(loaded).toContain('<operating_principles>');
+      expect(loaded).toContain('<verification>');
+      expect(loaded).not.toContain('<agent_catalog>');
+      expect(loaded).not.toContain('<skills>');
+      expect(loaded).not.toContain('<team_compositions>');
+      expect(loaded.length).toBeLessThan(omcGuidance.length + `## Context from ${omcAgentsPath}\n\n`.length - 40);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves non-OMC guidance unchanged even if it uses similar tags', () => {
+    const nonOmc = `# Project guide
+
+<skills>
+Keep this custom section.
+</skills>`;
+
+    expect(compactOmcStartupGuidance(nonOmc)).toBe(nonOmc);
+  });
 });

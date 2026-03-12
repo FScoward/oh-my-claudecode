@@ -43,6 +43,7 @@ export declare function loadEnvConfig(): Partial<PluginConfig>;
  * Load and merge all configuration sources
  */
 export declare function loadConfig(): PluginConfig;
+export declare function compactOmcStartupGuidance(content: string): string;
 /**
  * Find and load AGENTS.md or CLAUDE.md files for context injection
  */

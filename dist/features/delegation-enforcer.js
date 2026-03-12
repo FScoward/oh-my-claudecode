@@ -15,6 +15,18 @@
 import { getAgentDefinitions } from '../agents/definitions.js';
 import { normalizeDelegationRole } from './delegation-routing/types.js';
 import { loadConfig } from '../config/loader.js';
+import { resolveClaudeFamily } from '../config/models.js';
+/** Map Claude model family to CC-supported alias */
+const FAMILY_TO_ALIAS = {
+    SONNET: 'sonnet',
+    OPUS: 'opus',
+    HAIKU: 'haiku',
+};
+/** Normalize a model ID to a CC-supported alias (sonnet/opus/haiku) if possible */
+export function normalizeToCcAlias(model) {
+    const family = resolveClaudeFamily(model);
+    return family ? (FAMILY_TO_ALIAS[family] ?? model) : model;
+}
 function canonicalizeSubagentType(subagentType) {
     const hasPrefix = subagentType.startsWith('oh-my-claudecode:');
     const rawAgentType = subagentType.replace(/^oh-my-claudecode:/, '');
@@ -46,13 +58,16 @@ export function enforceModel(agentInput) {
             model: 'inherit',
         };
     }
-    // If model is already specified, return as-is (but canonicalize alias names)
+    // If model is already specified, normalize it to CC-supported aliases
+    // before passing through. Full IDs like 'claude-sonnet-4-6' cause 400
+    // errors on Bedrock/Vertex. (issue #1415)
     if (agentInput.model) {
+        const normalizedModel = normalizeToCcAlias(agentInput.model);
         return {
             originalInput: agentInput,
-            modifiedInput: { ...agentInput, subagent_type: canonicalSubagentType },
+            modifiedInput: { ...agentInput, subagent_type: canonicalSubagentType, model: normalizedModel },
             injected: false,
-            model: agentInput.model,
+            model: normalizedModel,
         };
     }
     const agentType = canonicalSubagentType.replace(/^oh-my-claudecode:/, '');
@@ -87,23 +102,29 @@ export function enforceModel(agentInput) {
             model: 'inherit',
         };
     }
+    // Normalize model to Claude Code's supported aliases (sonnet/opus/haiku).
+    // Full IDs cause 400 errors on Bedrock/Vertex. (issue #1201, #1415)
+    const normalizedModel = normalizeToCcAlias(resolvedModel);
     const modifiedInput = {
         ...agentInput,
         subagent_type: canonicalSubagentType,
-        model: resolvedModel,
+        model: normalizedModel,
     };
     let warning;
     if (process.env.OMC_DEBUG === 'true') {
         const aliasNote = resolvedModel !== agentDef.model && aliasSourceModel
             ? ` (aliased from ${aliasSourceModel})`
             : '';
-        warning = `[OMC] Auto-injecting model: ${resolvedModel} for ${agentType}${aliasNote}`;
+        const normalizedNote = normalizedModel !== resolvedModel
+            ? ` (normalized from ${resolvedModel})`
+            : '';
+        warning = `[OMC] Auto-injecting model: ${normalizedModel} for ${agentType}${aliasNote}${normalizedNote}`;
     }
     return {
         originalInput: agentInput,
         modifiedInput,
         injected: true,
-        model: resolvedModel,
+        model: normalizedModel,
         warning,
     };
 }
@@ -151,6 +172,7 @@ export function getModelForAgent(agentType) {
     if (!agentDef.model) {
         throw new Error(`No default model defined for agent: ${normalizedType}`);
     }
-    return agentDef.model;
+    // Normalize to CC-supported aliases (sonnet/opus/haiku)
+    return normalizeToCcAlias(agentDef.model);
 }
 //# sourceMappingURL=delegation-enforcer.js.map
