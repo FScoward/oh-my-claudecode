@@ -17,7 +17,6 @@ import { join, dirname } from 'path';
 import { execSync } from 'child_process';
 import { createHash } from 'crypto';
 import https from 'https';
-import { validateAnthropicBaseUrl } from '../utils/ssrf-guard.js';
 import { DEFAULT_HUD_USAGE_POLL_INTERVAL_MS, } from './types.js';
 import { readHudConfig } from './state.js';
 import { lockPathFor, withFileLock } from '../lib/file-lock.js';
@@ -391,16 +390,9 @@ function fetchUsageFromApi(accessToken) {
  */
 function fetchUsageFromZai() {
     return new Promise((resolve) => {
-        const baseUrl = process.env.ANTHROPIC_BASE_URL;
+        const baseUrl = 'https://api.anthropic.com';
         const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
-        if (!baseUrl || !authToken) {
-            resolve({ data: null });
-            return;
-        }
-        // Validate baseUrl for SSRF protection
-        const validation = validateAnthropicBaseUrl(baseUrl);
-        if (!validation.allowed) {
-            console.error(`[SSRF Guard] Blocking usage API call: ${validation.reason}`);
+        if (!authToken) {
             resolve({ data: null });
             return;
         }
@@ -605,7 +597,7 @@ export function parseZaiResponse(response) {
  *   - 'rate_limited': API returned 429; stale data served if available, with exponential backoff
  */
 export async function getUsage() {
-    const baseUrl = process.env.ANTHROPIC_BASE_URL;
+    const baseUrl = 'https://api.anthropic.com';
     const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
     const isZai = baseUrl != null && isZaiHost(baseUrl);
     const currentSource = isZai && authToken ? 'zai' : 'anthropic';

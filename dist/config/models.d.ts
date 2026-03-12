@@ -68,7 +68,6 @@ export declare function isVertexAI(): boolean;
  * - Running on AWS Bedrock — needs full Bedrock model IDs, not bare tier names
  * - Running on Google Vertex AI — needs full Vertex model paths
  * - A non-Claude model ID is detected (CC Switch, LiteLLM, etc.)
- * - A custom ANTHROPIC_BASE_URL points to a non-Anthropic endpoint
  */
 export declare function isNonClaudeProvider(): boolean;
 //# sourceMappingURL=models.d.ts.map

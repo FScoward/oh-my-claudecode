@@ -844,89 +844,6 @@ function stripJsoncComments(content) {
   return result;
 }
 
-// src/utils/ssrf-guard.ts
-var BLOCKED_HOST_PATTERNS = [
-  // Exact matches
-  /^localhost$/i,
-  /^127\.[0-9]+\.[0-9]+\.[0-9]+$/,
-  // Loopback
-  /^10\.[0-9]+\.[0-9]+\.[0-9]+$/,
-  // Class A private
-  /^172\.(1[6-9]|2[0-9]|3[0-1])\.[0-9]+\.[0-9]+$/,
-  // Class B private
-  /^192\.168\.[0-9]+\.[0-9]+$/,
-  // Class C private
-  /^169\.254\.[0-9]+\.[0-9]+$/,
-  // Link-local
-  /^(0|22[4-9]|23[0-9])\.[0-9]+\.[0-9]+\.[0-9]+$/,
-  // Multicast, reserved
-  /^\[?::1\]?$/,
-  // IPv6 loopback
-  /^\[?fc00:/i,
-  // IPv6 unique local
-  /^\[?fe80:/i
-  // IPv6 link-local
-];
-var ALLOWED_SCHEMES = ["https:", "http:"];
-function validateUrlForSSRF(urlString) {
-  if (!urlString || typeof urlString !== "string") {
-    return { allowed: false, reason: "URL is empty or invalid" };
-  }
-  let parsed;
-  try {
-    parsed = new URL(urlString);
-  } catch {
-    return { allowed: false, reason: "Invalid URL format" };
-  }
-  if (!ALLOWED_SCHEMES.includes(parsed.protocol)) {
-    return { allowed: false, reason: `Protocol '${parsed.protocol}' is not allowed` };
-  }
-  const hostname = parsed.hostname.toLowerCase();
-  for (const pattern of BLOCKED_HOST_PATTERNS) {
-    if (pattern.test(hostname)) {
-      return {
-        allowed: false,
-        reason: `Hostname '${hostname}' resolves to a blocked internal/private address`
-      };
-    }
-  }
-  if (parsed.username || parsed.password) {
-    return { allowed: false, reason: "URLs with embedded credentials are not allowed" };
-  }
-  const dangerousPaths = [
-    "/metadata",
-    "/meta-data",
-    "/latest/meta-data",
-    "/computeMetadata"
-  ];
-  const pathLower = parsed.pathname.toLowerCase();
-  for (const dangerous of dangerousPaths) {
-    if (pathLower.startsWith(dangerous)) {
-      return {
-        allowed: false,
-        reason: `Path '${parsed.pathname}' is blocked (cloud metadata access)`
-      };
-    }
-  }
-  return { allowed: true };
-}
-function validateAnthropicBaseUrl(urlString) {
-  const result = validateUrlForSSRF(urlString);
-  if (!result.allowed) {
-    return result;
-  }
-  let parsed;
-  try {
-    parsed = new URL(urlString);
-  } catch {
-    return { allowed: false, reason: "Invalid URL" };
-  }
-  if (parsed.protocol === "http:") {
-    console.warn("[SSRF Guard] Warning: Using HTTP instead of HTTPS for ANTHROPIC_BASE_URL");
-  }
-  return { allowed: true };
-}
-
 // src/config/models.ts
 var TIER_ENV_KEYS = {
   LOW: [
@@ -1030,17 +947,6 @@ function isNonClaudeProvider() {
   const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || "";
   if (modelId && !modelId.toLowerCase().includes("claude")) {
     return true;
-  }
-  const baseUrl = process.env.ANTHROPIC_BASE_URL || "";
-  if (baseUrl) {
-    const validation = validateAnthropicBaseUrl(baseUrl);
-    if (!validation.allowed) {
-      console.error(`[SSRF Guard] Rejecting ANTHROPIC_BASE_URL: ${validation.reason}`);
-      return true;
-    }
-    if (!baseUrl.includes("anthropic.com")) {
-      return true;
-    }
   }
   return false;
 }

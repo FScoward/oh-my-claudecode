@@ -1456,13 +1456,6 @@ var init_jsonc = __esm({
   }
 });
 
-// src/utils/ssrf-guard.ts
-var init_ssrf_guard = __esm({
-  "src/utils/ssrf-guard.ts"() {
-    "use strict";
-  }
-});
-
 // src/config/models.ts
 function resolveTierModelFromEnv(tier) {
   for (const key of TIER_ENV_KEYS[tier]) {
@@ -1501,7 +1494,6 @@ var TIER_ENV_KEYS, CLAUDE_FAMILY_DEFAULTS, BUILTIN_TIER_MODEL_DEFAULTS, CLAUDE_F
 var init_models = __esm({
   "src/config/models.ts"() {
     "use strict";
-    init_ssrf_guard();
     TIER_ENV_KEYS = {
       LOW: [
         "OMC_MODEL_LOW",

@@ -1,4 +1,3 @@
-import { validateAnthropicBaseUrl } from '../utils/ssrf-guard.js';
 const TIER_ENV_KEYS = {
     LOW: [
         'OMC_MODEL_LOW',
@@ -188,7 +187,6 @@ export function isVertexAI() {
  * - Running on AWS Bedrock — needs full Bedrock model IDs, not bare tier names
  * - Running on Google Vertex AI — needs full Vertex model paths
  * - A non-Claude model ID is detected (CC Switch, LiteLLM, etc.)
- * - A custom ANTHROPIC_BASE_URL points to a non-Anthropic endpoint
  */
 export function isNonClaudeProvider() {
     // Explicit opt-in: user has already set forceInherit via env var
@@ -209,20 +207,6 @@ export function isNonClaudeProvider() {
     const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || '';
     if (modelId && !modelId.toLowerCase().includes('claude')) {
         return true;
-    }
-    // Custom base URL suggests a proxy/gateway (CC Switch, LiteLLM, OneAPI, etc.)
-    const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
-    if (baseUrl) {
-        // Validate URL for SSRF protection
-        const validation = validateAnthropicBaseUrl(baseUrl);
-        if (!validation.allowed) {
-            console.error(`[SSRF Guard] Rejecting ANTHROPIC_BASE_URL: ${validation.reason}`);
-            // Treat invalid URLs as non-Claude to prevent potential SSRF
-            return true;
-        }
-        if (!baseUrl.includes('anthropic.com')) {
-            return true;
-        }
     }
     return false;
 }
