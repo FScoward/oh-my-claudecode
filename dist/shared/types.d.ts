@@ -60,6 +60,9 @@ export interface PluginConfig {
         scientist?: {
             model?: string;
         };
+        tracer?: {
+            model?: string;
+        };
         gitMaster?: {
             model?: string;
         };

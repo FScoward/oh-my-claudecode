@@ -110,6 +110,12 @@ export interface SessionHealth {
   health: 'healthy' | 'warning' | 'critical';
 }
 
+export interface LastRequestTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens?: number;
+}
+
 export interface TranscriptData {
   agents: ActiveAgent[];
   todos: TodoItem[];
@@ -117,6 +123,8 @@ export interface TranscriptData {
   lastActivatedSkill?: SkillInvocation;
   pendingPermission?: PendingPermission;
   thinkingState?: ThinkingState;
+  lastRequestTokenUsage?: LastRequestTokenUsage;
+  sessionTotalTokens?: number;
   toolCallCount: number;
   agentCallCount: number;
   skillCallCount: number;
@@ -321,6 +329,12 @@ export interface HudRenderContext {
   /** Session health metrics */
   sessionHealth: SessionHealth | null;
 
+  /** Last-request token usage parsed from transcript message.usage */
+  lastRequestTokenUsage?: LastRequestTokenUsage | null;
+
+  /** Session token total (input + output) when transcript parsing is reliable enough to calculate it */
+  sessionTotalTokens?: number | null;
+
   /** Installed OMC version (e.g. "4.1.10") */
   omcVersion: string | null;
 
@@ -420,7 +434,7 @@ export interface HudElementConfig {
   sessionHealth: boolean;     // Show session health/duration
   showSessionDuration?: boolean;  // Show session:19m duration display (default: true if sessionHealth is true)
   showHealthIndicator?: boolean;  // Show 🟢/🟡/🔴 health indicator (default: true if sessionHealth is true)
-  showTokens?: boolean;           // Show token count like 79.3k (default: true if sessionHealth is true)
+  showTokens?: boolean;           // Show last-request token usage when enabled (tok:i1.2k/o340)
   useBars: boolean;           // Show visual progress bars instead of/alongside percentages
   showCallCounts?: boolean;   // Show tool/agent/skill call counts on the right of the status line (default: true)
   maxOutputLines: number;     // Max total output lines to prevent input field shrinkage
@@ -497,6 +511,7 @@ export const DEFAULT_HUD_CONFIG: HudConfig = {
     missionBoard: false,  // Opt-in mission board for whole-run progress tracking
     promptTime: true,  // Show last prompt time by default
     sessionHealth: true,
+    showTokens: false,
     useBars: false,  // Disabled by default for backwards compatibility
     showCallCounts: true,  // Show tool/agent/skill call counts by default (Issue #710)
     maxOutputLines: 4,
@@ -548,6 +563,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     missionBoard: false,
     promptTime: false,
     sessionHealth: false,
+    showTokens: false,
     useBars: false,
     showCallCounts: false,
     maxOutputLines: 2,
@@ -582,6 +598,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     missionBoard: false,
     promptTime: true,
     sessionHealth: true,
+    showTokens: false,
     useBars: true,
     showCallCounts: true,
     maxOutputLines: 4,
@@ -616,6 +633,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     missionBoard: false,
     promptTime: true,
     sessionHealth: true,
+    showTokens: false,
     useBars: true,
     showCallCounts: true,
     maxOutputLines: 12,
@@ -650,6 +668,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     missionBoard: false,
     promptTime: true,
     sessionHealth: true,
+    showTokens: false,
     useBars: false,
     showCallCounts: true,
     maxOutputLines: 4,
@@ -684,6 +703,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     missionBoard: false,
     promptTime: true,
     sessionHealth: true,
+    showTokens: false,
     useBars: true,
     showCallCounts: true,
     maxOutputLines: 6,

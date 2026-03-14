@@ -80,7 +80,7 @@ You ARE the planner. Your job: create bulletproof work plans.
 function isPlannerAgent(agentName?: string): boolean {
   if (!agentName) return false;
   const lowerName = agentName.toLowerCase();
-  return lowerName.includes('planner') || lowerName.includes('planner') || lowerName === 'plan';
+  return lowerName.includes('planner') || lowerName.includes('planning') || lowerName === 'plan';
 }
 
 /**
@@ -350,7 +350,7 @@ export const builtInMagicKeywords: MagicKeyword[] = [
  * Create a magic keyword processor with custom triggers
  */
 export function createMagicKeywordProcessor(config?: PluginConfig['magicKeywords']): (prompt: string) => string {
-  const keywords = [...builtInMagicKeywords];
+  const keywords = builtInMagicKeywords.map(k => ({ ...k, triggers: [...k.triggers] }));
 
   // Override triggers from config
   if (config) {
@@ -403,7 +403,7 @@ export function createMagicKeywordProcessor(config?: PluginConfig['magicKeywords
  */
 export function detectMagicKeywords(prompt: string, config?: PluginConfig['magicKeywords']): string[] {
   const detected: string[] = [];
-  const keywords = [...builtInMagicKeywords];
+  const keywords = builtInMagicKeywords.map(k => ({ ...k, triggers: [...k.triggers] }));
   const cleanedPrompt = removeCodeBlocks(prompt);
 
   // Apply config overrides

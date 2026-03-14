@@ -65,6 +65,13 @@ export async function parseTranscript(transcriptPath, options) {
     const agentMap = new Map();
     const backgroundAgentMap = new Map();
     const latestTodos = [];
+    const sessionTokenTotals = {
+        inputTokens: 0,
+        outputTokens: 0,
+        seenUsage: false,
+    };
+    let sessionTotalsReliable = false;
+    const observedSessionIds = new Set();
     try {
         // Check file size to determine parsing strategy
         const stat = statSync(transcriptPath);
@@ -77,7 +84,7 @@ export async function parseTranscript(transcriptPath, options) {
                     continue;
                 try {
                     const entry = JSON.parse(line);
-                    processEntry(entry, agentMap, latestTodos, result, MAX_AGENT_MAP_SIZE, backgroundAgentMap);
+                    processEntry(entry, agentMap, latestTodos, result, MAX_AGENT_MAP_SIZE, backgroundAgentMap, sessionTokenTotals, observedSessionIds);
                 }
                 catch {
                     // Skip malformed lines
@@ -96,12 +103,13 @@ export async function parseTranscript(transcriptPath, options) {
                     continue;
                 try {
                     const entry = JSON.parse(line);
-                    processEntry(entry, agentMap, latestTodos, result, MAX_AGENT_MAP_SIZE, backgroundAgentMap);
+                    processEntry(entry, agentMap, latestTodos, result, MAX_AGENT_MAP_SIZE, backgroundAgentMap, sessionTokenTotals, observedSessionIds);
                 }
                 catch {
                     // Skip malformed lines
                 }
             }
+            sessionTotalsReliable = observedSessionIds.size <= 1;
         }
     }
     catch {
@@ -142,6 +150,9 @@ export async function parseTranscript(transcriptPath, options) {
         ...completed.slice(-(10 - running.length)),
     ].slice(0, 10);
     result.todos = latestTodos;
+    if (sessionTotalsReliable && sessionTokenTotals.seenUsage) {
+        result.sessionTotalTokens = sessionTokenTotals.inputTokens + sessionTokenTotals.outputTokens;
+    }
     return result;
 }
 /**
@@ -221,8 +232,20 @@ function extractTargetSummary(input, toolName) {
 /**
  * Process a single transcript entry
  */
-function processEntry(entry, agentMap, latestTodos, result, maxAgentMapSize = 50, backgroundAgentMap) {
+function processEntry(entry, agentMap, latestTodos, result, maxAgentMapSize = 50, backgroundAgentMap, sessionTokenTotals, observedSessionIds) {
     const timestamp = entry.timestamp ? new Date(entry.timestamp) : new Date();
+    if (entry.sessionId) {
+        observedSessionIds?.add(entry.sessionId);
+    }
+    const usage = extractLastRequestTokenUsage(entry.message?.usage);
+    if (usage) {
+        result.lastRequestTokenUsage = usage;
+        if (sessionTokenTotals) {
+            sessionTokenTotals.inputTokens += usage.inputTokens;
+            sessionTokenTotals.outputTokens += usage.outputTokens;
+            sessionTokenTotals.seenUsage = true;
+        }
+    }
     // Set session start time from first entry
     if (!result.sessionStart && entry.timestamp) {
         result.sessionStart = timestamp;
@@ -350,6 +373,31 @@ function processEntry(entry, agentMap, latestTodos, result, maxAgentMapSize = 50
             }
         }
     }
+}
+function extractLastRequestTokenUsage(usage) {
+    if (!usage)
+        return null;
+    const inputTokens = getNumericUsageValue(usage.input_tokens);
+    const outputTokens = getNumericUsageValue(usage.output_tokens);
+    const reasoningTokens = getNumericUsageValue(usage.reasoning_tokens
+        ?? usage.output_tokens_details?.reasoning_tokens
+        ?? usage.output_tokens_details?.reasoningTokens
+        ?? usage.completion_tokens_details?.reasoning_tokens
+        ?? usage.completion_tokens_details?.reasoningTokens);
+    if (inputTokens == null && outputTokens == null) {
+        return null;
+    }
+    const normalized = {
+        inputTokens: Math.max(0, Math.round(inputTokens ?? 0)),
+        outputTokens: Math.max(0, Math.round(outputTokens ?? 0)),
+    };
+    if (reasoningTokens != null && reasoningTokens > 0) {
+        normalized.reasoningTokens = Math.max(0, Math.round(reasoningTokens));
+    }
+    return normalized;
+}
+function getNumericUsageValue(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 // ============================================================================
 // Utility Functions

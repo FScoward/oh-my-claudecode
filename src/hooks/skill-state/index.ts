@@ -65,6 +65,10 @@ const PROTECTION_CONFIGS: Record<SkillProtectionLevel, SkillStateConfig> = {
  * - 'light': Quick utility skills
  * - 'medium': Review/planning skills that run multiple agents
  * - 'heavy': Long-running skills (deepinit, omc-setup)
+ *
+ * IMPORTANT: When adding a new OMC skill, register it here with the
+ * appropriate protection level. Unregistered skills default to 'none'
+ * (no stop-hook protection) to avoid blocking external plugin skills.
  */
 const SKILL_PROTECTION: Record<string, SkillProtectionLevel> = {
   // === Already have mode state → no additional protection ===
@@ -86,21 +90,27 @@ const SKILL_PROTECTION: Record<string, SkillProtectionLevel> = {
 
   // === Light protection (simple shortcuts, 3 reinforcements) ===
   skill: 'light',
+  ask: 'light',
   'configure-notifications': 'light',
 
   // === Medium protection (review/planning, 5 reinforcements) ===
+  'omc-plan': 'medium',
   plan: 'medium',
   ralplan: 'none',  // Has first-class checkRalplan() enforcement; no skill-active needed
   'deep-interview': 'heavy',
   review: 'medium',
   'external-context': 'medium',
+  'ai-slop-cleaner': 'medium',
   sciomc: 'medium',
   learner: 'medium',
   'omc-setup': 'medium',
+  setup: 'medium',        // alias for omc-setup
   'mcp-setup': 'medium',
   'project-session-manager': 'medium',
+  psm: 'medium',          // alias for project-session-manager
   'writer-memory': 'medium',
   'ralph-init': 'medium',
+  release: 'medium',
   ccg: 'medium',
 
   // === Heavy protection (long-running, 10 reinforcements) ===
@@ -113,11 +123,18 @@ const SKILL_PROTECTION: Record<string, SkillProtectionLevel> = {
 
 /**
  * Get the protection level for a skill.
- * Unknown skills default to 'light' for safety.
+ *
+ * Only skills explicitly registered in SKILL_PROTECTION receive stop-hook
+ * protection. Unregistered skills (including external plugin skills like
+ * Anthropic's example-skills, document-skills, superpowers, data, etc.)
+ * default to 'none' so the Stop hook does not block them.
+ *
+ * Note: bridge.ts strips the 'oh-my-claudecode:' prefix before calling
+ * this function, so skill names arrive in bare form (e.g., 'plan', 'xlsx').
  */
 export function getSkillProtection(skillName: string): SkillProtectionLevel {
   const normalized = skillName.toLowerCase().replace(/^oh-my-claudecode:/, '');
-  return SKILL_PROTECTION[normalized] ?? 'light';
+  return SKILL_PROTECTION[normalized] ?? 'none';
 }
 
 /**

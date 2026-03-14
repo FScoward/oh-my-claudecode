@@ -1390,19 +1390,18 @@ describe('Skill-active state lifecycle', () => {
     afterEach(() => {
         rmSync(testDir, { recursive: true, force: true });
     });
-    it('clearSkillActiveState removes active skill state', async () => {
+    it('clearSkillActiveState is a no-op for legacy/external skills without protection', async () => {
         const { writeSkillActiveState, readSkillActiveState, clearSkillActiveState } = await import('../hooks/skill-state/index.js');
         const sessionId = 'test-skill-clear-session';
-        writeSkillActiveState(testDir, 'code-review', sessionId);
-        // Verify state exists
+        const written = writeSkillActiveState(testDir, 'code-review', sessionId);
+        expect(written).toBeNull();
+        // Verify legacy/external skill state is not created
         const stateBefore = readSkillActiveState(testDir, sessionId);
-        expect(stateBefore).not.toBeNull();
-        expect(stateBefore?.active).toBe(true);
-        expect(stateBefore?.skill_name).toBe('code-review');
-        // Clear the state (as bridge.ts processPostToolUse does on Skill completion)
+        expect(stateBefore).toBeNull();
+        // Clear remains safe when no state exists
         const cleared = clearSkillActiveState(testDir, sessionId);
         expect(cleared).toBe(true);
-        // Verify state is cleared
+        // Verify state remains absent
         const stateAfter = readSkillActiveState(testDir, sessionId);
         expect(stateAfter).toBeNull();
     });

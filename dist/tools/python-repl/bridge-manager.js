@@ -366,6 +366,9 @@ export async function spawnBridgeServer(sessionId, projectDir) {
         }
         effectiveSocketPath = `tcp:${port}`;
     }
+    if (proc.pid === undefined) {
+        throw new Error('Bridge process failed to spawn: pid is undefined');
+    }
     const meta = {
         pid: proc.pid,
         socketPath: effectiveSocketPath,

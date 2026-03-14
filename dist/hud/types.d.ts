@@ -81,6 +81,11 @@ export interface SessionHealth {
     messageCount: number;
     health: 'healthy' | 'warning' | 'critical';
 }
+export interface LastRequestTokenUsage {
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens?: number;
+}
 export interface TranscriptData {
     agents: ActiveAgent[];
     todos: TodoItem[];
@@ -88,6 +93,8 @@ export interface TranscriptData {
     lastActivatedSkill?: SkillInvocation;
     pendingPermission?: PendingPermission;
     thinkingState?: ThinkingState;
+    lastRequestTokenUsage?: LastRequestTokenUsage;
+    sessionTotalTokens?: number;
     toolCallCount: number;
     agentCallCount: number;
     skillCallCount: number;
@@ -243,6 +250,10 @@ export interface HudRenderContext {
     thinkingState: ThinkingState | null;
     /** Session health metrics */
     sessionHealth: SessionHealth | null;
+    /** Last-request token usage parsed from transcript message.usage */
+    lastRequestTokenUsage?: LastRequestTokenUsage | null;
+    /** Session token total (input + output) when transcript parsing is reliable enough to calculate it */
+    sessionTotalTokens?: number | null;
     /** Installed OMC version (e.g. "4.1.10") */
     omcVersion: string | null;
     /** Latest available version from npm registry (null if up to date or unknown) */

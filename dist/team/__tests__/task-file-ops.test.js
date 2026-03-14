@@ -82,7 +82,7 @@ describe('updateTask', () => {
         updateTask(TEST_TEAM, '1', { status: 'in_progress' }, { useLock: false, cwd: TEST_CWD });
         expect(readTask(TEST_TEAM, '1', { cwd: TEST_CWD })?.status).toBe('in_progress');
     });
-    it('falls back gracefully when lock is held by another caller', () => {
+    it('throws when lock is held by another caller', () => {
         const task = {
             id: '1', subject: 'Test', description: 'Desc', status: 'pending',
             owner: 'w1', blocks: [], blockedBy: [],
@@ -91,9 +91,11 @@ describe('updateTask', () => {
         // Hold the lock
         const handle = acquireTaskLock(TEST_TEAM, '1', { cwd: TEST_CWD });
         expect(handle).not.toBeNull();
-        // updateTask should still succeed (fallback without lock)
-        updateTask(TEST_TEAM, '1', { status: 'in_progress' }, { cwd: TEST_CWD });
-        expect(readTask(TEST_TEAM, '1', { cwd: TEST_CWD })?.status).toBe('in_progress');
+        // updateTask should throw instead of silently writing without lock
+        expect(() => updateTask(TEST_TEAM, '1', { status: 'in_progress' }, { cwd: TEST_CWD }))
+            .toThrow('Cannot acquire lock');
+        // Task should remain unchanged
+        expect(readTask(TEST_TEAM, '1', { cwd: TEST_CWD })?.status).toBe('pending');
         releaseTaskLock(handle);
     });
 });

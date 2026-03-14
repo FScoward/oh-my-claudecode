@@ -20,7 +20,7 @@ describe('Cleanup Validation', () => {
         expect('detectDeprecatedKeywords' in keywordModule).toBe(false);
         expect('DEPRECATED_KEYWORD_PATTERNS' in keywordModule).toBe(false);
     });
-    it('PluginConfig.agents matches 18-agent registry + omc', async () => {
+    it('PluginConfig.agents matches 19-agent registry + omc', async () => {
         const { DEFAULT_CONFIG } = await import('../config/loader.js');
         const agentKeys = Object.keys(DEFAULT_CONFIG.agents || {});
         expect(agentKeys).toContain('omc');
@@ -29,6 +29,7 @@ describe('Cleanup Validation', () => {
         expect(agentKeys).toContain('executor');
         expect(agentKeys).toContain('documentSpecialist');
         expect(agentKeys).toContain('critic');
+        expect(agentKeys).toContain('tracer');
         // Stale entries should NOT be present
         expect(agentKeys).not.toContain('frontendEngineer');
         expect(agentKeys).not.toContain('documentWriter');
@@ -39,10 +40,11 @@ describe('Cleanup Validation', () => {
         expect(agentKeys).not.toContain('deepExecutor');
         expect(agentKeys).not.toContain('buildFixer');
     });
-    it('agent registry has 18 agents', async () => {
+    it('agent registry has 19 agents', async () => {
         const { getAgentDefinitions } = await import('../agents/definitions.js');
         const defs = getAgentDefinitions();
-        expect(Object.keys(defs)).toHaveLength(18);
+        expect(Object.keys(defs)).toHaveLength(19);
+        expect(defs).toHaveProperty('tracer');
     });
 });
 //# sourceMappingURL=cleanup-validation.test.js.map

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { LSP_SERVERS, getServerForFile, getServerForLanguage } from '../tools/lsp/servers.js';
 describe('LSP Server Configurations', () => {
     const serverKeys = Object.keys(LSP_SERVERS);
-    it('should have 18 configured servers', () => {
-        expect(serverKeys).toHaveLength(18);
+    it('should have 19 configured servers', () => {
+        expect(serverKeys).toHaveLength(19);
     });
     it.each(serverKeys)('server "%s" should have valid config', (key) => {
         const config = LSP_SERVERS[key];
@@ -52,6 +52,10 @@ describe('getServerForFile', () => {
         ['Program.cs', 'OmniSharp'],
         ['main.dart', 'Dart Analysis Server'],
         ['view.erb', 'Ruby Language Server (Solargraph)'],
+        ['counter.v', 'Verible Verilog Language Server'],
+        ['defs.vh', 'Verible Verilog Language Server'],
+        ['top.sv', 'Verible Verilog Language Server'],
+        ['pkg.svh', 'Verible Verilog Language Server'],
     ];
     it.each(cases)('should resolve "%s" to "%s"', (file, expectedName) => {
         const server = getServerForFile(file);
@@ -99,6 +103,10 @@ describe('getServerForLanguage', () => {
         ['cs', 'OmniSharp'],
         ['dart', 'Dart Analysis Server'],
         ['flutter', 'Dart Analysis Server'],
+        ['verilog', 'Verible Verilog Language Server'],
+        ['systemverilog', 'Verible Verilog Language Server'],
+        ['sv', 'Verible Verilog Language Server'],
+        ['v', 'Verible Verilog Language Server'],
     ];
     it.each(cases)('should resolve language "%s" to "%s"', (lang, expectedName) => {
         const server = getServerForLanguage(lang);

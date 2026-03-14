@@ -6,7 +6,8 @@
  */
 
 import { spawnSync } from 'child_process';
-import { extname } from 'path';
+import { existsSync } from 'fs';
+import { extname, isAbsolute } from 'path';
 
 export interface LspServerConfig {
   name: string;
@@ -146,6 +147,13 @@ export const LSP_SERVERS: Record<string, LspServerConfig> = {
     args: [],
     extensions: ['.swift'],
     installHint: 'Install Swift from https://swift.org/download or via Xcode'
+  },
+  verilog: {
+    name: 'Verible Verilog Language Server',
+    command: 'verible-verilog-ls',
+    args: ['--rules_config_search'],
+    extensions: ['.v', '.vh', '.sv', '.svh'],
+    installHint: 'Download from https://github.com/chipsalliance/verible/releases'
   }
 };
 
@@ -153,6 +161,7 @@ export const LSP_SERVERS: Record<string, LspServerConfig> = {
  * Check if a command exists in PATH
  */
 export function commandExists(command: string): boolean {
+  if (isAbsolute(command)) return existsSync(command);
   const checkCommand = process.platform === 'win32' ? 'where' : 'which';
   const result = spawnSync(checkCommand, [command], { stdio: 'ignore' });
   return result.status === 0;
@@ -228,7 +237,11 @@ export function getServerForLanguage(language: string): LspServerConfig | null {
     'cs': 'csharp',
     'dart': 'dart',
     'flutter': 'dart',
-    'swift': 'swift'
+    'swift': 'swift',
+    'verilog': 'verilog',
+    'systemverilog': 'verilog',
+    'sv': 'verilog',
+    'v': 'verilog'
   };
 
   const serverKey = langMap[language.toLowerCase()];

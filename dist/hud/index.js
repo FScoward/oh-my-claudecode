@@ -175,6 +175,8 @@ async function main(watchMode = false, skipInit = false) {
             pendingPermission: transcriptData.pendingPermission || null,
             thinkingState: transcriptData.thinkingState || null,
             sessionHealth: await calculateSessionHealth(sessionStart, getContextPercent(stdin)),
+            lastRequestTokenUsage: transcriptData.lastRequestTokenUsage || null,
+            sessionTotalTokens: transcriptData.sessionTotalTokens ?? null,
             omcVersion,
             updateAvailable,
             toolCallCount: transcriptData.toolCallCount,

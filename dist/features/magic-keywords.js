@@ -75,7 +75,7 @@ function isPlannerAgent(agentName) {
     if (!agentName)
         return false;
     const lowerName = agentName.toLowerCase();
-    return lowerName.includes('planner') || lowerName.includes('planner') || lowerName === 'plan';
+    return lowerName.includes('planner') || lowerName.includes('planning') || lowerName === 'plan';
 }
 /**
  * Generates the ultrawork message based on agent context.
@@ -326,7 +326,7 @@ export const builtInMagicKeywords = [
  * Create a magic keyword processor with custom triggers
  */
 export function createMagicKeywordProcessor(config) {
-    const keywords = [...builtInMagicKeywords];
+    const keywords = builtInMagicKeywords.map(k => ({ ...k, triggers: [...k.triggers] }));
     // Override triggers from config
     if (config) {
         if (config.ultrawork) {
@@ -373,7 +373,7 @@ export function createMagicKeywordProcessor(config) {
  */
 export function detectMagicKeywords(prompt, config) {
     const detected = [];
-    const keywords = [...builtInMagicKeywords];
+    const keywords = builtInMagicKeywords.map(k => ({ ...k, triggers: [...k.triggers] }));
     const cleanedPrompt = removeCodeBlocks(prompt);
     // Apply config overrides
     if (config) {

@@ -6,10 +6,10 @@ describe('Builtin Skills', () => {
         clearSkillsCache();
     });
     describe('createBuiltinSkills()', () => {
-        it('should return correct number of skills (28 including aliases)', () => {
+        it('should return correct number of skills (29 including aliases)', () => {
             const skills = createBuiltinSkills();
-            // 28 entries: 27 canonical skills + 1 deprecated alias (psm)
-            expect(skills).toHaveLength(28);
+            // 29 entries: 28 canonical skills + 1 deprecated alias (psm)
+            expect(skills).toHaveLength(29);
         });
         it('should return an array of BuiltinSkill objects', () => {
             const skills = createBuiltinSkills();
@@ -77,6 +77,7 @@ describe('Builtin Skills', () => {
                 'setup',
                 'skill',
                 'team',
+                'trace',
                 'ultraqa',
                 'ultrawork',
                 'writer-memory',
@@ -102,6 +103,16 @@ describe('Builtin Skills', () => {
             const skill = getBuiltinSkill('ai-slop-cleaner');
             expect(skill).toBeDefined();
             expect(skill?.name).toBe('ai-slop-cleaner');
+        });
+        it('should retrieve the trace skill by name', () => {
+            const skill = getBuiltinSkill('trace');
+            expect(skill).toBeDefined();
+            expect(skill?.name).toBe('trace');
+            expect(skill?.template).toContain('Claude built-in team mode');
+            expect(skill?.template).toContain('3 tracer lanes by default');
+            expect(skill?.template).toContain('Ranked Hypotheses');
+            expect(skill?.template).toContain('trace_timeline');
+            expect(skill?.template).toContain('trace_summary');
         });
         it('should expose pipeline metadata for deep-interview handoff into omc-plan', () => {
             const skill = getBuiltinSkill('deep-interview');
@@ -174,7 +185,7 @@ describe('Builtin Skills', () => {
     describe('listBuiltinSkillNames()', () => {
         it('should return canonical skill names by default', () => {
             const names = listBuiltinSkillNames();
-            expect(names).toHaveLength(27);
+            expect(names).toHaveLength(28);
             expect(names).toContain('ai-slop-cleaner');
             expect(names).toContain('ask');
             expect(names).toContain('autopilot');
@@ -190,6 +201,7 @@ describe('Builtin Skills', () => {
             expect(names).toContain('hud');
             expect(names).toContain('omc-setup');
             expect(names).toContain('setup');
+            expect(names).toContain('trace');
             expect(names).not.toContain('swarm'); // removed in #1131
             expect(names).not.toContain('psm');
         });
@@ -202,8 +214,9 @@ describe('Builtin Skills', () => {
         it('should include aliases when explicitly requested', () => {
             const names = listBuiltinSkillNames({ includeAliases: true });
             // swarm alias removed in #1131, psm still exists
-            expect(names).toHaveLength(28);
+            expect(names).toHaveLength(29);
             expect(names).toContain('ai-slop-cleaner');
+            expect(names).toContain('trace');
             expect(names).not.toContain('swarm');
             expect(names).toContain('psm');
         });

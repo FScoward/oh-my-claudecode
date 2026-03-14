@@ -865,10 +865,8 @@ export async function assignTask(
   // Update task ownership under an exclusive lock to prevent concurrent double-claims
   type TaskSnapshot = { status: string; owner: string | null; assignedAt: string | undefined };
   let previousTaskState: TaskSnapshot | null = null;
-  let lockedTask: TeamTaskRecord | null = null;
   await withTaskLock(teamName, taskId, async () => {
     const t = await readJsonSafe<TeamTaskRecord>(taskFilePath);
-    lockedTask = t;
     previousTaskState = t ? {
       status: t.status,
       owner: t.owner,
@@ -892,12 +890,16 @@ export async function assignTask(
   // Send tmux trigger
   const notified = await notifyPaneWithRetry(sessionName, paneId, `new-task:${taskId}`);
   if (!notified) {
-    if (lockedTask && previousTaskState) {
-      const rollback = lockedTask as TeamTaskRecord;
-      rollback.status = (previousTaskState as TaskSnapshot).status as TeamTaskRecord['status'];
-      rollback.owner = (previousTaskState as TaskSnapshot).owner;
-      rollback.assignedAt = (previousTaskState as TaskSnapshot).assignedAt;
-      await writeJson(taskFilePath, rollback);
+    if (previousTaskState) {
+      await withTaskLock(teamName, taskId, async () => {
+        const t = await readJsonSafe<TeamTaskRecord>(taskFilePath);
+        if (t) {
+          t.status = (previousTaskState as TaskSnapshot).status as TeamTaskRecord['status'];
+          t.owner = (previousTaskState as TaskSnapshot).owner;
+          t.assignedAt = (previousTaskState as TaskSnapshot).assignedAt;
+          await writeJson(taskFilePath, t);
+        }
+      }, { cwd });
     }
     throw new Error(`worker_notify_failed:${targetWorkerName}:new-task:${taskId}`);
   }

@@ -5,8 +5,9 @@
  * All paths are validated to stay within the worktree boundary.
  */
 import { z } from 'zod';
-import { existsSync, readFileSync, unlinkSync } from 'fs';
-import { resolveStatePath, ensureOmcDir, validateWorkingDirectory, resolveSessionStatePath, ensureSessionStateDir, listSessionIds, validateSessionId, } from '../lib/worktree-paths.js';
+import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { resolveStatePath, ensureOmcDir, validateWorkingDirectory, resolveSessionStatePath, ensureSessionStateDir, listSessionIds, validateSessionId, getOmcRoot, } from '../lib/worktree-paths.js';
 import { atomicWriteJsonSync } from '../lib/atomic-write.js';
 import { validatePayload } from '../lib/payload-limits.js';
 import { isModeActive, getActiveModes, getAllModeStatuses, clearModeState, getStateFilePath, MODE_CONFIGS, getActiveSessionsForMode } from '../hooks/mode-registry/index.js';
@@ -23,6 +24,86 @@ const STATE_TOOL_MODES = [
 ];
 const EXTRA_STATE_ONLY_MODES = ['ralplan', 'omc-teams', 'deep-interview'];
 const CANCEL_SIGNAL_TTL_MS = 30_000;
+function readTeamNamesFromStateFile(statePath) {
+    if (!existsSync(statePath))
+        return [];
+    try {
+        const raw = JSON.parse(readFileSync(statePath, 'utf-8'));
+        const teamName = typeof raw.team_name === 'string'
+            ? raw.team_name.trim()
+            : typeof raw.teamName === 'string'
+                ? raw.teamName.trim()
+                : '';
+        return teamName ? [teamName] : [];
+    }
+    catch {
+        return [];
+    }
+}
+function pruneMissionBoardTeams(root, teamNames) {
+    const missionStatePath = join(getOmcRoot(root), 'state', 'mission-state.json');
+    if (!existsSync(missionStatePath))
+        return 0;
+    try {
+        const parsed = JSON.parse(readFileSync(missionStatePath, 'utf-8'));
+        if (!Array.isArray(parsed.missions))
+            return 0;
+        const shouldRemoveAll = teamNames == null;
+        const teamNameSet = new Set(teamNames ?? []);
+        const remainingMissions = parsed.missions.filter((mission) => {
+            if (mission.source !== 'team')
+                return true;
+            if (shouldRemoveAll)
+                return false;
+            const missionTeamName = typeof mission.teamName === 'string'
+                ? mission.teamName.trim()
+                : typeof mission.name === 'string'
+                    ? mission.name.trim()
+                    : '';
+            return !missionTeamName || !teamNameSet.has(missionTeamName);
+        });
+        const removed = parsed.missions.length - remainingMissions.length;
+        if (removed > 0) {
+            writeFileSync(missionStatePath, JSON.stringify({
+                ...parsed,
+                updatedAt: new Date().toISOString(),
+                missions: remainingMissions,
+            }, null, 2));
+        }
+        return removed;
+    }
+    catch {
+        return 0;
+    }
+}
+function cleanupTeamRuntimeState(root, teamNames) {
+    const teamStateRoot = join(getOmcRoot(root), 'state', 'team');
+    if (!existsSync(teamStateRoot))
+        return 0;
+    const shouldRemoveAll = teamNames == null;
+    let removed = 0;
+    if (shouldRemoveAll) {
+        try {
+            rmSync(teamStateRoot, { recursive: true, force: true });
+            return 1;
+        }
+        catch {
+            return 0;
+        }
+    }
+    for (const teamName of teamNames ?? []) {
+        if (!teamName)
+            continue;
+        try {
+            rmSync(join(teamStateRoot, teamName), { recursive: true, force: true });
+            removed += 1;
+        }
+        catch {
+            // best effort
+        }
+    }
+    return removed;
+}
 /**
  * Get the state file path for any mode (including swarm and ralplan).
  *
@@ -273,9 +354,19 @@ export const stateClearTool = {
         try {
             const root = validateWorkingDirectory(workingDirectory);
             const sessionId = session_id;
+            const cleanedTeamNames = new Set();
+            const collectTeamNamesForCleanup = (statePath) => {
+                if (mode !== 'team')
+                    return;
+                for (const teamName of readTeamNamesFromStateFile(statePath)) {
+                    cleanedTeamNames.add(teamName);
+                }
+            };
             // If session_id provided, clear only session-specific state
             if (sessionId) {
                 validateSessionId(sessionId);
+                collectTeamNamesForCleanup(resolveSessionStatePath('team', sessionId, root));
+                collectTeamNamesForCleanup(getStateFilePath(root, 'team', sessionId));
                 const now = Date.now();
                 const cancelSignalPath = resolveSessionStatePath('cancel-signal', sessionId, root);
                 atomicWriteJsonSync(cancelSignalPath, {
@@ -306,11 +397,24 @@ export const stateClearTool = {
                         // Best-effort ghost cleanup — ignore errors
                     }
                     const ghostNote = ghostCleaned ? ' (ghost legacy file also removed)' : '';
+                    const runtimeCleanupNote = (() => {
+                        if (mode !== 'team')
+                            return '';
+                        const teamNames = [...cleanedTeamNames];
+                        const removedRoots = cleanupTeamRuntimeState(root, teamNames);
+                        const prunedMissions = pruneMissionBoardTeams(root, teamNames);
+                        const details = [];
+                        if (removedRoots > 0)
+                            details.push(`removed ${removedRoots} team runtime root(s)`);
+                        if (prunedMissions > 0)
+                            details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
+                        return details.length > 0 ? ` (${details.join(', ')})` : '';
+                    })();
                     if (success) {
                         return {
                             content: [{
                                     type: 'text',
-                                    text: `Successfully cleared state for mode: ${mode} in session: ${sessionId}${ghostNote}`
+                                    text: `Successfully cleared state for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
                                 }]
                         };
                     }
@@ -318,7 +422,7 @@ export const stateClearTool = {
                         return {
                             content: [{
                                     type: 'text',
-                                    text: `Warning: Some files could not be removed for mode: ${mode} in session: ${sessionId}${ghostNote}`
+                                    text: `Warning: Some files could not be removed for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
                                 }]
                         };
                     }
@@ -345,16 +449,32 @@ export const stateClearTool = {
                     // Best-effort ghost cleanup
                 }
                 const ghostNote = ghostCleaned ? ' (ghost legacy file also removed)' : '';
+                const runtimeCleanupNote = (() => {
+                    if (mode !== 'team')
+                        return '';
+                    const teamNames = [...cleanedTeamNames];
+                    const removedRoots = cleanupTeamRuntimeState(root, teamNames);
+                    const prunedMissions = pruneMissionBoardTeams(root, teamNames);
+                    const details = [];
+                    if (removedRoots > 0)
+                        details.push(`removed ${removedRoots} team runtime root(s)`);
+                    if (prunedMissions > 0)
+                        details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
+                    return details.length > 0 ? ` (${details.join(', ')})` : '';
+                })();
                 return {
                     content: [{
                             type: 'text',
-                            text: `Successfully cleared state for mode: ${mode} in session: ${sessionId}${ghostNote}`
+                            text: `Successfully cleared state for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
                         }]
                 };
             }
             // No session_id: clear from all locations (legacy + all sessions)
             let clearedCount = 0;
             const errors = [];
+            if (mode === 'team') {
+                collectTeamNamesForCleanup(getStateFilePath(root, 'team'));
+            }
             // Clear legacy path
             if (MODE_CONFIGS[mode]) {
                 // Only clear if state file exists - avoid false counts for missing files
@@ -383,6 +503,9 @@ export const stateClearTool = {
             // Clear all session-scoped state files
             const sessionIds = listSessionIds(root);
             for (const sid of sessionIds) {
+                if (mode === 'team') {
+                    collectTeamNamesForCleanup(resolveSessionStatePath('team', sid, root));
+                }
                 if (MODE_CONFIGS[mode]) {
                     // Only clear if state file exists - avoid false counts for missing files
                     const sessionStatePath = getStateFilePath(root, mode, sid);
@@ -408,7 +531,15 @@ export const stateClearTool = {
                     }
                 }
             }
-            if (clearedCount === 0 && errors.length === 0) {
+            let removedTeamRoots = 0;
+            let prunedMissionEntries = 0;
+            if (mode === 'team') {
+                const teamNames = [...cleanedTeamNames];
+                const removeSelector = teamNames.length > 0 ? teamNames : undefined;
+                removedTeamRoots = cleanupTeamRuntimeState(root, removeSelector);
+                prunedMissionEntries = pruneMissionBoardTeams(root, removeSelector);
+            }
+            if (clearedCount === 0 && errors.length === 0 && removedTeamRoots === 0 && prunedMissionEntries === 0) {
                 return {
                     content: [{
                             type: 'text',
@@ -419,6 +550,14 @@ export const stateClearTool = {
             let message = `Cleared state for mode: ${mode}\n- Locations cleared: ${clearedCount}`;
             if (errors.length > 0) {
                 message += `\n- Errors: ${errors.join(', ')}`;
+            }
+            if (mode === 'team') {
+                if (removedTeamRoots > 0) {
+                    message += `\n- Team runtime roots removed: ${removedTeamRoots}`;
+                }
+                if (prunedMissionEntries > 0) {
+                    message += `\n- HUD mission entries pruned: ${prunedMissionEntries}`;
+                }
             }
             message += '\nWARNING: No session_id provided. Cleared legacy plus all session-scoped state; this is a broad operation that may affect other sessions.';
             return {

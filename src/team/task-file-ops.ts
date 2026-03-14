@@ -300,13 +300,7 @@ export function updateTask(
 
   const handle = acquireTaskLock(teamName, taskId, { cwd: opts?.cwd });
   if (!handle) {
-    // Fallback: another worker holds the lock — proceed without lock + warn
-    // This maintains backward compatibility while logging the degradation
-    if (typeof process !== 'undefined' && process.stderr) {
-      process.stderr.write(`[task-file-ops] WARN: could not acquire lock for task ${taskId}, updating without lock\n`);
-    }
-    doUpdate();
-    return;
+    throw new Error(`Cannot acquire lock for task ${taskId}: another process holds the lock`);
   }
 
   try {

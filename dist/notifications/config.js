@@ -665,6 +665,13 @@ function parseDiscordUserIds(envValue, configValue) {
     }
     return [];
 }
+/** Parse an integer from a string, returning undefined for invalid/empty input. */
+function parseIntSafe(value) {
+    if (value == null || value === "")
+        return undefined;
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
 /**
  * Get reply injection configuration.
  *
@@ -708,9 +715,9 @@ export function getReplyConfig() {
     }
     return {
         enabled: true,
-        pollIntervalMs: parseInt(process.env.OMC_REPLY_POLL_INTERVAL_MS || "") || replyRaw?.pollIntervalMs || 3000,
-        maxMessageLength: replyRaw?.maxMessageLength || 500,
-        rateLimitPerMinute: parseInt(process.env.OMC_REPLY_RATE_LIMIT || "") || replyRaw?.rateLimitPerMinute || 10,
+        pollIntervalMs: parseIntSafe(process.env.OMC_REPLY_POLL_INTERVAL_MS) ?? replyRaw?.pollIntervalMs ?? 3000,
+        maxMessageLength: replyRaw?.maxMessageLength ?? 500,
+        rateLimitPerMinute: parseIntSafe(process.env.OMC_REPLY_RATE_LIMIT) ?? replyRaw?.rateLimitPerMinute ?? 10,
         includePrefix: process.env.OMC_REPLY_INCLUDE_PREFIX !== "false" && (replyRaw?.includePrefix !== false),
         authorizedDiscordUserIds,
     };

@@ -79,6 +79,12 @@ function getLaunchWords(config) {
         return [config.launchBinary, ...(config.launchArgs ?? [])];
     }
     if (config.launchCmd) {
+        if (config.launchCmd.trim().length === 0) {
+            throw new Error('Invalid launchCmd: value cannot be empty');
+        }
+        if (/[;&|`$()<>\n\r\t\0"\\]/.test(config.launchCmd)) {
+            throw new Error('Invalid launchCmd: contains dangerous shell metacharacters');
+        }
         return [config.launchCmd];
     }
     throw new Error('Missing worker launch command. Provide launchBinary or launchCmd.');
@@ -128,15 +134,16 @@ export function buildWorkerStartCommand(config) {
         }
         // Fish doesn't support combined -lc; use separate -l -c flags
         const shellFlags = isFish ? ['-l', '-c'] : ['-lc'];
+        // envAssignments are already shell-escaped (KEY='value'), so they must
+        // NOT go through shellEscape again — that would wrap them in a second
+        // layer of quotes, causing `env` to receive literal quote characters
+        // in the values (e.g. ANTHROPIC_MODEL="'us.anthropic...'" instead of
+        // ANTHROPIC_MODEL="us.anthropic..."). Issue #1415.
         return [
-            'env',
+            shellEscape('env'),
             ...envAssignments,
-            shell,
-            ...shellFlags,
-            script,
-            '--',
-            ...launchWords,
-        ].map(shellEscape).join(' ');
+            ...[shell, ...shellFlags, script, '--', ...launchWords].map(shellEscape),
+        ].join(' ');
     }
     const envString = Object.entries(config.envVars)
         .map(([k, v]) => {
@@ -443,28 +450,46 @@ function paneHasTrustPrompt(captured) {
     const hasChoices = tail.some(l => /Yes,\s*continue|No,\s*quit|Press enter to continue/i.test(l));
     return hasQuestion && hasChoices;
 }
+function paneIsBootstrapping(captured) {
+    const lines = captured
+        .split('\n')
+        .map((line) => line.replace(/\r/g, '').trim())
+        .filter((line) => line.length > 0);
+    return lines.some((line) => /\b(loading|initializing|starting up)\b/i.test(line)
+        || /\bmodel:\s*loading\b/i.test(line)
+        || /\bconnecting\s+to\b/i.test(line));
+}
 export function paneHasActiveTask(captured) {
     const lines = captured.split('\n').map(l => l.replace(/\r/g, '').trim()).filter(l => l.length > 0);
     const tail = lines.slice(-40);
+    if (tail.some(l => /\b\d+\s+background terminal running\b/i.test(l)))
+        return true;
     if (tail.some(l => /esc to interrupt/i.test(l)))
         return true;
     if (tail.some(l => /\bbackground terminal running\b/i.test(l)))
         return true;
+    if (tail.some(l => /^[·✻]\s+[A-Za-z][A-Za-z0-9''-]*(?:\s+[A-Za-z][A-Za-z0-9''-]*){0,3}(?:…|\.{3})$/u.test(l)))
+        return true;
     return false;
 }
 export function paneLooksReady(captured) {
-    const lines = captured
+    const content = captured.trimEnd();
+    if (content === '')
+        return false;
+    const lines = content
         .split('\n')
-        .map(line => line.replace(/\r/g, '').trim())
-        .filter(line => line.length > 0);
+        .map(line => line.replace(/\r/g, '').trimEnd())
+        .filter(line => line.trim() !== '');
     if (lines.length === 0)
         return false;
-    const tail = lines.slice(-20);
-    const hasPrompt = tail.some(line => /^\s*[›>❯]\s*/u.test(line));
-    if (hasPrompt)
+    if (paneIsBootstrapping(content))
+        return false;
+    const lastLine = lines[lines.length - 1];
+    if (/^\s*[›>❯]\s*/u.test(lastLine))
         return true;
-    const hasCodexHint = tail.some(line => /\bgpt-[\w.-]+\b/i.test(line) || /\b\d+% left\b/i.test(line));
-    return hasCodexHint;
+    const hasCodexPromptLine = lines.some((line) => /^\s*›\s*/u.test(line));
+    const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
+    return hasCodexPromptLine || hasClaudePromptLine;
 }
 export async function waitForPaneReady(paneId, opts = {}) {
     const envTimeout = Number.parseInt(process.env.OMC_SHELL_READY_TIMEOUT_MS ?? '', 10);
@@ -682,7 +707,10 @@ export async function killWorkerPanes(opts) {
     const shutdownPath = join(cwd, '.omc', 'state', 'team', teamName, 'shutdown.json');
     try {
         await fs.writeFile(shutdownPath, JSON.stringify({ requestedAt: Date.now() }));
-        await sleep(graceMs);
+        const aliveChecks = await Promise.all(paneIds.map(id => isWorkerAlive(id)));
+        if (aliveChecks.some(alive => alive)) {
+            await sleep(graceMs);
+        }
     }
     catch { /* sentinel write failure is non-fatal */ }
     // 2. Force-kill each worker pane, guarding leader

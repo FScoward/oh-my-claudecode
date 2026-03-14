@@ -97,15 +97,17 @@ function formatTimelineEvent(event) {
         case 'hook_fire':
             detail = `${event.hook} fired (${event.hook_event})`;
             break;
-        case 'hook_result':
+        case 'hook_result': {
             detail = `${event.hook} result`;
+            const hookParts = [];
             if (event.duration_ms)
-                detail += ` (${event.duration_ms}ms`;
+                hookParts.push(`${event.duration_ms}ms`);
             if (event.context_injected)
-                detail += `, context: ${event.context_length || '?'}B`;
-            if (event.duration_ms)
-                detail += ')';
+                hookParts.push(`context: ${event.context_length || '?'}B`);
+            if (hookParts.length)
+                detail += ` (${hookParts.join(', ')})`;
             break;
+        }
         case 'keyword_detected':
             detail = `"${event.keyword}" detected`;
             break;

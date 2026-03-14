@@ -660,10 +660,8 @@ export async function assignTask(teamName, taskId, targetWorkerName, paneId, ses
     const root = stateRoot(cwd, teamName);
     const taskFilePath = join(root, 'tasks', `${taskId}.json`);
     let previousTaskState = null;
-    let lockedTask = null;
     await withTaskLock(teamName, taskId, async () => {
         const t = await readJsonSafe(taskFilePath);
-        lockedTask = t;
         previousTaskState = t ? {
             status: t.status,
             owner: t.owner,
@@ -685,12 +683,16 @@ export async function assignTask(teamName, taskId, targetWorkerName, paneId, ses
     // Send tmux trigger
     const notified = await notifyPaneWithRetry(sessionName, paneId, `new-task:${taskId}`);
     if (!notified) {
-        if (lockedTask && previousTaskState) {
-            const rollback = lockedTask;
-            rollback.status = previousTaskState.status;
-            rollback.owner = previousTaskState.owner;
-            rollback.assignedAt = previousTaskState.assignedAt;
-            await writeJson(taskFilePath, rollback);
+        if (previousTaskState) {
+            await withTaskLock(teamName, taskId, async () => {
+                const t = await readJsonSafe(taskFilePath);
+                if (t) {
+                    t.status = previousTaskState.status;
+                    t.owner = previousTaskState.owner;
+                    t.assignedAt = previousTaskState.assignedAt;
+                    await writeJson(taskFilePath, t);
+                }
+            }, { cwd });
         }
         throw new Error(`worker_notify_failed:${targetWorkerName}:new-task:${taskId}`);
     }

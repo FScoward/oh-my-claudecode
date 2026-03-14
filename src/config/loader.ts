@@ -51,6 +51,7 @@ export function buildDefaultConfig(): PluginConfig {
       writer: { model: defaultTierModels.LOW },
       qaTester: { model: defaultTierModels.MEDIUM },
       scientist: { model: defaultTierModels.MEDIUM },
+      tracer: { model: defaultTierModels.MEDIUM },
       gitMaster: { model: defaultTierModels.MEDIUM },
       codeSimplifier: { model: defaultTierModels.HIGH },
       critic: { model: defaultTierModels.HIGH },
@@ -176,6 +177,7 @@ export function deepMerge<T extends object>(target: T, source: Partial<T>): T {
   const mutableResult = result as Record<string, unknown>;
 
   for (const key of Object.keys(source) as (keyof T)[]) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     const sourceValue = source[key];
     const targetValue = mutableResult[key as string];
 
@@ -564,6 +566,10 @@ export function generateConfigSchema(): object {
             properties: { model: { type: 'string' } }
           },
           scientist: {
+            type: 'object',
+            properties: { model: { type: 'string' } }
+          },
+          tracer: {
             type: 'object',
             properties: { model: { type: 'string' } }
           },

@@ -90,6 +90,7 @@ export function getOMCConfig() {
             notificationProfiles: config.notificationProfiles,
             hudEnabled: config.hudEnabled,
             autoUpgradePrompt: config.autoUpgradePrompt,
+            nodeBinary: config.nodeBinary,
         };
     }
     catch {
@@ -327,6 +328,31 @@ export function reconcileUpdateRuntime(options) {
         message: 'Runtime state reconciled successfully',
     };
 }
+function getFirstResolvedBinaryPath(output) {
+    const resolved = output
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .find(Boolean);
+    if (!resolved) {
+        throw new Error('Unable to resolve omc binary path for update reconciliation');
+    }
+    return resolved;
+}
+function resolveOmcBinaryPath() {
+    if (process.platform === 'win32') {
+        return getFirstResolvedBinaryPath(execFileSync('where.exe', ['omc.cmd'], {
+            encoding: 'utf-8',
+            stdio: 'pipe',
+            timeout: 5000,
+            windowsHide: true,
+        }));
+    }
+    return getFirstResolvedBinaryPath(execSync('which omc 2>/dev/null || where omc 2>NUL', {
+        encoding: 'utf-8',
+        stdio: 'pipe',
+        timeout: 5000,
+    }));
+}
 /**
  * Download and execute the install script to perform an update
  */
@@ -366,17 +392,15 @@ export async function performUpdate(options) {
                 // Set flag to prevent infinite loop
                 process.env.OMC_UPDATE_RECONCILE = '1';
                 // Find the omc binary path
-                const omcPath = execSync('which omc 2>/dev/null || where omc 2>NUL', {
-                    encoding: 'utf-8',
-                    stdio: 'pipe',
-                }).trim().split('\n')[0];
+                const omcPath = resolveOmcBinaryPath();
                 // Re-exec with reconcile subcommand
                 try {
                     execFileSync(omcPath, ['update-reconcile'], {
                         encoding: 'utf-8',
                         stdio: options?.verbose ? 'inherit' : 'pipe',
                         timeout: 60000,
-                        env: { ...process.env, OMC_UPDATE_RECONCILE: '1' }
+                        env: { ...process.env, OMC_UPDATE_RECONCILE: '1' },
+                        ...(process.platform === 'win32' ? { windowsHide: true } : {}),
                     });
                 }
                 catch (reconcileError) {

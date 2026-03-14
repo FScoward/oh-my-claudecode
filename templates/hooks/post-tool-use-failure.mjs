@@ -28,11 +28,8 @@ function isPathContained(targetPath, basePath) {
 
 // Initialize .omc directory if needed
 function initOmcDir(directory) {
-  const cwd = process.cwd();
-  // Validate directory is contained within cwd
-  if (!isPathContained(directory, cwd)) {
-    // Fallback to cwd if directory attempts traversal
-    directory = cwd;
+  if (!directory || typeof directory !== 'string') {
+    directory = process.cwd();
   }
   const omcDir = join(directory, '.omc');
   const stateDir = join(omcDir, 'state');

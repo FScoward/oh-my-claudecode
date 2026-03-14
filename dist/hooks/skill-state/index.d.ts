@@ -34,7 +34,14 @@ export interface SkillActiveState {
 }
 /**
  * Get the protection level for a skill.
- * Unknown skills default to 'light' for safety.
+ *
+ * Only skills explicitly registered in SKILL_PROTECTION receive stop-hook
+ * protection. Unregistered skills (including external plugin skills like
+ * Anthropic's example-skills, document-skills, superpowers, data, etc.)
+ * default to 'none' so the Stop hook does not block them.
+ *
+ * Note: bridge.ts strips the 'oh-my-claudecode:' prefix before calling
+ * this function, so skill names arrive in bare form (e.g., 'plan', 'xlsx').
  */
 export declare function getSkillProtection(skillName: string): SkillProtectionLevel;
 /**

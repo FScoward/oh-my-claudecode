@@ -13,6 +13,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { parseFrontmatter, parseFrontmatterAliases } from '../../utils/frontmatter.js';
 import { parseSkillPipelineMetadata, renderSkillPipelineGuidance } from '../../utils/skill-pipeline.js';
+import { renderSkillRuntimeGuidance } from './runtime-guidance.js';
 // Get the project root directory (go up from src/features/builtin-skills/)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -53,6 +54,7 @@ function loadSkillFromFile(skillPath, skillName) {
         const pipeline = parseSkillPipelineMetadata(metadata);
         const template = [
             body.trim(),
+            renderSkillRuntimeGuidance(safePrimaryName),
             renderSkillPipelineGuidance(safePrimaryName, pipeline),
         ].filter((section) => section.trim().length > 0).join('\n\n');
         const safeAliases = Array.from(new Set(parseFrontmatterAliases(metadata.aliases)

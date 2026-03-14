@@ -11,15 +11,22 @@ const mocks = vi.hoisted(() => ({
     waitForPaneReady: vi.fn(),
     execFile: vi.fn(),
 }));
-vi.mock('child_process', () => ({
-    execFile: mocks.execFile,
-}));
-vi.mock('../model-contract.js', () => ({
+const modelContractMocks = vi.hoisted(() => ({
     buildWorkerArgv: vi.fn(() => ['/usr/bin/claude']),
     resolveValidatedBinaryPath: vi.fn(() => '/usr/bin/claude'),
     getWorkerEnv: vi.fn(() => ({ OMC_TEAM_WORKER: 'dispatch-team/worker-1' })),
     isPromptModeAgent: vi.fn(() => false),
-    getPromptModeArgs: vi.fn(() => []),
+    getPromptModeArgs: vi.fn((_agentType, instruction) => [instruction]),
+}));
+vi.mock('child_process', () => ({
+    execFile: mocks.execFile,
+}));
+vi.mock('../model-contract.js', () => ({
+    buildWorkerArgv: modelContractMocks.buildWorkerArgv,
+    resolveValidatedBinaryPath: modelContractMocks.resolveValidatedBinaryPath,
+    getWorkerEnv: modelContractMocks.getWorkerEnv,
+    isPromptModeAgent: modelContractMocks.isPromptModeAgent,
+    getPromptModeArgs: modelContractMocks.getPromptModeArgs,
 }));
 vi.mock('../tmux-session.js', () => ({
     createTeamSession: mocks.createTeamSession,
@@ -36,6 +43,11 @@ describe('runtime v2 startup inbox dispatch', () => {
         mocks.sendToWorker.mockReset();
         mocks.waitForPaneReady.mockReset();
         mocks.execFile.mockReset();
+        modelContractMocks.buildWorkerArgv.mockReset();
+        modelContractMocks.resolveValidatedBinaryPath.mockReset();
+        modelContractMocks.getWorkerEnv.mockReset();
+        modelContractMocks.isPromptModeAgent.mockReset();
+        modelContractMocks.getPromptModeArgs.mockReset();
         mocks.createTeamSession.mockResolvedValue({
             sessionName: 'dispatch-session',
             leaderPaneId: '%1',
@@ -45,6 +57,11 @@ describe('runtime v2 startup inbox dispatch', () => {
         mocks.spawnWorkerInPane.mockResolvedValue(undefined);
         mocks.waitForPaneReady.mockResolvedValue(true);
         mocks.sendToWorker.mockResolvedValue(true);
+        modelContractMocks.buildWorkerArgv.mockImplementation((agentType) => [`/usr/bin/${agentType ?? 'claude'}`]);
+        modelContractMocks.resolveValidatedBinaryPath.mockImplementation((agentType) => `/usr/bin/${agentType ?? 'claude'}`);
+        modelContractMocks.getWorkerEnv.mockImplementation(() => ({ OMC_TEAM_WORKER: 'dispatch-team/worker-1' }));
+        modelContractMocks.isPromptModeAgent.mockReturnValue(false);
+        modelContractMocks.getPromptModeArgs.mockImplementation((_agentType, instruction) => [instruction]);
         mocks.execFile.mockImplementation((file, args, cb) => {
             if (args[0] === 'split-window') {
                 cb(null, '%2\n', '');
@@ -232,6 +249,47 @@ describe('runtime v2 startup inbox dispatch', () => {
         });
         expect(runtime.config.workers[0]?.assigned_tasks).toEqual(['1']);
         expect(mocks.sendToWorker).toHaveBeenCalledTimes(1);
+    });
+    it('passes the full lifecycle instruction to codex prompt-mode workers and waits for claim evidence', async () => {
+        cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-codex-prompt-'));
+        modelContractMocks.isPromptModeAgent.mockImplementation((agentType) => agentType === 'codex');
+        mocks.spawnWorkerInPane.mockImplementation(async () => {
+            const taskDir = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'tasks');
+            const canonicalTaskPath = join(taskDir, 'task-1.json');
+            const legacyTaskPath = join(taskDir, '1.json');
+            const taskPath = await readFile(canonicalTaskPath, 'utf-8')
+                .then(() => canonicalTaskPath)
+                .catch(async () => {
+                await readFile(legacyTaskPath, 'utf-8');
+                return legacyTaskPath;
+            });
+            const existing = JSON.parse(await readFile(taskPath, 'utf-8'));
+            await writeFile(taskPath, JSON.stringify({
+                ...existing,
+                status: 'in_progress',
+                owner: 'worker-1',
+            }, null, 2), 'utf-8');
+        });
+        const { startTeamV2 } = await import('../runtime-v2.js');
+        const runtime = await startTeamV2({
+            teamName: 'dispatch-team',
+            workerCount: 1,
+            agentTypes: ['codex'],
+            tasks: [{ subject: 'Dispatch test', description: 'Verify codex lifecycle prompt mode' }],
+            cwd,
+        });
+        expect(modelContractMocks.getPromptModeArgs).toHaveBeenCalledWith('codex', expect.stringContaining('omc team api claim-task'));
+        expect(modelContractMocks.getPromptModeArgs).toHaveBeenCalledWith('codex', expect.stringContaining('transition-task-status'));
+        expect(mocks.spawnWorkerInPane).toHaveBeenCalledWith('dispatch-session', '%2', expect.objectContaining({
+            launchBinary: '/usr/bin/codex',
+            launchArgs: expect.arrayContaining([
+                expect.stringContaining('claim-task'),
+                expect.stringContaining('Task ID: 1'),
+                expect.stringContaining('Subject: Dispatch test'),
+            ]),
+        }));
+        expect(runtime.config.workers[0]?.assigned_tasks).toEqual(['1']);
+        expect(mocks.sendToWorker).not.toHaveBeenCalled();
     });
 });
 //# sourceMappingURL=runtime-v2.dispatch.test.js.map

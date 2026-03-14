@@ -12,6 +12,7 @@ import {
   existsSync,
   readFileSync,
   writeFileSync,
+  renameSync,
   readdirSync,
   mkdirSync,
   unlinkSync,
@@ -39,16 +40,15 @@ function readJsonFile(path) {
 
 function writeJsonFile(path, data) {
   try {
-    // Ensure directory exists
     const dir = dirname(path);
     if (dir && dir !== "." && !existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(path, JSON.stringify(data, null, 2));
+    const tmpPath = path + '.tmp.' + process.pid;
+    writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+    renameSync(tmpPath, path);
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 /**

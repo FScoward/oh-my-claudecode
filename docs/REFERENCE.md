@@ -10,7 +10,7 @@ Complete reference for oh-my-claudecode. For quick start, see the main [README.m
 - [Configuration](#configuration)
 - [CLI Commands: ask/team/session](#cli-commands-askteamsession)
 - [Legacy MCP Team Runtime Tools (Deprecated)](#legacy-mcp-team-runtime-tools-deprecated)
-- [Agents (28 Total)](#agents-28-total)
+- [Agents (29 Total)](#agents-29-total)
 - [Skills (34 Total)](#skills-34-total)
 - [Slash Commands](#slash-commands)
 - [Hooks System](#hooks-system)
@@ -272,7 +272,7 @@ Optional compatibility enablement (manual only):
 - **Deterministic parse-failure handling**: malformed result artifacts are treated as terminal `failed`.
 - **Cleanup scope**: shutdown/cleanup only clears `.omc/state/team/{teamName}` for the target team (never sibling teams).
 
-## Agents (28 Total)
+## Agents (29 Total)
 
 Always use `oh-my-claudecode:` prefix when calling via Task tool.
 
@@ -291,6 +291,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | **Critique**     | -                       | -                     | `critic`            |
 | **Pre-Planning** | -                       | -                     | `analyst`           |
 | **Testing**      | -                       | `qa-tester`           | -                   |
+| **Tracing**      | -                       | `tracer`              | -                   |
 | **Security**     | `security-reviewer-low` | -                     | `security-reviewer` |
 | **Build**        | -                       | `debugger`            | -                   |
 | **TDD**          | -                       | `test-engineer`       | -                   |
@@ -318,6 +319,7 @@ Always use `oh-my-claudecode:` prefix when calling via Task tool.
 | Review/critique plan         | `critic`                      | opus   |
 | Pre-planning analysis        | `analyst`                     | opus   |
 | Test CLI interactively       | `qa-tester`                   | sonnet |
+| Evidence-driven causal tracing | `tracer`                    | sonnet |
 | Security review              | `security-reviewer`           | opus   |
 | Quick security scan          | `security-reviewer-low`       | haiku  |
 | Fix build errors             | `debugger`                    | sonnet |
@@ -370,7 +372,7 @@ Includes **33 canonical skills + 1 deprecated alias** (`psm`).
 | `sciomc`                  | Parallel scientist orchestration                                 | `/oh-my-claudecode:sciomc`                  |
 | `skill`                   | Manage local skills (list/add/remove/search/edit)                | `/oh-my-claudecode:skill`                   |
 | `team`                    | Coordinated multi-agent workflow                                 | `/oh-my-claudecode:team`                    |
-| `trace`                   | Show orchestration trace timeline                                | `/oh-my-claudecode:trace`                   |
+| `trace`                   | Evidence-driven tracing lane with parallel tracer hypotheses     | `/oh-my-claudecode:trace`                   |
 | `ultraqa`                 | QA cycle until goal is met                                       | `/oh-my-claudecode:ultraqa`                 |
 | `ultrawork`               | Maximum parallel throughput mode                                 | `/oh-my-claudecode:ultrawork`               |
 | `writer-memory`           | Agentic memory system for writing projects                       | `/oh-my-claudecode:writer-memory`           |
@@ -407,7 +409,7 @@ All installed skills are available as slash commands with the prefix `/oh-my-cla
 | `/oh-my-claudecode:hud`                     | Configure HUD statusline                                                                      |
 | `/oh-my-claudecode:release`                 | Automated release workflow                                                                    |
 | `/oh-my-claudecode:mcp-setup`               | Configure MCP servers                                                                         |
-| `/oh-my-claudecode:trace`                   | Show orchestration trace timeline                                                             |
+| `/oh-my-claudecode:trace`                   | Evidence-driven tracing lane that orchestrates parallel tracer hypotheses in team mode        |
 | `/oh-my-claudecode:psm <arguments>`         | Deprecated alias for project session manager                                                  |
 
 ### Skill Pipeline Metadata (Preview)
@@ -721,23 +723,25 @@ Configure HUD elements in `~/.claude/settings.json`:
     "elements": {
       "cwd": true,
       "gitRepo": true,
-      "gitBranch": true
+      "gitBranch": true,
+      "showTokens": true
     }
   }
 }
 ```
 
-| Element      | Description                    | Default |
-| ------------ | ------------------------------ | ------- |
-| `cwd`        | Show current working directory | `false` |
-| `gitRepo`    | Show git repository name       | `false` |
-| `gitBranch`  | Show current git branch        | `false` |
-| `omcLabel`   | Show [OMC] label               | `true`  |
-| `contextBar` | Show context window usage      | `true`  |
-| `agents`     | Show active agents count       | `true`  |
-| `todos`      | Show todo progress             | `true`  |
-| `ralph`      | Show ralph loop status         | `true`  |
-| `autopilot`  | Show autopilot status          | `true`  |
+| Element      | Description                                                                                       | Default |
+| ------------ | ------------------------------------------------------------------------------------------------- | ------- |
+| `cwd`        | Show current working directory                                                                    | `false` |
+| `gitRepo`    | Show git repository name                                                                          | `false` |
+| `gitBranch`  | Show current git branch                                                                           | `false` |
+| `omcLabel`   | Show [OMC] label                                                                                  | `true`  |
+| `contextBar` | Show context window usage                                                                         | `true`  |
+| `agents`     | Show active agents count                                                                          | `true`  |
+| `todos`      | Show todo progress                                                                                | `true`  |
+| `ralph`      | Show ralph loop status                                                                            | `true`  |
+| `autopilot`  | Show autopilot status                                                                             | `true`  |
+| `showTokens` | Show transcript-derived token usage (`tok:i1.2k/o340`, plus `r...` reasoning and `s...` session total when reliable) | `false` |
 
 Additional `omcHud` layout options (top-level):
 

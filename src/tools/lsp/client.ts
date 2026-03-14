@@ -230,7 +230,7 @@ export class LspClient {
     this.process.kill();
     this.process = null;
     this.initialized = false;
-    this.pendingRequests.clear();
+    this.rejectPendingRequests(new Error('Client disconnected'));
     this.openDocuments.clear();
     this.diagnostics.clear();
   }

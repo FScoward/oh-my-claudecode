@@ -50,10 +50,11 @@ describe('skill-state', () => {
       expect(getSkillProtection('omc-doctor')).toBe('none');
     });
 
-    it('returns light for simple agent shortcuts', () => {
+    it('returns light only for explicitly protected simple utility skills', () => {
       expect(getSkillProtection('skill')).toBe('light');
-      expect(getSkillProtection('build-fix')).toBe('light');
-      expect(getSkillProtection('analyze')).toBe('light');
+      expect(getSkillProtection('configure-notifications')).toBe('light');
+      expect(getSkillProtection('build-fix')).toBe('none');
+      expect(getSkillProtection('analyze')).toBe('none');
     });
 
     it('returns medium for review/planning skills', () => {
@@ -70,9 +71,9 @@ describe('skill-state', () => {
       expect(getSkillProtection('deepinit')).toBe('heavy');
     });
 
-    it('defaults to light for unknown skills', () => {
-      expect(getSkillProtection('unknown-skill')).toBe('light');
-      expect(getSkillProtection('my-custom-skill')).toBe('light');
+    it('defaults to none for unknown/non-OMC skills', () => {
+      expect(getSkillProtection('unknown-skill')).toBe('none');
+      expect(getSkillProtection('my-custom-skill')).toBe('none');
     });
 
     it('strips oh-my-claudecode: prefix', () => {
@@ -132,6 +133,14 @@ describe('skill-state', () => {
     it('returns null for skills with none protection', () => {
       const state = writeSkillActiveState(tempDir, 'ralph', 'session-1');
       expect(state).toBeNull();
+    });
+
+    it('does not write state for unknown/custom skills', () => {
+      const state = writeSkillActiveState(tempDir, 'phase-resume', 'session-1');
+
+      expect(state).toBeNull();
+      expect(readSkillActiveState(tempDir, 'session-1')).toBeNull();
+      expect(existsSync(join(tempDir, '.omc', 'state', 'sessions', 'session-1'))).toBe(false);
     });
 
     it('creates state file on disk', () => {
@@ -354,10 +363,10 @@ describe('skill-state', () => {
     });
 
     it('works without session ID (legacy path)', () => {
-      writeSkillActiveState(tempDir, 'analyze');
+      writeSkillActiveState(tempDir, 'skill');
       const result = checkSkillActiveState(tempDir);
       expect(result.shouldBlock).toBe(true);
-      expect(result.skillName).toBe('analyze');
+      expect(result.skillName).toBe('skill');
     });
   });
 });

@@ -41,6 +41,7 @@ export function buildDefaultConfig() {
             writer: { model: defaultTierModels.LOW },
             qaTester: { model: defaultTierModels.MEDIUM },
             scientist: { model: defaultTierModels.MEDIUM },
+            tracer: { model: defaultTierModels.MEDIUM },
             gitMaster: { model: defaultTierModels.MEDIUM },
             codeSimplifier: { model: defaultTierModels.HIGH },
             critic: { model: defaultTierModels.HIGH },
@@ -160,6 +161,8 @@ export function deepMerge(target, source) {
     const result = { ...target };
     const mutableResult = result;
     for (const key of Object.keys(source)) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype')
+            continue;
         const sourceValue = source[key];
         const targetValue = mutableResult[key];
         if (sourceValue !== undefined &&
@@ -496,6 +499,10 @@ export function generateConfigSchema() {
                         properties: { model: { type: 'string' } }
                     },
                     scientist: {
+                        type: 'object',
+                        properties: { model: { type: 'string' } }
+                    },
+                    tracer: {
                         type: 'object',
                         properties: { model: { type: 'string' } }
                     },

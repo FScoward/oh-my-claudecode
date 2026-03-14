@@ -17,6 +17,7 @@ import { renderRateLimits, renderRateLimitsWithBar, renderRateLimitsError, rende
 import { renderPermission } from './elements/permission.js';
 import { renderThinking } from './elements/thinking.js';
 import { renderSession } from './elements/session.js';
+import { renderTokenUsage } from './elements/token-usage.js';
 import { renderPromptTime } from './elements/prompt-time.js';
 import { renderAutopilot } from './elements/autopilot.js';
 import { renderCwd } from './elements/cwd.js';
@@ -263,6 +264,11 @@ export async function render(context, config) {
             if (session)
                 elements.push(session);
         }
+    }
+    if (enabledElements.showTokens === true) {
+        const tokenUsage = renderTokenUsage(context.lastRequestTokenUsage, context.sessionTotalTokens);
+        if (tokenUsage)
+            elements.push(tokenUsage);
     }
     // Ralph loop state
     if (enabledElements.ralph && context.ralph) {
