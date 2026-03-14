@@ -289,7 +289,12 @@ function parseTomlEnvTable(value: string): Record<string, string> | undefined {
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
+const SAFE_SERVER_NAME = /^[A-Za-z0-9_-]+$/;
+
 function renderCodexServerBlock(name: string, entry: UnifiedMcpRegistryEntry): string {
+  if (!SAFE_SERVER_NAME.test(name)) {
+    throw new Error(`Unsafe MCP server name rejected for TOML rendering: "${name}"`);
+  }
   const lines = [`[mcp_servers.${name}]`];
 
   if (entry.command) {

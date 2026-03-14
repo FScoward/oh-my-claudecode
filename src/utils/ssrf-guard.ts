@@ -76,6 +76,22 @@ export function validateUrlForSSRF(urlString: string): SSRFValidationResult {
     };
   }
 
+  // Block decimal integer IP notation (e.g. 2130706433 == 127.0.0.1)
+  if (/^\d+$/.test(hostname)) {
+    return {
+      allowed: false,
+      reason: `Hostname '${hostname}' looks like a decimal-encoded IP address`,
+    };
+  }
+
+  // Block octal-notation IPs (e.g. 0177.0.0.1 == 127.0.0.1)
+  if (/^0[0-7]+(\.[0-9]+)*$/.test(hostname)) {
+    return {
+      allowed: false,
+      reason: `Hostname '${hostname}' looks like an octal-encoded IP address`,
+    };
+  }
+
   // Block URLs with credentials (user:pass@host)
   if (parsed.username || parsed.password) {
     return { allowed: false, reason: 'URLs with embedded credentials are not allowed' };
@@ -119,9 +135,9 @@ export function validateAnthropicBaseUrl(urlString: string): SSRFValidationResul
     return { allowed: false, reason: 'Invalid URL' };
   }
 
-  // Log warning for HTTP (non-HTTPS) in production contexts
-  if (parsed.protocol === 'http:') {
-    console.warn('[SSRF Guard] Warning: Using HTTP instead of HTTPS for ANTHROPIC_BASE_URL');
+  // Block HTTP — only allow HTTPS to prevent credential leakage over plaintext
+  if (parsed.protocol !== 'https:') {
+    return { allowed: false, reason: 'ANTHROPIC_BASE_URL must use HTTPS' };
   }
 
   return { allowed: true };
