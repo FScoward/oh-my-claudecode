@@ -7,26 +7,19 @@
  *
  * Commands:
  * - run: Start an interactive session
- * - init: Initialize configuration in current directory
  * - config: Show or edit configuration
  * - setup: Sync all OMC components (hooks, agents, skills)
  */
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import {
   loadConfig,
   getConfigPaths,
-  generateConfigSchema
 } from '../config/loader.js';
-import {
-  getDefaultModelHigh,
-  getDefaultModelMedium,
-  getDefaultModelLow,
-} from '../config/models.js';
 import { createOmcSession } from '../index.js';
 import {
   checkForUpdates,
@@ -52,6 +45,7 @@ import {
 import { doctorConflictsCommand } from './commands/doctor-conflicts.js';
 import { sessionSearchCommand } from './commands/session-search.js';
 import { teamCommand } from './commands/team.js';
+import { ralphthonCommand } from './commands/ralphthon.js';
 import {
   teleportCommand,
   teleportListCommand,
@@ -63,6 +57,8 @@ import { launchCommand } from './launch.js';
 import { interopCommand } from './interop.js';
 import { askCommand, ASK_USAGE } from './ask.js';
 import { warnIfWin32 } from './win32-warning.js';
+import { autoresearchCommand, AUTORESEARCH_HELP } from './autoresearch.js';
+import { runHudWatchLoop } from './hud-watch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -152,181 +148,6 @@ program
     await askCommand(args || []);
   });
 
-/**
- * Init command - Initialize configuration
- */
-program
-  .command('init')
-  .description('Initialize OMC configuration in the current directory')
-  .option('-g, --global', 'Initialize global user configuration')
-  .option('-f, --force', 'Overwrite existing configuration')
-  .addHelpText('after', `
-Examples:
-  $ omc init                     Initialize in current directory
-  $ omc init --global            Initialize global configuration
-  $ omc init --force             Overwrite existing config`)
-  .action(async (options) => {
-    console.log(chalk.yellow('⚠️  DEPRECATED: The init command is deprecated.'));
-    console.log(chalk.gray('Configuration is now managed automatically. Use /oh-my-claudecode:omc-setup instead.\n'));
-
-    const paths = getConfigPaths();
-    const targetPath = options.global ? paths.user : paths.project;
-    const targetDir = dirname(targetPath);
-
-    console.log(chalk.blue('Oh-My-ClaudeCode Configuration Setup\n'));
-
-    // Check if config already exists
-    if (existsSync(targetPath) && !options.force) {
-      console.log(chalk.yellow(`Configuration already exists at ${targetPath}`));
-      console.log(chalk.gray('Use --force to overwrite'));
-      return;
-    }
-
-    // Create directory if needed
-    if (!existsSync(targetDir)) {
-      mkdirSync(targetDir, { recursive: true });
-      console.log(chalk.green(`Created directory: ${targetDir}`));
-    }
-
-    // Resolve current default model IDs (respects OMC_MODEL_* env vars)
-    const modelHigh = getDefaultModelHigh();
-    const modelMedium = getDefaultModelMedium();
-    const modelLow = getDefaultModelLow();
-
-    // Generate config content
-    const configContent = `// Oh-My-ClaudeCode Configuration
-// See: https://github.com/Yeachan-Heo/oh-my-claudecode for documentation
-//
-// Model IDs can be overridden via environment variables:
-//   OMC_MODEL_HIGH   (opus-class)
-//   OMC_MODEL_MEDIUM (sonnet-class)
-//   OMC_MODEL_LOW    (haiku-class)
-{
-  "$schema": "./omc-schema.json",
-
-  // Agent model configurations
-  "agents": {
-    "omc": {
-      // Main orchestrator - uses the most capable model
-      "model": "${modelHigh}"
-    },
-    "explore": {
-      // Fast pattern matching - uses fastest model
-      "model": "${modelLow}"
-    },
-    "analyst": {
-      // Requirements analysis and acceptance criteria
-      "model": "${modelHigh}"
-    },
-    "planner": {
-      // Strategic task sequencing and execution plans
-      "model": "${modelHigh}"
-    },
-    "architect": {
-      // System design, boundaries, interfaces
-      "model": "${modelHigh}"
-    },
-    "debugger": {
-      // Root-cause analysis, regression isolation
-      "model": "${modelMedium}"
-    },
-    "executor": {
-      // Code implementation, refactoring
-      "model": "${modelMedium}"
-    },
-    "verifier": {
-      // Completion evidence, claim validation
-      "model": "${modelMedium}"
-    },
-    "critic": {
-      // Plan/design critical challenge
-      "model": "${modelHigh}"
-    },
-    "writer": {
-      // Docs, migration notes, user guidance
-      "model": "${modelLow}"
-    }
-  },
-
-  // Feature toggles
-  "features": {
-    "parallelExecution": true,
-    "lspTools": true,
-    "astTools": true,
-    "continuationEnforcement": true,
-    "autoContextInjection": true
-  },
-
-  // MCP server integrations
-  "mcpServers": {
-    "exa": {
-      "enabled": true
-      // Set EXA_API_KEY environment variable for API key
-    },
-    "context7": {
-      "enabled": true
-    }
-  },
-
-  // Permission settings
-  "permissions": {
-    "allowBash": true,
-    "allowEdit": true,
-    "allowWrite": true,
-    "maxBackgroundTasks": 5
-  },
-
-  // Magic keyword triggers (customize if desired)
-  "magicKeywords": {
-    "ultrawork": ["ultrawork", "ulw", "uw"],
-    "search": ["search", "find", "locate"],
-    "analyze": ["analyze", "investigate", "examine"]
-  }
-}
-`;
-
-    writeFileSync(targetPath, configContent);
-    console.log(chalk.green(`Created configuration: ${targetPath}`));
-
-    // Also create the JSON schema for editor support
-    const schemaPath = join(targetDir, 'omc-schema.json');
-    writeFileSync(schemaPath, JSON.stringify(generateConfigSchema(), null, 2));
-    console.log(chalk.green(`Created JSON schema: ${schemaPath}`));
-
-    console.log(chalk.blue('\nSetup complete!'));
-    console.log(chalk.gray('Edit the configuration file to customize your setup.'));
-
-    // Create AGENTS.md template if it doesn't exist
-    const agentsMdPath = join(process.cwd(), 'AGENTS.md');
-    if (!existsSync(agentsMdPath) && !options.global) {
-      const agentsMdContent = `# Project Agents Configuration
-
-This file provides context and instructions to AI agents working on this project.
-
-## Project Overview
-
-<!-- Describe your project here -->
-
-## Architecture
-
-<!-- Describe the architecture and key components -->
-
-## Conventions
-
-<!-- List coding conventions, naming patterns, etc. -->
-
-## Important Files
-
-<!-- List key files agents should know about -->
-
-## Common Tasks
-
-<!-- Describe common development tasks and how to perform them -->
-`;
-      writeFileSync(agentsMdPath, agentsMdContent);
-      console.log(chalk.green(`Created AGENTS.md template`));
-    }
-  });
 
 /**
  * Config command - Show or validate configuration
@@ -884,6 +705,7 @@ program
   .option('-f, --force', 'Force reinstall even if up to date')
   .option('-q, --quiet', 'Suppress output except for errors')
   .option('--standalone', 'Force npm update even in plugin context')
+  .option('--clean', 'Purge old plugin cache versions immediately (bypass 24h grace period)')
   .addHelpText('after', `
 Examples:
   $ omc update                   Check and install updates
@@ -935,7 +757,7 @@ Examples:
         console.log(chalk.blue('\nStarting update...\n'));
       }
 
-      const result = await performUpdate({ verbose: !options.quiet, standalone: options.standalone });
+      const result = await performUpdate({ verbose: !options.quiet, standalone: options.standalone, clean: options.clean });
 
       if (result.success) {
         if (!options.quiet) {
@@ -965,9 +787,10 @@ program
   .command('update-reconcile')
   .description('Internal: Reconcile runtime state after update (called by update command)')
   .option('-v, --verbose', 'Show detailed output')
+  .option('--skip-grace-period', 'Bypass 24h grace period for cache purge')
   .action(async (options) => {
     try {
-      const reconcileResult = reconcileUpdateRuntime({ verbose: options.verbose });
+      const reconcileResult = reconcileUpdateRuntime({ verbose: options.verbose, skipGracePeriod: options.skipGracePeriod });
       if (!reconcileResult.success) {
         console.error(chalk.red('Reconciliation failed:'));
         if (reconcileResult.errors) {
@@ -1460,12 +1283,7 @@ program
     const { main: hudMain } = await import('../hud/index.js');
     if (options.watch) {
       const intervalMs = parseInt(options.interval, 10);
-      let skipInit = false;
-      while (true) {
-        await hudMain(true, skipInit);
-        skipInit = true;
-        await new Promise<void>(resolve => setTimeout(resolve, intervalMs));
-      }
+      await runHudWatchLoop({ intervalMs, hudMain });
     } else {
       await hudMain();
     }
@@ -1510,6 +1328,37 @@ program
   .argument('[args...]', 'team subcommand arguments')
   .action(async (args: string[]) => {
     await teamCommand(args);
+  });
+
+/**
+ * Autoresearch command - thin-supervisor autoresearch with keep/discard/reset parity
+ */
+program
+  .command('autoresearch')
+  .description('Launch thin-supervisor autoresearch with keep/discard/reset parity')
+  .helpOption(false)
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .argument('[args...]', 'autoresearch subcommand arguments')
+  .action(async (args: string[]) => {
+    await autoresearchCommand(args);
+  });
+
+/**
+ * Ralphthon command - Autonomous hackathon lifecycle
+ *
+ * Deep-interview generates PRD, ralph loop executes tasks,
+ * auto-hardening phase, terminates after clean waves.
+ */
+program
+  .command('ralphthon')
+  .description('Autonomous hackathon lifecycle: interview -> execute -> harden -> done')
+  .helpOption(false)
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .argument('[args...]', 'ralphthon arguments')
+  .action(async (args: string[]) => {
+    await ralphthonCommand(args);
   });
 
 // Parse arguments

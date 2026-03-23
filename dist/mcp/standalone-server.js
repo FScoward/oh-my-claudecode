@@ -20,6 +20,8 @@ import { stateTools } from '../tools/state-tools.js';
 import { notepadTools } from '../tools/notepad-tools.js';
 import { memoryTools } from '../tools/memory-tools.js';
 import { traceTools } from '../tools/trace-tools.js';
+import { registerStandaloneShutdownHandlers } from './standalone-shutdown.js';
+import { cleanupOwnedBridgeSessions } from '../tools/python-repl/bridge-manager.js';
 import { z } from 'zod';
 // Aggregate all tools - AST tools gracefully degrade if @ast-grep/napi is unavailable
 // Team runtime tools (omc_run_team_start, omc_run_team_status) live in the
@@ -166,6 +168,12 @@ async function gracefulShutdown(signal) {
     forceExitTimer.unref();
     console.error(`OMC MCP Server: received ${signal}, disconnecting LSP servers...`);
     try {
+        await cleanupOwnedBridgeSessions();
+    }
+    catch {
+        // Best-effort — do not block exit
+    }
+    try {
         await disconnectAllLsp();
     }
     catch {
@@ -179,8 +187,9 @@ async function gracefulShutdown(signal) {
     }
     process.exit(0);
 }
-process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
-process.on('SIGINT', () => { gracefulShutdown('SIGINT'); });
+registerStandaloneShutdownHandlers({
+    onShutdown: gracefulShutdown,
+});
 // Start the server
 async function main() {
     const transport = new StdioServerTransport();

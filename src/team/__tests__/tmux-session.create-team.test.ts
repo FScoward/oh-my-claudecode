@@ -43,7 +43,13 @@ vi.mock('child_process', async (importOriginal) => {
   const parseTmuxShellCmd = (cmd: string): string[] | null => {
     const match = cmd.match(/^tmux\s+(.+)$/);
     if (!match) return null;
-    return match[1].match(/"([^"]*)"/g)?.map((s) => s.slice(1, -1)) ?? [];
+    // Support both single-quoted (H1 fix) and double-quoted args
+    const args = match[1].match(/'([^']*(?:\\.[^']*)*)'|"([^"]*)"/g);
+    if (!args) return null;
+    return args.map((s) => {
+      if (s.startsWith("'")) return s.slice(1, -1).replace(/'\\''/g, "'");
+      return s.slice(1, -1);
+    });
   };
 
   const execFileMock = vi.fn((_cmd: string, args: string[], cb: ExecFileCallback) => {
@@ -76,7 +82,34 @@ vi.mock('child_process', async (importOriginal) => {
   };
 });
 
-import { createTeamSession } from '../tmux-session.js';
+import { createTeamSession, detectTeamMultiplexerContext } from '../tmux-session.js';
+
+describe('detectTeamMultiplexerContext', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns tmux when TMUX is present', () => {
+    vi.stubEnv('TMUX', '/tmp/tmux-1000/default,1,1');
+    vi.stubEnv('CMUX_SURFACE_ID', 'cmux-surface');
+
+    expect(detectTeamMultiplexerContext()).toBe('tmux');
+  });
+
+  it('returns cmux when CMUX_SURFACE_ID is present without TMUX', () => {
+    vi.stubEnv('TMUX', '');
+    vi.stubEnv('CMUX_SURFACE_ID', 'cmux-surface');
+
+    expect(detectTeamMultiplexerContext()).toBe('cmux');
+  });
+
+  it('returns none when neither tmux nor cmux markers are present', () => {
+    vi.stubEnv('TMUX', '');
+    vi.stubEnv('CMUX_SURFACE_ID', '');
+
+    expect(detectTeamMultiplexerContext()).toBe('none');
+  });
+});
 
 describe('createTeamSession context resolution', () => {
   beforeEach(() => {
@@ -92,6 +125,7 @@ describe('createTeamSession context resolution', () => {
   it('creates a detached session when running outside tmux', async () => {
     vi.stubEnv('TMUX', '');
     vi.stubEnv('TMUX_PANE', '');
+    vi.stubEnv('CMUX_SURFACE_ID', '');
 
     const session = await createTeamSession('race-team', 0, '/tmp');
 
@@ -102,6 +136,27 @@ describe('createTeamSession context resolution', () => {
     expect(session.leaderPaneId).toBe('%91');
     expect(session.sessionName).toBe('omc-team-race-team-detached:0');
     expect(session.workerPaneIds).toEqual([]);
+    expect(session.sessionMode).toBe('detached-session');
+  });
+
+  it('uses a detached tmux session when running inside cmux', async () => {
+    vi.stubEnv('TMUX', '');
+    vi.stubEnv('TMUX_PANE', '');
+    vi.stubEnv('CMUX_SURFACE_ID', 'cmux-surface');
+
+    const session = await createTeamSession('race-team', 1, '/tmp', { newWindow: true });
+
+    expect(mockedCalls.execFileArgs.some((args) => args[0] === 'new-window')).toBe(false);
+    const detachedCreateCall = mockedCalls.execFileArgs.find((args) =>
+      args[0] === 'new-session' && args.includes('-d') && args.includes('-P'),
+    );
+    expect(detachedCreateCall).toBeDefined();
+
+    const firstSplitCall = mockedCalls.execFileArgs.find((args) => args[0] === 'split-window');
+    expect(firstSplitCall).toEqual(expect.arrayContaining(['split-window', '-h', '-t', '%91']));
+    expect(session.leaderPaneId).toBe('%91');
+    expect(session.sessionName).toBe('omc-team-race-team-detached:0');
+    expect(session.workerPaneIds).toEqual(['%501']);
     expect(session.sessionMode).toBe('detached-session');
   });
 

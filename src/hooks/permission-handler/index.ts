@@ -75,17 +75,19 @@ const BACKGROUND_MUTATION_SUBAGENTS = new Set([
   'document-specialist',
 ]);
 
-function readPermissionAllowEntries(filePath: string): string[] {
+function readPermissionStringEntries(filePath: string, key: 'allow' | 'ask'): string[] {
   try {
     if (!fs.existsSync(filePath)) {
       return [];
     }
 
     const settings = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
-      permissions?: { allow?: unknown };
+      permissions?: { allow?: unknown; ask?: unknown };
+      allow?: unknown;
+      ask?: unknown;
     };
-    const allow = settings?.permissions?.allow;
-    return Array.isArray(allow) ? allow.filter((entry): entry is string => typeof entry === 'string') : [];
+    const entries = settings?.permissions?.[key] ?? settings?.[key];
+    return Array.isArray(entries) ? entries.filter((entry): entry is string => typeof entry === 'string') : [];
   } catch {
     return [];
   }
@@ -102,7 +104,7 @@ export function getClaudePermissionAllowEntries(directory: string): string[] {
 
   const allowEntries = new Set<string>();
   for (const candidatePath of candidatePaths) {
-    for (const entry of readPermissionAllowEntries(candidatePath)) {
+    for (const entry of readPermissionStringEntries(candidatePath, 'allow')) {
       allowEntries.add(entry.trim());
     }
   }
@@ -137,6 +139,78 @@ export function hasClaudePermissionApproval(
   return allowEntries.includes(`Bash(${trimmedCommand})`);
 }
 
+
+export function getClaudePermissionAskEntries(directory: string): string[] {
+  const projectSettingsPath = path.join(directory, '.claude', 'settings.local.json');
+  const globalConfigDir = getClaudeConfigDir();
+  const candidatePaths = [
+    projectSettingsPath,
+    path.join(globalConfigDir, 'settings.local.json'),
+    path.join(globalConfigDir, 'settings.json'),
+  ];
+
+  const askEntries = new Set<string>();
+  for (const candidatePath of candidatePaths) {
+    for (const entry of readPermissionStringEntries(candidatePath, 'ask')) {
+      askEntries.add(entry.trim());
+    }
+  }
+
+  return [...askEntries];
+}
+
+function commandMatchesPermissionPattern(command: string, pattern: string): boolean {
+  const trimmedPattern = pattern.trim();
+  if (!trimmedPattern) {
+    return false;
+  }
+
+  if (!trimmedPattern.includes('*')) {
+    return command === trimmedPattern;
+  }
+
+  const normalizedPrefix = trimmedPattern.replace(/[\s:]*\*+$/, '').trimEnd();
+  if (!normalizedPrefix) {
+    return false;
+  }
+
+  if (!command.startsWith(normalizedPrefix)) {
+    return false;
+  }
+
+  const nextChar = command.charAt(normalizedPrefix.length);
+  return nextChar === '' || /[\s:=(["']/.test(nextChar);
+}
+
+export function hasClaudePermissionAsk(
+  directory: string,
+  toolName: 'Edit' | 'Write' | 'Bash',
+  command?: string,
+): boolean {
+  const askEntries = getClaudePermissionAskEntries(directory);
+
+  if (toolName !== 'Bash') {
+    return hasGenericToolPermission(askEntries, toolName);
+  }
+
+  const trimmedCommand = command?.trim();
+  if (!trimmedCommand) {
+    return false;
+  }
+
+  return askEntries.some(entry => {
+    if (entry === 'Bash') {
+      return true;
+    }
+
+    if (!entry.startsWith('Bash(') || !entry.endsWith(')')) {
+      return false;
+    }
+
+    return commandMatchesPermissionPattern(trimmedCommand, entry.slice(5, -1));
+  });
+}
+
 export interface BackgroundPermissionFallbackResult {
   shouldFallback: boolean;
   missingTools: string[];
@@ -165,7 +239,15 @@ export function getBackgroundBashPermissionFallback(
   directory: string,
   command?: string,
 ): BackgroundPermissionFallbackResult {
-  if (!command || isSafeCommand(command) || isHeredocWithSafeBase(command)) {
+  if (!command) {
+    return { shouldFallback: false, missingTools: [] };
+  }
+
+  if (hasClaudePermissionAsk(directory, 'Bash', command)) {
+    return { shouldFallback: true, missingTools: ['Bash'] };
+  }
+
+  if (isSafeCommand(command) || isHeredocWithSafeBase(command)) {
     return { shouldFallback: false, missingTools: [] };
   }
 
@@ -276,8 +358,10 @@ export function processPermissionRequest(input: PermissionRequestInput): HookOut
     return { continue: true };
   }
 
+  const shouldAskBashPermission = hasClaudePermissionAsk(input.cwd, 'Bash', command);
+
   // Auto-allow safe commands
-  if (isSafeCommand(command)) {
+  if (!shouldAskBashPermission && isSafeCommand(command)) {
     return {
       continue: true,
       hookSpecificOutput: {
@@ -292,7 +376,7 @@ export function processPermissionRequest(input: PermissionRequestInput): HookOut
 
   // Auto-allow heredoc commands with safe base commands (Issue #608)
   // This prevents the full heredoc body from being stored in settings.local.json
-  if (isHeredocWithSafeBase(command)) {
+  if (!shouldAskBashPermission && isHeredocWithSafeBase(command)) {
     return {
       continue: true,
       hookSpecificOutput: {

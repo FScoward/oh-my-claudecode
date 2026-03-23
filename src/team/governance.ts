@@ -6,6 +6,8 @@ import type {
   TeamTransportPolicy,
 } from './types.js';
 
+export type LifecycleProfile = 'default' | 'linked_ralph';
+
 export const DEFAULT_TEAM_TRANSPORT_POLICY: TeamTransportPolicy = {
   display_mode: 'split_pane',
   worker_launch_mode: 'interactive',
@@ -73,4 +75,25 @@ export function normalizeTeamManifest(manifest: TeamManifestV2): TeamManifestV2 
 
 export function getConfigGovernance(config: TeamConfig | null | undefined): TeamGovernance {
   return normalizeTeamGovernance(config?.governance, config?.policy);
+}
+
+/**
+ * Resolve the effective lifecycle profile for a team.
+ * Manifest takes precedence over config; defaults to 'default'.
+ */
+export function resolveLifecycleProfile(
+  config?: Pick<TeamConfig, 'lifecycle_profile'> | null,
+  manifest?: Pick<TeamManifestV2, 'lifecycle_profile'> | null,
+): LifecycleProfile {
+  if (manifest?.lifecycle_profile) return manifest.lifecycle_profile;
+  if (config?.lifecycle_profile) return config.lifecycle_profile;
+  return 'default';
+}
+
+/** Returns true when the effective lifecycle profile is 'linked_ralph' */
+export function isLinkedRalphProfile(
+  config?: Pick<TeamConfig, 'lifecycle_profile'> | null,
+  manifest?: Pick<TeamManifestV2, 'lifecycle_profile'> | null,
+): boolean {
+  return resolveLifecycleProfile(config, manifest) === 'linked_ralph';
 }

@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { KEYWORD_DETECTOR_SCRIPT_NODE, getHookScripts } from '../hooks.js';
+import { KEYWORD_DETECTOR_SCRIPT_NODE } from '../hooks.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageRoot = join(__dirname, '..', '..', '..');
@@ -22,9 +22,7 @@ function runKeywordHook(scriptPath, prompt) {
 }
 describe('keyword-detector packaged artifacts', () => {
     it('does not ship stale pipeline keyword handling in installer templates', () => {
-        const hookScripts = getHookScripts();
-        const template = hookScripts['keyword-detector.mjs'];
-        expect(template).toBe(KEYWORD_DETECTOR_SCRIPT_NODE);
+        const template = KEYWORD_DETECTOR_SCRIPT_NODE;
         for (const snippet of STALE_PIPELINE_SNIPPETS) {
             expect(template).not.toContain(snippet);
         }
@@ -71,6 +69,19 @@ describe('keyword-detector packaged artifacts', () => {
         const pluginResult = runKeywordHook(pluginPath, 'team 3 agents fix lint');
         expect(templateResult).toEqual({ continue: true, suppressOutput: true });
         expect(pluginResult).toEqual({ continue: true, suppressOutput: true });
+    });
+    it('does not auto-trigger informational keyword questions in packaged artifacts', () => {
+        const templatePath = join(packageRoot, 'templates', 'hooks', 'keyword-detector.mjs');
+        const pluginPath = join(packageRoot, 'scripts', 'keyword-detector.mjs');
+        for (const prompt of [
+            'What is ralph and how do I use it?',
+            'ralph 와 ralplan 은 뭐야?',
+            'ralplan とは？ 使い方を教えて',
+            'ralph 是什么？怎么用？',
+        ]) {
+            expect(runKeywordHook(templatePath, prompt)).toEqual({ continue: true, suppressOutput: true });
+            expect(runKeywordHook(pluginPath, prompt)).toEqual({ continue: true, suppressOutput: true });
+        }
     });
 });
 //# sourceMappingURL=hook-templates.test.js.map

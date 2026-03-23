@@ -20,6 +20,7 @@ import {
 } from '../lib/worktree-paths.js';
 import { atomicWriteJsonSync } from '../lib/atomic-write.js';
 import { validatePayload } from '../lib/payload-limits.js';
+import { canClearStateForSession } from '../lib/mode-state-io.js';
 import {
   isModeActive,
   getActiveModes,
@@ -146,6 +147,47 @@ function getStatePath(mode: StateToolMode, root: string): string {
   }
   // Fallback for modes not in registry (e.g., ralplan)
   return resolveStatePath(mode, root);
+}
+
+function getLegacyStateFileCandidates(mode: StateToolMode, root: string): string[] {
+  const normalizedName = mode.endsWith('-state') ? mode : `${mode}-state`;
+  const candidates = [
+    getStatePath(mode, root),
+    join(getOmcRoot(root), `${normalizedName}.json`),
+  ];
+
+  return [...new Set(candidates)];
+}
+
+function clearLegacyStateCandidates(
+  mode: StateToolMode,
+  root: string,
+  sessionId?: string,
+): { cleared: number; hadFailure: boolean } {
+  let cleared = 0;
+  let hadFailure = false;
+
+  for (const legacyPath of getLegacyStateFileCandidates(mode, root)) {
+    if (!existsSync(legacyPath)) {
+      continue;
+    }
+
+    try {
+      if (sessionId) {
+        const raw = JSON.parse(readFileSync(legacyPath, 'utf-8')) as Record<string, unknown>;
+        if (!canClearStateForSession(raw, sessionId)) {
+          continue;
+        }
+      }
+
+      unlinkSync(legacyPath);
+      cleared++;
+    } catch {
+      hadFailure = true;
+    }
+  }
+
+  return { cleared, hadFailure };
 }
 
 // ============================================================================
@@ -460,26 +502,9 @@ export const stateClearTool: ToolDefinition<{
 
         if (MODE_CONFIGS[mode as ExecutionMode]) {
           const success = clearModeState(mode as ExecutionMode, root, sessionId);
+          const legacyCleanup = clearLegacyStateCandidates(mode, root, sessionId);
 
-          // Ghost-legacy cleanup: after clearing session file, also remove
-          // any legacy file at .omc/state/{mode}-state.json if it belongs
-          // to this session (matching _meta.sessionId) or has no _meta block.
-          let ghostCleaned = false;
-          try {
-            const legacyPath = getStateFilePath(root, mode as ExecutionMode);
-            if (existsSync(legacyPath)) {
-              const raw = JSON.parse(readFileSync(legacyPath, 'utf-8')) as Record<string, unknown>;
-              const meta = raw._meta as Record<string, unknown> | undefined;
-              if (!meta || meta.sessionId === sessionId) {
-                unlinkSync(legacyPath);
-                ghostCleaned = true;
-              }
-            }
-          } catch {
-            // Best-effort ghost cleanup — ignore errors
-          }
-
-          const ghostNote = ghostCleaned ? ' (ghost legacy file also removed)' : '';
+          const ghostNote = legacyCleanup.cleared > 0 ? ' (ghost legacy file also removed)' : '';
           const runtimeCleanupNote = (() => {
             if (mode !== 'team') return '';
             const teamNames = [...cleanedTeamNames];
@@ -490,7 +515,7 @@ export const stateClearTool: ToolDefinition<{
             if (prunedMissions > 0) details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
             return details.length > 0 ? ` (${details.join(', ')})` : '';
           })();
-          if (success) {
+          if (success && !legacyCleanup.hadFailure) {
             return {
               content: [{
                 type: 'text' as const,
@@ -513,23 +538,9 @@ export const stateClearTool: ToolDefinition<{
           unlinkSync(statePath);
         }
 
-        // Ghost-legacy cleanup for non-registry modes
-        let ghostCleaned = false;
-        try {
-          const legacyPath = resolveStatePath(mode, root);
-          if (existsSync(legacyPath)) {
-            const raw = JSON.parse(readFileSync(legacyPath, 'utf-8')) as Record<string, unknown>;
-            const meta = raw._meta as Record<string, unknown> | undefined;
-            if (!meta || meta.sessionId === sessionId) {
-              unlinkSync(legacyPath);
-              ghostCleaned = true;
-            }
-          }
-        } catch {
-          // Best-effort ghost cleanup
-        }
+        const legacyCleanup = clearLegacyStateCandidates(mode, root, sessionId);
 
-        const ghostNote = ghostCleaned ? ' (ghost legacy file also removed)' : '';
+        const ghostNote = legacyCleanup.cleared > 0 ? ' (ghost legacy file also removed)' : '';
         const runtimeCleanupNote = (() => {
           if (mode !== 'team') return '';
           const teamNames = [...cleanedTeamNames];
@@ -543,7 +554,7 @@ export const stateClearTool: ToolDefinition<{
         return {
           content: [{
             type: 'text' as const,
-            text: `Successfully cleared state for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
+            text: `${legacyCleanup.hadFailure ? 'Warning: Some files could not be removed' : 'Successfully cleared state'} for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
           }]
         };
       }
@@ -557,25 +568,20 @@ export const stateClearTool: ToolDefinition<{
 
       // Clear legacy path
       if (MODE_CONFIGS[mode as ExecutionMode]) {
-        // Only clear if state file exists - avoid false counts for missing files
-        const legacyStatePath = getStateFilePath(root, mode as ExecutionMode);
-        if (existsSync(legacyStatePath)) {
+        const primaryLegacyStatePath = getStateFilePath(root, mode as ExecutionMode);
+        if (existsSync(primaryLegacyStatePath)) {
           if (clearModeState(mode as ExecutionMode, root)) {
             clearedCount++;
           } else {
             errors.push('legacy path');
           }
         }
-      } else {
-        const statePath = getStatePath(mode, root);
-        if (existsSync(statePath)) {
-          try {
-            unlinkSync(statePath);
-            clearedCount++;
-          } catch {
-            errors.push('legacy path');
-          }
-        }
+      }
+
+      const extraLegacyCleanup = clearLegacyStateCandidates(mode, root);
+      clearedCount += extraLegacyCleanup.cleared;
+      if (extraLegacyCleanup.hadFailure) {
+        errors.push('legacy path');
       }
 
       // Clear all session-scoped state files

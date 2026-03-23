@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { readFile, readdir, rm } from 'fs/promises';
+import { readFile, rm } from 'fs/promises';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -23,6 +23,7 @@ const SUPPORTED_API_OPERATIONS = new Set([
     'read-task',
     'read-config',
     'get-summary',
+    'orphan-cleanup',
 ]);
 const TEAM_API_USAGE = `
 Usage:
@@ -207,36 +208,6 @@ function parseJsonInput(inputRaw) {
         throw new Error('Invalid --input JSON payload');
     }
     return parsed;
-}
-function readInputString(input, ...keys) {
-    for (const key of keys) {
-        const value = input[key];
-        if (typeof value === 'string' && value.trim()) {
-            return value.trim();
-        }
-    }
-    return '';
-}
-async function readTaskFiles(cwd, teamName) {
-    const tasksDir = join(teamStateRoot(cwd, teamName), 'tasks');
-    let files = [];
-    try {
-        files = (await readdir(tasksDir)).filter((f) => f.endsWith('.json'));
-    }
-    catch {
-        return [];
-    }
-    const loaded = await Promise.all(files.map(async (file) => {
-        try {
-            const raw = await readFile(join(tasksDir, file), 'utf-8');
-            const parsed = parseJsonSafe(raw);
-            return parsed ?? null;
-        }
-        catch {
-            return null;
-        }
-    }));
-    return loaded.filter((v) => v !== null);
 }
 export async function startTeamJob(input) {
     await assertTeamSpawnAllowed(input.cwd);

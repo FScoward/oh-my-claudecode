@@ -7,6 +7,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Yeachan-Heo/oh-my-claudecode?style=flat&color=yellow)](https://github.com/Yeachan-Heo/oh-my-claudecode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Sponsor](https://img.shields.io/badge/Sponsor-❤️-red?style=flat&logo=github)](https://github.com/sponsors/Yeachan-Heo)
+[![Discord](https://img.shields.io/discord/1466022107199574193?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/qRJw62Gvh7)
 
 **Мультиагентная оркестрация для Claude Code. Нулевой порог вхождения.**
 
@@ -130,6 +131,31 @@ Team работает как поэтапный pipeline:
 - **HUD statusline** — Метрики оркестрации в реальном времени в строке состояния
 - **Обучение навыкам** — Извлечение переиспользуемых паттернов из сессий
 - **Аналитика и отслеживание затрат** — Понимание использования токенов по всем сессиям
+
+### Пользовательские навыки
+
+Выучите один раз — используйте всегда. OMC извлекает ценные знания отладки в портативные файлы навыков, которые автоматически внедряются при необходимости.
+
+| | Область проекта | Область пользователя |
+|---|---|---|
+| **Путь** | `.omc/skills/` | `~/.omc/skills/` |
+| **Доступно** | Команде (под контролем версий) | Всем вашим проектам |
+| **Приоритет** | Выше (переопределяет пользовательскую область) | Ниже (резервный) |
+
+```yaml
+# .omc/skills/fix-proxy-crash.md
+---
+name: Fix Proxy Crash
+description: aiohttp proxy crashes on ClientDisconnectedError
+triggers: ["proxy", "aiohttp", "disconnected"]
+source: extracted
+---
+Оберните обработчик в server.py:42 в try/except ClientDisconnectedError...
+```
+
+**Управление навыками:** `/skill list | add | remove | edit | search`
+**Автообучение:** `/learner` извлекает переиспользуемые паттерны со строгими критериями качества
+**Автовнедрение:** Подходящие навыки автоматически загружаются в контекст — ручной вызов не требуется
 
 [Полный список возможностей →](docs/REFERENCE.md)
 

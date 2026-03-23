@@ -50,4 +50,19 @@ export function normalizeTeamManifest(manifest) {
 export function getConfigGovernance(config) {
     return normalizeTeamGovernance(config?.governance, config?.policy);
 }
+/**
+ * Resolve the effective lifecycle profile for a team.
+ * Manifest takes precedence over config; defaults to 'default'.
+ */
+export function resolveLifecycleProfile(config, manifest) {
+    if (manifest?.lifecycle_profile)
+        return manifest.lifecycle_profile;
+    if (config?.lifecycle_profile)
+        return config.lifecycle_profile;
+    return 'default';
+}
+/** Returns true when the effective lifecycle profile is 'linked_ralph' */
+export function isLinkedRalphProfile(config, manifest) {
+    return resolveLifecycleProfile(config, manifest) === 'linked_ralph';
+}
 //# sourceMappingURL=governance.js.map

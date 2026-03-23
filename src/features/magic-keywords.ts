@@ -20,6 +20,46 @@ function removeCodeBlocks(text: string): string {
   return text.replace(CODE_BLOCK_PATTERN, '').replace(INLINE_CODE_PATTERN, '');
 }
 
+const INFORMATIONAL_INTENT_PATTERNS: RegExp[] = [
+  /\b(?:what(?:'s|\s+is)|what\s+are|how\s+(?:to|do\s+i)\s+use|explain|explanation|tell\s+me\s+about|describe)\b/i,
+  /(?:뭐야|무엇(?:이야|인가요)?|어떻게|설명|사용법)/u,
+  /(?:とは|って何|使い方|説明)/u,
+  /(?:什么是|什麼是|怎(?:么|樣)用|如何使用|解释|說明|说明)/u,
+];
+const INFORMATIONAL_CONTEXT_WINDOW = 80;
+
+function isInformationalKeywordContext(text: string, position: number, keywordLength: number): boolean {
+  const start = Math.max(0, position - INFORMATIONAL_CONTEXT_WINDOW);
+  const end = Math.min(text.length, position + keywordLength + INFORMATIONAL_CONTEXT_WINDOW);
+  const context = text.slice(start, end);
+  return INFORMATIONAL_INTENT_PATTERNS.some(pattern => pattern.test(context));
+}
+
+/**
+ * Escape regex metacharacters so a string matches literally inside new RegExp().
+ */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasActionableTrigger(text: string, trigger: string): boolean {
+  const pattern = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, 'gi');
+
+  for (const match of text.matchAll(pattern)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    if (isInformationalKeywordContext(text, match.index, match[0].length)) {
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Ultrawork Planner Section - for planner-type agents
  */
@@ -330,7 +370,7 @@ Use maximum cognitive effort before responding.`;
 function removeTriggerWords(prompt: string, triggers: string[]): string {
   let result = prompt;
   for (const trigger of triggers) {
-    const regex = new RegExp(`\\b${trigger}\\b`, 'gi');
+    const regex = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, 'gi');
     result = result.replace(regex, '');
   }
   return result.trim();
@@ -385,8 +425,7 @@ export function createMagicKeywordProcessor(config?: PluginConfig['magicKeywords
 
     for (const keyword of keywords) {
       const hasKeyword = keyword.triggers.some(trigger => {
-        const regex = new RegExp(`\\b${trigger}\\b`, 'i');
-        return regex.test(removeCodeBlocks(result));
+        return hasActionableTrigger(removeCodeBlocks(result), trigger);
       });
 
       if (hasKeyword) {
@@ -428,8 +467,7 @@ export function detectMagicKeywords(prompt: string, config?: PluginConfig['magic
 
   for (const keyword of keywords) {
     for (const trigger of keyword.triggers) {
-      const regex = new RegExp(`\\b${trigger}\\b`, 'i');
-      if (regex.test(cleanedPrompt)) {
+      if (hasActionableTrigger(cleanedPrompt, trigger)) {
         detected.push(trigger);
         break;
       }

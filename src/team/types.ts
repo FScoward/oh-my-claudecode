@@ -239,6 +239,7 @@ export interface TeamManifestV2 {
   leader_cwd?: string;
   team_state_root?: string;
   workspace_mode?: 'single' | 'worktree';
+  lifecycle_profile?: 'default' | 'linked_ralph';
   leader_pane_id: string | null;
   hud_pane_id: string | null;
   resize_hook_name: string | null;
@@ -280,6 +281,7 @@ export interface TeamConfig {
   leader_cwd?: string;
   team_state_root?: string;
   workspace_mode?: 'single' | 'worktree';
+  lifecycle_profile?: 'default' | 'linked_ralph';
   leader_pane_id: string | null;
   hud_pane_id: string | null;
   resize_hook_name: string | null;

@@ -6,6 +6,8 @@
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'child_process';
 import { join } from 'path';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import process from 'process';
 import { detectBashFailure, detectWriteFailure, isNonZeroExitWithOutput, summarizeAgentResult } from '../../scripts/post-tool-verifier.mjs';
 
@@ -19,6 +21,15 @@ function runPostToolVerifier(input, env = {}) {
     env: { ...process.env, NODE_ENV: 'test', ...env },
   });
   return JSON.parse(stdout.trim());
+}
+
+function withTempDir(fn) {
+  const tempDir = mkdtempSync(join(tmpdir(), 'post-tool-verifier-'));
+  try {
+    return fn(tempDir);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 describe('detectBashFailure', () => {
@@ -309,5 +320,85 @@ describe('agent output summarization / truncation (issue #1373)', () => {
     expect(out.continue).toBe(true);
     expect(out.hookSpecificOutput?.additionalContext).toContain('TaskOutput summary:');
     expect(out.hookSpecificOutput?.additionalContext).toContain('TaskOutput clipped');
+  });
+});
+
+describe('OMC_QUIET hook message suppression (issue #1646)', () => {
+  it('suppresses routine success/advice messages at OMC_QUIET=1 while keeping failures', () => {
+    const edit = runPostToolVerifier(
+      {
+        tool_name: 'Edit',
+        tool_response: 'File updated successfully',
+        session_id: 'quiet-1',
+        cwd: process.cwd(),
+      },
+      { OMC_QUIET: '1' },
+    );
+
+    expect(edit).toEqual({ continue: true, suppressOutput: true });
+
+    const grep = runPostToolVerifier(
+      {
+        tool_name: 'Grep',
+        tool_response: '0',
+        session_id: 'quiet-1',
+        cwd: process.cwd(),
+      },
+      { OMC_QUIET: '1' },
+    );
+
+    expect(grep).toEqual({ continue: true, suppressOutput: true });
+
+    const writeFailure = runPostToolVerifier(
+      {
+        tool_name: 'Write',
+        tool_response: 'Write failed: permission denied on /etc/hosts',
+        session_id: 'quiet-1',
+        cwd: process.cwd(),
+      },
+      { OMC_QUIET: '1' },
+    );
+
+    expect(writeFailure.hookSpecificOutput?.additionalContext)
+      .toContain('Write operation failed');
+  });
+
+  it('keeps important warnings at OMC_QUIET=2 but suppresses routine task summaries', () => {
+    const nonZero = runPostToolVerifier(
+      {
+        tool_name: 'Bash',
+        tool_response: 'Error: Exit code 8\nLint pass\nTest pending',
+        session_id: 'quiet-2',
+        cwd: process.cwd(),
+      },
+      { OMC_QUIET: '2' },
+    );
+
+    expect(nonZero.hookSpecificOutput?.additionalContext)
+      .toContain('produced valid output');
+
+    const taskSummary = withTempDir((tempDir) => {
+      mkdirSync(join(tempDir, '.omc', 'state'), { recursive: true });
+      writeFileSync(
+        join(tempDir, '.omc', 'state', 'subagent-tracking.json'),
+        JSON.stringify({
+          agents: [{ status: 'running', agent_type: 'oh-my-claudecode:executor' }],
+          total_completed: 1,
+          total_failed: 0,
+        }),
+      );
+
+      return runPostToolVerifier(
+        {
+          tool_name: 'TaskOutput',
+          tool_response: 'Completed worker step A\nUpdated src/foo.ts\nTests: 12 passed',
+          session_id: 'quiet-2',
+          cwd: tempDir,
+        },
+        { OMC_QUIET: '2' },
+      );
+    });
+
+    expect(taskSummary).toEqual({ continue: true, suppressOutput: true });
   });
 });

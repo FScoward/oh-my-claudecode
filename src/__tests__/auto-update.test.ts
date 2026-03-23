@@ -221,6 +221,181 @@ describe('auto-update reconciliation', () => {
     expect(mockedWriteFileSync).not.toHaveBeenCalled();
   });
 
+  it('skips marketplace auto-sync when the marketplace clone has local modifications', async () => {
+    process.env.OMC_UPDATE_RECONCILE = '1';
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v4.1.5',
+        name: '4.1.5',
+        published_at: '2026-02-09T00:00:00.000Z',
+        html_url: 'https://example.com/release',
+        body: 'notes',
+        prerelease: false,
+        draft: false,
+      }),
+    }));
+
+    mockedExecSync.mockReturnValue('');
+    mockedExecFileSync.mockImplementation((command: string, args?: readonly string[]) => {
+      if (command !== 'git') {
+        return '';
+      }
+
+      if (args?.includes('fetch') || args?.includes('checkout')) {
+        return '';
+      }
+
+      if (args?.includes('rev-parse')) {
+        return 'main\n';
+      }
+
+      if (args?.includes('status')) {
+        return ' M package.json\n?? scratch.txt\n';
+      }
+
+      throw new Error(`Unexpected git command: ${String(args?.join(' '))}`);
+    });
+
+    const result = await performUpdate({ verbose: false });
+
+    expect(result.success).toBe(true);
+    expect(mockedExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['-C', expect.stringContaining('/plugins/marketplaces/omc'), 'status', '--porcelain', '--untracked-files=normal'],
+      expect.any(Object)
+    );
+    expect(mockedExecFileSync).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['rev-list', '--left-right', '--count', 'HEAD...origin/main']),
+      expect.any(Object)
+    );
+    expect(mockedExecFileSync).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['merge', '--ff-only', 'origin/main']),
+      expect.any(Object)
+    );
+
+    delete process.env.OMC_UPDATE_RECONCILE;
+  });
+
+  it('skips marketplace auto-sync when the marketplace clone has local commits', async () => {
+    process.env.OMC_UPDATE_RECONCILE = '1';
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v4.1.5',
+        name: '4.1.5',
+        published_at: '2026-02-09T00:00:00.000Z',
+        html_url: 'https://example.com/release',
+        body: 'notes',
+        prerelease: false,
+        draft: false,
+      }),
+    }));
+
+    mockedExecSync.mockReturnValue('');
+    mockedExecFileSync.mockImplementation((command: string, args?: readonly string[]) => {
+      if (command !== 'git') {
+        return '';
+      }
+
+      if (args?.includes('fetch') || args?.includes('checkout')) {
+        return '';
+      }
+
+      if (args?.includes('rev-parse')) {
+        return 'main\n';
+      }
+
+      if (args?.includes('status')) {
+        return '';
+      }
+
+      if (args?.includes('rev-list')) {
+        return '1 0\n';
+      }
+
+      throw new Error(`Unexpected git command: ${String(args?.join(' '))}`);
+    });
+
+    const result = await performUpdate({ verbose: false });
+
+    expect(result.success).toBe(true);
+    expect(mockedExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['-C', expect.stringContaining('/plugins/marketplaces/omc'), 'rev-list', '--left-right', '--count', 'HEAD...origin/main'],
+      expect.any(Object)
+    );
+    expect(mockedExecFileSync).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['merge', '--ff-only', 'origin/main']),
+      expect.any(Object)
+    );
+
+    delete process.env.OMC_UPDATE_RECONCILE;
+  });
+
+  it('fast-forwards a clean marketplace clone when origin/main is ahead', async () => {
+    process.env.OMC_UPDATE_RECONCILE = '1';
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v4.1.5',
+        name: '4.1.5',
+        published_at: '2026-02-09T00:00:00.000Z',
+        html_url: 'https://example.com/release',
+        body: 'notes',
+        prerelease: false,
+        draft: false,
+      }),
+    }));
+
+    mockedExecSync.mockReturnValue('');
+    mockedExecFileSync.mockImplementation((command: string, args?: readonly string[]) => {
+      if (command !== 'git') {
+        return '';
+      }
+
+      if (args?.includes('fetch') || args?.includes('checkout') || args?.includes('merge')) {
+        return '';
+      }
+
+      if (args?.includes('rev-parse')) {
+        return 'main\n';
+      }
+
+      if (args?.includes('status')) {
+        return '';
+      }
+
+      if (args?.includes('rev-list')) {
+        return '0 3\n';
+      }
+
+      throw new Error(`Unexpected git command: ${String(args?.join(' '))}`);
+    });
+
+    const result = await performUpdate({ verbose: false });
+
+    expect(result.success).toBe(true);
+    expect(mockedExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['-C', expect.stringContaining('/plugins/marketplaces/omc'), 'merge', '--ff-only', 'origin/main'],
+      expect.any(Object)
+    );
+    expect(mockedExecFileSync).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['reset', '--hard', 'origin/main']),
+      expect.any(Object)
+    );
+
+    delete process.env.OMC_UPDATE_RECONCILE;
+  });
+
   it('re-execs with omc.cmd on Windows and persists metadata after reconciliation', async () => {
     mockPlatform('win32');
 

@@ -7,11 +7,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 const SCRIPT_PATH = join(process.cwd(), 'scripts', 'pre-tool-enforcer.mjs');
 
 function runPreToolEnforcer(input: Record<string, unknown>): Record<string, unknown> {
+  return runPreToolEnforcerWithEnv(input);
+}
+
+function runPreToolEnforcerWithEnv(
+  input: Record<string, unknown>,
+  env: Record<string, string> = {},
+): Record<string, unknown> {
   const stdout = execSync(`node "${SCRIPT_PATH}"`, {
     input: JSON.stringify(input),
     encoding: 'utf-8',
     timeout: 5000,
-    env: { ...process.env, NODE_ENV: 'test' },
+    env: { ...process.env, NODE_ENV: 'test', ...env },
   });
 
   return JSON.parse(stdout.trim()) as Record<string, unknown>;
@@ -250,6 +257,94 @@ describe('pre-tool-enforcer fallback gating (issue #970)', () => {
     expect(readOutput.additionalContext).toBe(
       'Read multiple files in parallel when possible for faster analysis.',
     );
+  });
+
+  it('suppresses routine pre-tool reminders when OMC_QUIET=1', () => {
+    const bash = runPreToolEnforcerWithEnv(
+      {
+        tool_name: 'Bash',
+        cwd: tempDir,
+      },
+      { OMC_QUIET: '1' },
+    );
+
+    expect(bash).toEqual({ continue: true, suppressOutput: true });
+
+    const read = runPreToolEnforcerWithEnv(
+      {
+        tool_name: 'Read',
+        cwd: tempDir,
+      },
+      { OMC_QUIET: '1' },
+    );
+
+    expect(read).toEqual({ continue: true, suppressOutput: true });
+  });
+
+  it('keeps active-mode and team-routing enforcement visible when OMC_QUIET is enabled', () => {
+    const sessionId = 'session-1646';
+    writeJson(
+      join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ralph-state.json'),
+      {
+        active: true,
+        session_id: sessionId,
+      },
+    );
+    writeJson(
+      join(tempDir, '.omc', 'state', 'sessions', sessionId, 'team-state.json'),
+      {
+        active: true,
+        session_id: sessionId,
+        team_name: 'quiet-team',
+      },
+    );
+
+    const modeOutput = runPreToolEnforcerWithEnv(
+      {
+        tool_name: 'ToolSearch',
+        cwd: tempDir,
+        session_id: sessionId,
+      },
+      { OMC_QUIET: '2' },
+    );
+
+    expect(String((modeOutput.hookSpecificOutput as Record<string, unknown>).additionalContext))
+      .toContain('The boulder never stops');
+
+    const taskOutput = runPreToolEnforcerWithEnv(
+      {
+        tool_name: 'Task',
+        toolInput: {
+          subagent_type: 'oh-my-claudecode:executor',
+          description: 'Fix type errors',
+          prompt: 'Fix all type errors in src/auth/',
+        },
+        cwd: tempDir,
+        session_id: sessionId,
+      },
+      { OMC_QUIET: '2' },
+    );
+
+    expect(String((taskOutput.hookSpecificOutput as Record<string, unknown>).additionalContext))
+      .toContain('TEAM ROUTING REQUIRED');
+  });
+
+  it('suppresses routine agent spawn chatter at OMC_QUIET=2 but not enforcement', () => {
+    const output = runPreToolEnforcerWithEnv(
+      {
+        tool_name: 'Task',
+        toolInput: {
+          subagent_type: 'oh-my-claudecode:executor',
+          description: 'Fix type errors',
+          prompt: 'Fix all type errors in src/auth/',
+        },
+        cwd: tempDir,
+        session_id: 'session-1646-quiet',
+      },
+      { OMC_QUIET: '2' },
+    );
+
+    expect(output).toEqual({ continue: true, suppressOutput: true });
   });
 
   it('blocks agent-heavy Task preflight when transcript context budget is exhausted', () => {

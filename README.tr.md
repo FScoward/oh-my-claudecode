@@ -7,6 +7,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Yeachan-Heo/oh-my-claudecode?style=flat&color=yellow)](https://github.com/Yeachan-Heo/oh-my-claudecode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Sponsor](https://img.shields.io/badge/Sponsor-❤️-red?style=flat&logo=github)](https://github.com/sponsors/Yeachan-Heo)
+[![Discord](https://img.shields.io/discord/1466022107199574193?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/qRJw62Gvh7)
 
 **Claude Code için çoklu ajan orkestrasyonu. Sıfır öğrenme eğrisi.**
 
@@ -130,6 +131,31 @@ Farklı kullanım senaryoları için birden fazla strateji — Team destekli ork
 - **HUD statusline** — Durum çubuğunuzda gerçek zamanlı orkestrasyon metrikleri
 - **Beceri öğrenimi** — Oturumlarınızdan yeniden kullanılabilir kalıplar çıkarın
 - **Analitik ve maliyet takibi** — Tüm oturumlardaki token kullanımını anlayın
+
+### Özel Beceriler
+
+Bir kez öğrenin, sonsuza kadar yeniden kullanın. OMC, hata ayıklama sürecinde kazanılan değerli bilgiyi taşınabilir beceri dosyalarına çıkarır ve ilgili durumlarda otomatik olarak enjekte eder.
+
+| | Proje Kapsamı | Kullanıcı Kapsamı |
+|---|---|---|
+| **Yol** | `.omc/skills/` | `~/.omc/skills/` |
+| **Paylaşım** | Takım (sürüm kontrollü) | Tüm projeleriniz |
+| **Öncelik** | Yüksek (kullanıcı kapsamını geçersiz kılar) | Düşük (yedek) |
+
+```yaml
+# .omc/skills/fix-proxy-crash.md
+---
+name: Fix Proxy Crash
+description: aiohttp proxy crashes on ClientDisconnectedError
+triggers: ["proxy", "aiohttp", "disconnected"]
+source: extracted
+---
+server.py:42'deki handler'ı try/except ClientDisconnectedError ile sarın...
+```
+
+**Beceri yönetimi:** `/skill list | add | remove | edit | search`
+**Otomatik öğrenme:** `/learner` katı kalite standartlarıyla yeniden kullanılabilir kalıplar çıkarır
+**Otomatik enjeksiyon:** Eşleşen beceriler otomatik olarak bağlama yüklenir — manuel çağrı gerekmez
 
 [Tam özellik listesi →](docs/REFERENCE.md)
 

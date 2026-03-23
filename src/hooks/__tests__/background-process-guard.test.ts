@@ -36,10 +36,10 @@ describe('Background Process Guard (issue #302)', () => {
   const originalEnv = process.env;
   let claudeConfigDir: string;
 
-  const writeClaudePermissions = (allow: string[] = []): void => {
+  const writeClaudePermissions = (allow: string[] = [], ask: string[] = []): void => {
     const settingsPath = join(claudeConfigDir, 'settings.local.json');
     mkdirSync(claudeConfigDir, { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify({ permissions: { allow } }, null, 2));
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { allow, ask } }, null, 2));
   };
 
   beforeEach(() => {
@@ -265,6 +265,24 @@ describe('Background Process Guard (issue #302)', () => {
       expect(result.continue).toBe(true);
       expect(result.message ?? '').not.toContain('[BACKGROUND PERMISSIONS]');
       expect(result.modifiedInput).toBeUndefined();
+    });
+
+    it('should block safe-looking background Bash when ask rules require approval', async () => {
+      writeClaudePermissions([], ['Bash(git commit:*)']);
+
+      const input: HookInput = {
+        sessionId: 'test-session',
+        toolName: 'Bash',
+        toolInput: {
+          command: `git commit -m "$(cat <<'EOF'\nfeat: test\nEOF\n)"`,
+          run_in_background: true,
+        },
+        directory: '/tmp/test',
+      };
+
+      const result = await processHook('pre-tool-use', input);
+      expect(result.continue).toBe(false);
+      expect(result.reason).toContain('[BACKGROUND PERMISSIONS]');
     });
 
     it('should keep exact pre-approved background Bash commands in background', async () => {

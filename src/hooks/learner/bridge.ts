@@ -29,6 +29,7 @@ export const USER_SKILLS_DIR = join(
 );
 export const GLOBAL_SKILLS_DIR = join(homedir(), ".omc", "skills");
 export const PROJECT_SKILLS_SUBDIR = OmcPaths.SKILLS;
+export const PROJECT_AGENT_SKILLS_SUBDIR = join(".agents", "skills");
 export const SKILL_EXTENSION = ".md";
 
 /** Session TTL: 1 hour */
@@ -374,22 +375,28 @@ export function findSkillFiles(
 
   // 1. Search project-level skills (higher priority)
   if (scope === "project" || scope === "all") {
-    const projectSkillsDir = join(projectRoot, PROJECT_SKILLS_SUBDIR);
-    const projectFiles: string[] = [];
-    findSkillFilesRecursive(projectSkillsDir, projectFiles);
+    const projectSkillDirs = [
+      join(projectRoot, PROJECT_SKILLS_SUBDIR),
+      join(projectRoot, PROJECT_AGENT_SKILLS_SUBDIR),
+    ];
 
-    for (const filePath of projectFiles) {
-      const realPath = safeRealpathSync(filePath);
-      if (seenRealPaths.has(realPath)) continue;
-      if (!isWithinBoundary(realPath, projectSkillsDir)) continue;
-      seenRealPaths.add(realPath);
+    for (const projectSkillsDir of projectSkillDirs) {
+      const projectFiles: string[] = [];
+      findSkillFilesRecursive(projectSkillsDir, projectFiles);
 
-      candidates.push({
-        path: filePath,
-        realPath,
-        scope: "project",
-        sourceDir: projectSkillsDir,
-      });
+      for (const filePath of projectFiles) {
+        const realPath = safeRealpathSync(filePath);
+        if (seenRealPaths.has(realPath)) continue;
+        if (!isWithinBoundary(realPath, projectSkillsDir)) continue;
+        seenRealPaths.add(realPath);
+
+        candidates.push({
+          path: filePath,
+          realPath,
+          scope: "project",
+          sourceDir: projectSkillsDir,
+        });
+      }
     }
   }
 

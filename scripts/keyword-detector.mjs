@@ -125,17 +125,78 @@ function sanitizeForKeywordDetection(text) {
     .replace(/`[^`]+`/g, '');
 }
 
+const INFORMATIONAL_INTENT_PATTERNS = [
+  /\b(?:what(?:'s|\s+is)|what\s+are|how\s+(?:to|do\s+i)\s+use|explain|explanation|tell\s+me\s+about|describe)\b/i,
+  /(?:뭐야|무엇(?:이야|인가요)?|어떻게|설명|사용법)/u,
+  /(?:とは|って何|使い方|説明)/u,
+  /(?:什么是|什麼是|怎(?:么|樣)用|如何使用|解释|說明|说明)/u,
+];
+const INFORMATIONAL_CONTEXT_WINDOW = 80;
+
+function isInformationalKeywordContext(text, position, keywordLength) {
+  const start = Math.max(0, position - INFORMATIONAL_CONTEXT_WINDOW);
+  const end = Math.min(text.length, position + keywordLength + INFORMATIONAL_CONTEXT_WINDOW);
+  const context = text.slice(start, end);
+  return INFORMATIONAL_INTENT_PATTERNS.some((pattern) => pattern.test(context));
+}
+
+function hasActionableKeyword(text, pattern) {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+
+  for (const match of text.matchAll(globalPattern)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    if (isInformationalKeywordContext(text, match.index, match[0].length)) {
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 // Create state file for a mode
 function activateState(directory, prompt, stateName, sessionId) {
-  const state = {
-    active: true,
-    started_at: new Date().toISOString(),
-    original_prompt: prompt,
-    session_id: sessionId || undefined,
-    project_path: directory,
-    reinforcement_count: 0,
-    last_checked_at: new Date().toISOString()
-  };
+  let state;
+
+  if (stateName === 'ralph') {
+    // Ralph needs specific fields for proper loop tracking
+    state = {
+      active: true,
+      iteration: 1,
+      max_iterations: 100,
+      started_at: new Date().toISOString(),
+      prompt: prompt,
+      session_id: sessionId || undefined,
+      project_path: directory,
+      linked_ultrawork: true,
+      last_checked_at: new Date().toISOString()
+    };
+  } else if (stateName === 'ralplan') {
+    // Ralplan needs active + session_id for stop-hook enforcement
+    state = {
+      active: true,
+      started_at: new Date().toISOString(),
+      session_id: sessionId || undefined,
+      project_path: directory,
+      last_checked_at: new Date().toISOString()
+    };
+  } else {
+    // Generic state for ultrawork, autopilot, etc.
+    state = {
+      active: true,
+      started_at: new Date().toISOString(),
+      original_prompt: prompt,
+      session_id: sessionId || undefined,
+      project_path: directory,
+      reinforcement_count: 0,
+      last_checked_at: new Date().toISOString()
+    };
+  }
 
   // Write to session-scoped path if sessionId available
   if (sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) {
@@ -144,10 +205,10 @@ function activateState(directory, prompt, stateName, sessionId) {
       try { mkdirSync(sessionDir, { recursive: true }); } catch {}
     }
     try { writeFileSync(join(sessionDir, `${stateName}-state.json`), JSON.stringify(state, null, 2), { mode: 0o600 }); } catch {}
-    return; // Session-only write, skip legacy
+    return;
   }
 
-  // Fallback: write to legacy local .omc/state directory (no valid sessionId)
+  // Fallback: write to legacy local .omc/state directory
   const localDir = join(directory, '.omc', 'state');
   if (!existsSync(localDir)) {
     try { mkdirSync(localDir, { recursive: true }); } catch {}
@@ -367,30 +428,30 @@ async function main() {
     const matches = [];
 
     // Cancel keywords
-    if (/\b(cancelomc|stopomc)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(cancelomc|stopomc)\b/i)) {
       matches.push({ name: 'cancel', args: '' });
     }
 
     // Ralph keywords
-    if (/\b(ralph|don't stop|must complete|until done)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ralph|don't stop|must complete|until done)\b/i)) {
       matches.push({ name: 'ralph', args: '' });
     }
 
     // Autopilot keywords
-    if (/\b(autopilot|auto pilot|auto-pilot|autonomous|full auto|fullsend)\b/i.test(cleanPrompt) ||
-        /\b(build|create|make)\s+me\s+(an?\s+)?(app|feature|project|tool|plugin|website|api|server|cli|script|system|service|dashboard|bot|extension)\b/i.test(cleanPrompt) ||
-        /\bi\s+want\s+a\s+/i.test(cleanPrompt) ||
-        /\bi\s+want\s+an\s+/i.test(cleanPrompt) ||
-        /\bhandle\s+it\s+all\b/i.test(cleanPrompt) ||
-        /\bend\s+to\s+end\b/i.test(cleanPrompt) ||
-        /\be2e\s+this\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(autopilot|auto pilot|auto-pilot|autonomous|full auto|fullsend)\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\b(build|create|make)\s+me\s+(an?\s+)?(app|feature|project|tool|plugin|website|api|server|cli|script|system|service|dashboard|bot|extension)\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bi\s+want\s+a\s+/i) ||
+        hasActionableKeyword(cleanPrompt, /\bi\s+want\s+an\s+/i) ||
+        hasActionableKeyword(cleanPrompt, /\bhandle\s+it\s+all\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bend\s+to\s+end\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\be2e\s+this\b/i)) {
       matches.push({ name: 'autopilot', args: '' });
     }
 
     // Ultrapilot keywords removed — routed to team which is now explicit-only (/team).
 
     // Ultrawork keywords
-    if (/\b(ultrawork|ulw|uw)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrawork|ulw|uw)\b/i)) {
       matches.push({ name: 'ultrawork', args: '' });
     }
 
@@ -400,17 +461,17 @@ async function main() {
 
 
     // CCG keywords (Claude-Codex-Gemini tri-model orchestration)
-    if (/\b(ccg|claude-codex-gemini)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ccg|claude-codex-gemini)\b/i)) {
       matches.push({ name: 'ccg', args: '' });
     }
 
     // Ralplan keyword
-    if (/\b(ralplan)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ralplan)\b/i)) {
       matches.push({ name: 'ralplan', args: '' });
     }
 
     // Deep interview keywords
-    if (/\b(deep[\s-]interview|ouroboros)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]interview|ouroboros)\b/i)) {
       matches.push({ name: 'deep-interview', args: '' });
     }
 
@@ -420,36 +481,36 @@ async function main() {
     }
 
     // TDD keywords
-    if (/\b(tdd)\b/i.test(cleanPrompt) ||
-        /\btest\s+first\b/i.test(cleanPrompt) ||
-        /\bred\s+green\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(tdd)\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\btest\s+first\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bred\s+green\b/i)) {
       matches.push({ name: 'tdd', args: '' });
     }
 
     // Code review keywords
-    if (/\b(code\s+review|review\s+code)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(code\s+review|review\s+code)\b/i)) {
       matches.push({ name: 'code-review', args: '' });
     }
 
     // Security review keywords
-    if (/\b(security\s+review|review\s+security)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(security\s+review|review\s+security)\b/i)) {
       matches.push({ name: 'security-review', args: '' });
     }
 
     // Ultrathink keywords
-    if (/\b(ultrathink|think hard|think deeply)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrathink|think hard|think deeply)\b/i)) {
       matches.push({ name: 'ultrathink', args: '' });
     }
 
     // Deepsearch keywords
-    if (/\b(deepsearch)\b/i.test(cleanPrompt) ||
-        /\bsearch\s+(the\s+)?(codebase|code|files?|project)\b/i.test(cleanPrompt) ||
-        /\bfind\s+(in\s+)?(codebase|code|all\s+files?)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deepsearch)\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bsearch\s+(the\s+)?(codebase|code|files?|project)\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bfind\s+(in\s+)?(codebase|code|all\s+files?)\b/i)) {
       matches.push({ name: 'deepsearch', args: '' });
     }
 
     // Analyze keywords
-    if (/\b(deep[\s-]?analyze|deepanalyze)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]?analyze|deepanalyze)\b/i)) {
       matches.push({ name: 'analyze', args: '' });
     }
 
@@ -476,6 +537,42 @@ async function main() {
     let tracer = null;
     try { tracer = await import('../dist/hooks/subagent-tracker/flow-tracer.js'); } catch { /* silent */ }
 
+    // Import follow-up planner modules (best-effort — requires npm run build)
+    let followupPlanner = null;
+    let planningArtifacts = null;
+    try {
+      followupPlanner = await import('../dist/team/followup-planner.js');
+      planningArtifacts = await import('../dist/planning/artifacts.js');
+    } catch { /* silent — dist/ may not exist yet */ }
+
+    // Check for approved follow-up shortcut: bypass ralplan gate when a prior ralplan
+    // cycle completed and left an approved plan with a launch hint.
+    if (followupPlanner && planningArtifacts) {
+      // Detect if ralplan state exists (was recently active) — serves as "prior skill = ralplan" signal
+      const ralplanStatePath = sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)
+        ? join(directory, '.omc', 'state', 'sessions', sessionId, 'ralplan-state.json')
+        : join(directory, '.omc', 'state', 'ralplan-state.json');
+      const ralplanWasActive = existsSync(ralplanStatePath);
+
+      if (ralplanWasActive) {
+        const artifacts = planningArtifacts.readPlanningArtifacts(directory);
+        const planningComplete = planningArtifacts.isPlanningComplete(artifacts);
+        const context = { planningComplete, priorSkill: 'ralplan' };
+
+        const isTeamFollowup = followupPlanner.isApprovedExecutionFollowupShortcut('team', prompt, context);
+        const isRalphFollowup = followupPlanner.isApprovedExecutionFollowupShortcut('ralph', prompt, context);
+
+        if (isTeamFollowup) {
+          console.log(JSON.stringify(createHookOutput(createSkillInvocation('team', prompt))));
+          return;
+        }
+        if (isRalphFollowup) {
+          console.log(JSON.stringify(createHookOutput(createSkillInvocation('ralph', prompt))));
+          return;
+        }
+      }
+    }
+
     // Record detected keywords to flow trace
     if (tracer) {
       for (const match of resolved) {
@@ -485,13 +582,13 @@ async function main() {
 
     // Handle cancel specially - clear states and emit
     if (resolved.length > 0 && resolved[0].name === 'cancel') {
-      clearStateFiles(directory, ['ralph', 'autopilot', 'ultrawork', 'swarm'], sessionId);
+      clearStateFiles(directory, ['ralph', 'autopilot', 'ultrawork', 'swarm', 'ralplan'], sessionId);
       console.log(JSON.stringify(createHookOutput(createSkillInvocation('cancel', prompt))));
       return;
     }
 
     // Activate states for modes that need them (team removed — explicit-only via /team skill)
-    const stateModes = resolved.filter(m => ['ralph', 'autopilot', 'ultrawork'].includes(m.name));
+    const stateModes = resolved.filter(m => ['ralph', 'autopilot', 'ultrawork', 'ralplan'].includes(m.name));
     for (const mode of stateModes) {
       activateState(directory, prompt, mode.name, sessionId);
     }

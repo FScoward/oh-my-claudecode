@@ -83,6 +83,15 @@ export function formatContextSummary(memory: ProjectMemory): string {
     }
   }
 
+  // Add custom notes
+  if (memory.customNotes.length > 0) {
+    lines.push('');
+    lines.push('**Notes:**');
+    for (const note of memory.customNotes.slice(0, 5)) {
+      lines.push(`- [${note.category}] ${note.content}`);
+    }
+  }
+
   return lines.join('\n');
 }
 

@@ -61,7 +61,13 @@ export async function registerProjectMemoryContext(
 
     // Rescan if memory doesn't exist or is stale
     if (!memory || shouldRescan(memory)) {
+      const existing = memory;
       memory = await detectProjectEnvironment(projectRoot);
+      // Preserve user-contributed data that detection cannot reproduce
+      if (existing) {
+        memory.customNotes = existing.customNotes;
+        memory.userDirectives = existing.userDirectives;
+      }
       await saveProjectMemory(projectRoot, memory);
     }
 
@@ -117,7 +123,13 @@ export function clearProjectMemorySession(sessionId: string): void {
 export async function rescanProjectEnvironment(
   projectRoot: string,
 ): Promise<void> {
+  const existing = await loadProjectMemory(projectRoot);
   const memory = await detectProjectEnvironment(projectRoot);
+  // Preserve user-contributed data that detection cannot reproduce
+  if (existing) {
+    memory.customNotes = existing.customNotes;
+    memory.userDirectives = existing.userDirectives;
+  }
   await saveProjectMemory(projectRoot, memory);
 }
 

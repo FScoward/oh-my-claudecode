@@ -3,6 +3,7 @@ import {
   isBedrock,
   isVertexAI,
   isNonClaudeProvider,
+  isProviderSpecificModelId,
   resolveClaudeFamily,
 } from '../models.js';
 import { saveAndClear, restore } from './test-helpers.js';
@@ -69,6 +70,16 @@ describe('isBedrock()', () => {
     expect(isBedrock()).toBe(true);
   });
 
+  it('detects Bedrock inference-profile ARNs', () => {
+    process.env.ANTHROPIC_MODEL = 'arn:aws:bedrock:us-east-2:123456789012:inference-profile/global.anthropic.claude-opus-4-6-v1:0';
+    expect(isBedrock()).toBe(true);
+  });
+
+  it('detects Bedrock application-inference-profile ARNs', () => {
+    process.env.CLAUDE_MODEL = 'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123/global.anthropic.claude-sonnet-4-6-v1:0';
+    expect(isBedrock()).toBe(true);
+  });
+
   it('also checks CLAUDE_MODEL', () => {
     process.env.CLAUDE_MODEL = 'global.anthropic.claude-sonnet-4-6[1m]';
     expect(isBedrock()).toBe(true);
@@ -132,6 +143,11 @@ describe('isNonClaudeProvider()', () => {
     expect(isNonClaudeProvider()).toBe(true);
   });
 
+  it('returns true for Bedrock inference-profile ARNs', () => {
+    process.env.ANTHROPIC_MODEL = 'arn:aws:bedrock:us-east-2:123456789012:inference-profile/global.anthropic.claude-opus-4-6-v1:0';
+    expect(isNonClaudeProvider()).toBe(true);
+  });
+
   it('returns true when CLAUDE_CODE_USE_BEDROCK=1', () => {
     process.env.CLAUDE_CODE_USE_BEDROCK = '1';
     expect(isNonClaudeProvider()).toBe(true);
@@ -154,6 +170,48 @@ describe('isNonClaudeProvider()', () => {
 
   it('returns false when no env vars are set', () => {
     expect(isNonClaudeProvider()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isProviderSpecificModelId() — issue #1695
+// ---------------------------------------------------------------------------
+describe('isProviderSpecificModelId()', () => {
+  it('detects Bedrock region-prefixed model IDs', () => {
+    expect(isProviderSpecificModelId('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(true);
+    expect(isProviderSpecificModelId('global.anthropic.claude-opus-4-6-v1:0')).toBe(true);
+    expect(isProviderSpecificModelId('eu.anthropic.claude-haiku-4-5-v1:0')).toBe(true);
+    expect(isProviderSpecificModelId('ap.anthropic.claude-sonnet-4-6-v1:0')).toBe(true);
+  });
+
+  it('detects Bedrock bare anthropic.claude prefix (legacy)', () => {
+    expect(isProviderSpecificModelId('anthropic.claude-3-haiku-20240307-v1:0')).toBe(true);
+  });
+
+  it('detects Bedrock ARN formats', () => {
+    expect(isProviderSpecificModelId('arn:aws:bedrock:us-east-2:123456789012:inference-profile/global.anthropic.claude-opus-4-6-v1:0')).toBe(true);
+    expect(isProviderSpecificModelId('arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123/global.anthropic.claude-sonnet-4-6-v1:0')).toBe(true);
+  });
+
+  it('detects Vertex AI model IDs', () => {
+    expect(isProviderSpecificModelId('vertex_ai/claude-sonnet-4-6@20250514')).toBe(true);
+  });
+
+  it('returns false for bare Anthropic API model IDs', () => {
+    expect(isProviderSpecificModelId('claude-sonnet-4-6')).toBe(false);
+    expect(isProviderSpecificModelId('claude-opus-4-6')).toBe(false);
+    expect(isProviderSpecificModelId('claude-haiku-4-5')).toBe(false);
+  });
+
+  it('returns false for aliases', () => {
+    expect(isProviderSpecificModelId('sonnet')).toBe(false);
+    expect(isProviderSpecificModelId('opus')).toBe(false);
+    expect(isProviderSpecificModelId('haiku')).toBe(false);
+  });
+
+  it('returns false for non-Claude model IDs', () => {
+    expect(isProviderSpecificModelId('gpt-4o')).toBe(false);
+    expect(isProviderSpecificModelId('gemini-1.5-pro')).toBe(false);
   });
 });
 

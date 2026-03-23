@@ -20,14 +20,65 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 import {
+  resolveLaunchPolicy,
   wrapWithLoginShell,
   quoteShellArg,
   sanitizeTmuxToken,
 } from '../tmux-utils.js';
 
+const mockedExecFileSync = vi.mocked(execFileSync);
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// resolveLaunchPolicy
+// ---------------------------------------------------------------------------
+describe('resolveLaunchPolicy', () => {
+  it('forces direct mode for --print even when tmux is available', () => {
+    vi.mocked(execFileSync).mockReturnValue(Buffer.from('tmux 3.4'));
+
+    expect(resolveLaunchPolicy({}, ['--print'])).toBe('direct');
+  });
+
+  it('forces direct mode for -p even when tmux is available', () => {
+    vi.mocked(execFileSync).mockReturnValue(Buffer.from('tmux 3.4'));
+
+    expect(resolveLaunchPolicy({}, ['-p'])).toBe('direct');
+  });
+
+  it('does not treat --print-system-prompt as print mode', () => {
+    vi.mocked(execFileSync).mockReturnValue(Buffer.from('tmux 3.4'));
+
+    expect(resolveLaunchPolicy({ TMUX: '1' }, ['--print-system-prompt'])).toBe('inside-tmux');
+  });
+
+  it('returns "direct" when CMUX_SURFACE_ID is set (cmux terminal)', () => {
+    mockedExecFileSync.mockReturnValue('tmux 3.6a' as any);
+    expect(resolveLaunchPolicy({ CMUX_SURFACE_ID: 'C0D4B400-6C27-4957-BD01-32735B2251CD' })).toBe('direct');
+  });
+
+  it('prefers inside-tmux over cmux when both TMUX and CMUX_SURFACE_ID are set', () => {
+    mockedExecFileSync.mockReturnValue('tmux 3.6a' as any);
+    expect(resolveLaunchPolicy({
+      TMUX: '/tmp/tmux-501/default,1234,0',
+      CMUX_SURFACE_ID: 'some-id',
+    })).toBe('inside-tmux');
+  });
+
+  it('returns "outside-tmux" when tmux is available but no TMUX or CMUX env', () => {
+    mockedExecFileSync.mockReturnValue('tmux 3.6a' as any);
+    expect(resolveLaunchPolicy({})).toBe('outside-tmux');
+  });
+
+  it('returns "direct" when tmux is not available', () => {
+    mockedExecFileSync.mockImplementation(() => {
+      throw new Error('tmux not found');
+    });
+    expect(resolveLaunchPolicy({})).toBe('direct');
+  });
 });
 
 // ---------------------------------------------------------------------------

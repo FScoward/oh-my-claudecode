@@ -38,7 +38,6 @@ export interface DetectedKeyword {
   position: number;
 }
 
-
 /**
  * Keyword patterns for each mode
  */
@@ -115,6 +114,47 @@ export function sanitizeForKeywordDetection(text: string): string {
   return result;
 }
 
+const INFORMATIONAL_INTENT_PATTERNS: RegExp[] = [
+  /\b(?:what(?:'s|\s+is)|what\s+are|how\s+(?:to|do\s+i)\s+use|explain|explanation|tell\s+me\s+about|describe)\b/i,
+  /(?:뭐야|무엇(?:이야|인가요)?|어떻게|설명|사용법)/u,
+  /(?:とは|って何|使い方|説明)/u,
+  /(?:什么是|怎(?:么|樣)用|如何使用|解释|說明|说明)/u,
+];
+const INFORMATIONAL_CONTEXT_WINDOW = 80;
+
+function isInformationalKeywordContext(text: string, position: number, keywordLength: number): boolean {
+  const start = Math.max(0, position - INFORMATIONAL_CONTEXT_WINDOW);
+  const end = Math.min(text.length, position + keywordLength + INFORMATIONAL_CONTEXT_WINDOW);
+  const context = text.slice(start, end);
+  return INFORMATIONAL_INTENT_PATTERNS.some(pattern => pattern.test(context));
+}
+
+function findActionableKeywordMatch(
+  text: string,
+  pattern: RegExp,
+): Omit<DetectedKeyword, 'type'> | null {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+
+  for (const match of text.matchAll(globalPattern)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    const keyword = match[0];
+    if (isInformationalKeywordContext(text, match.index, keyword.length)) {
+      continue;
+    }
+
+    return {
+      keyword,
+      position: match.index,
+    };
+  }
+
+  return null;
+}
+
 /**
  * Extract prompt text from message parts
  */
@@ -145,13 +185,12 @@ export function detectKeywordsWithType(
     }
 
     const pattern = KEYWORD_PATTERNS[type];
-    const match = cleanedText.match(pattern);
+    const match = findActionableKeywordMatch(cleanedText, pattern);
 
-    if (match && match.index !== undefined) {
+    if (match) {
       detected.push({
+        ...match,
         type,
-        keyword: match[0],
-        position: match.index
       });
     }
   }

@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import type { BuiltinSkill } from './types.js';
 import { parseFrontmatter, parseFrontmatterAliases } from '../../utils/frontmatter.js';
 import { parseSkillPipelineMetadata, renderSkillPipelineGuidance } from '../../utils/skill-pipeline.js';
+import { renderSkillResourcesGuidance } from '../../utils/skill-resources.js';
 import { renderSkillRuntimeGuidance } from './runtime-guidance.js';
 
 // Get the project root directory (go up from src/features/builtin-skills/)
@@ -62,6 +63,7 @@ function loadSkillFromFile(skillPath: string, skillName: string): BuiltinSkill[]
       body.trim(),
       renderSkillRuntimeGuidance(safePrimaryName),
       renderSkillPipelineGuidance(safePrimaryName, pipeline),
+      renderSkillResourcesGuidance(skillPath),
     ].filter((section) => section.trim().length > 0).join('\n\n');
 
     const safeAliases = Array.from(

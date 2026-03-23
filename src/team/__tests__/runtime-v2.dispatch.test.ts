@@ -32,6 +32,7 @@ vi.mock('../model-contract.js', () => ({
   getWorkerEnv: modelContractMocks.getWorkerEnv,
   isPromptModeAgent: modelContractMocks.isPromptModeAgent,
   getPromptModeArgs: modelContractMocks.getPromptModeArgs,
+  resolveClaudeWorkerModel: vi.fn(() => undefined),
 }));
 
 vi.mock('../tmux-session.js', () => ({
@@ -68,10 +69,14 @@ describe('runtime v2 startup inbox dispatch', () => {
     mocks.sendToWorker.mockResolvedValue(true);
     modelContractMocks.buildWorkerArgv.mockImplementation((agentType?: string) => [`/usr/bin/${agentType ?? 'claude'}`]);
     modelContractMocks.resolveValidatedBinaryPath.mockImplementation((agentType?: string) => `/usr/bin/${agentType ?? 'claude'}`);
-    modelContractMocks.getWorkerEnv.mockImplementation(() => ({ OMC_TEAM_WORKER: 'dispatch-team/worker-1' }));
+    modelContractMocks.getWorkerEnv.mockImplementation((...args: unknown[]) => {
+      const teamName = typeof args[0] === 'string' ? args[0] : 'dispatch-team';
+      const workerName = typeof args[1] === 'string' ? args[1] : 'worker-1';
+      return { OMC_TEAM_WORKER: `${teamName}/${workerName}` };
+    });
     modelContractMocks.isPromptModeAgent.mockReturnValue(false);
     modelContractMocks.getPromptModeArgs.mockImplementation((_agentType: string, instruction: string) => [instruction]);
-    mocks.execFile.mockImplementation((file: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+    mocks.execFile.mockImplementation((_file: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
       if (args[0] === 'split-window') {
         cb(null, '%2\n', '');
         return;
@@ -112,10 +117,12 @@ describe('runtime v2 startup inbox dispatch', () => {
     expect(requests[0]?.inbox_correlation_key).toBe('startup:worker-1:1');
     expect(requests[0]?.trigger_message).toContain('.omc/state/team/dispatch-team/workers/worker-1/inbox.md');
     expect(requests[0]?.trigger_message).toContain('start work now');
+    expect(requests[0]?.trigger_message).toContain('next feasible work');
 
     const inboxPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'workers', 'worker-1', 'inbox.md');
     const inbox = await readFile(inboxPath, 'utf-8');
     expect(inbox).toContain('Dispatch test');
+    expect(inbox).toContain('ACK/progress replies are not a stop signal');
     expect(mocks.sendToWorker).toHaveBeenCalledWith(
       'dispatch-session',
       '%2',
@@ -134,6 +141,55 @@ describe('runtime v2 startup inbox dispatch', () => {
     );
   });
 
+
+  it('uses owner-aware startup allocation when task owners are provided', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-owner-startup-'));
+    const { startTeamV2 } = await import('../runtime-v2.js');
+
+    const runtime = await startTeamV2({
+      teamName: 'dispatch-team',
+      workerCount: 2,
+      agentTypes: ['claude', 'claude'],
+      tasks: [
+        { subject: 'Owner-routed task', description: 'Should start on worker-2', owner: 'worker-2' },
+        { subject: 'Fallback task', description: 'Should start on worker-1' },
+      ],
+      cwd,
+    });
+
+    expect(runtime.config.workers.map((worker) => worker.name)).toEqual(['worker-1', 'worker-2']);
+
+    const requests = await listDispatchRequests('dispatch-team', cwd, { kind: 'inbox' });
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.to_worker)).toEqual(['worker-2', 'worker-1']);
+
+    const spawnedWorkers = mocks.spawnWorkerInPane.mock.calls.map((call) => call[2]?.envVars?.OMC_TEAM_WORKER);
+    expect(spawnedWorkers).toEqual(['dispatch-team/worker-2', 'dispatch-team/worker-1']);
+  });
+
+
+  it('preserves explicit worker roles in runtime config during startup fanout', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-worker-roles-'));
+    const { startTeamV2 } = await import('../runtime-v2.js');
+
+    const runtime = await startTeamV2({
+      teamName: 'dispatch-team',
+      workerCount: 2,
+      agentTypes: ['codex', 'gemini'],
+      workerRoles: ['architect', 'writer'],
+      tasks: [
+        { subject: 'Worker 1 (architect): draft launch plan', description: 'draft launch plan', owner: 'worker-1' },
+        { subject: 'Worker 2 (writer): draft launch plan', description: 'draft launch plan', owner: 'worker-2' },
+      ],
+      cwd,
+    });
+
+    expect(runtime.config.workers.map((worker) => worker.role)).toEqual(['architect', 'writer']);
+
+    const configPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'config.json');
+    const persisted = JSON.parse(await readFile(configPath, 'utf-8'));
+    expect(persisted.workers.map((worker: { role: string }) => worker.role)).toEqual(['architect', 'writer']);
+  });
 
   it('passes through dedicated-window startup requests', async () => {
     cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-new-window-'));

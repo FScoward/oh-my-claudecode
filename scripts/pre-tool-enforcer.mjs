@@ -26,6 +26,13 @@ const MODE_STATE_FILES = [
 ];
 const AGENT_HEAVY_TOOLS = new Set(['Task', 'TaskCreate', 'TaskUpdate']);
 const PREFLIGHT_CONTEXT_THRESHOLD = parseInt(process.env.OMC_AGENT_PREFLIGHT_CONTEXT_THRESHOLD || '72', 10);
+const QUIET_LEVEL = getQuietLevel();
+
+function getQuietLevel() {
+  const parsed = Number.parseInt(process.env.OMC_QUIET || '0', 10);
+  if (Number.isNaN(parsed)) return 0;
+  return Math.max(0, parsed);
+}
 
 /**
  * Resolve transcript path in worktree environments.
@@ -268,6 +275,7 @@ function getActiveTeamState(directory, sessionId) {
 // Generate agent spawn message with metadata
 function generateAgentSpawnMessage(toolInput, directory, todoStatus, sessionId) {
   if (!toolInput || typeof toolInput !== 'object') {
+    if (QUIET_LEVEL >= 2) return '';
     return `${todoStatus}Launch multiple agents in parallel when tasks are independent. Use run_in_background for long operations.`;
   }
 
@@ -291,6 +299,8 @@ function generateAgentSpawnMessage(toolInput, directory, todoStatus, sessionId) 
       `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is set in ~/.claude/settings.json and restart Claude Code.`;
   }
 
+  if (QUIET_LEVEL >= 2) return '';
+
   const parts = [`${todoStatus}Spawning agent: ${agentType} (${model})${bg}`];
   if (desc) parts.push(`Task: ${desc}`);
   if (tracking.running > 0) parts.push(`Active agents: ${tracking.running}`);
@@ -300,6 +310,13 @@ function generateAgentSpawnMessage(toolInput, directory, todoStatus, sessionId) 
 
 // Generate contextual message based on tool type
 function generateMessage(toolName, todoStatus, modeActive = false) {
+  if (QUIET_LEVEL >= 1 && ['Bash', 'Edit', 'Write', 'Read', 'Grep', 'Glob'].includes(toolName)) {
+    return '';
+  }
+  if (QUIET_LEVEL >= 2 && toolName === 'TodoWrite') {
+    return '';
+  }
+
   const messages = {
     TodoWrite: `${todoStatus}Mark todos in_progress BEFORE starting, completed IMMEDIATELY after finishing.`,
     Bash: `${todoStatus}Use parallel execution for independent tasks. Use run_in_background for long operations (npm install, builds, tests).`,
@@ -343,7 +360,14 @@ const SKILL_PROTECTION_MAP = {
   deepinit: 'heavy',
 };
 
-function getSkillProtectionLevel(skillName) {
+function getSkillProtectionLevel(skillName, rawSkillName) {
+  // When rawSkillName is provided, only apply protection to OMC-prefixed skills.
+  // Non-prefixed skills are project custom skills or other plugins — no protection.
+  // See: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/1581
+  if (rawSkillName != null && typeof rawSkillName === 'string' &&
+      !rawSkillName.toLowerCase().startsWith('oh-my-claudecode:')) {
+    return 'none';
+  }
   const normalized = (skillName || '').toLowerCase().replace(/^oh-my-claudecode:/, '');
   return SKILL_PROTECTION_MAP[normalized] || 'none';
 }
@@ -356,8 +380,8 @@ function extractSkillName(toolInput) {
   return normalized.includes(':') ? normalized.split(':').at(-1).toLowerCase() : normalized.toLowerCase();
 }
 
-function writeSkillActiveState(directory, skillName, sessionId) {
-  const protection = getSkillProtectionLevel(skillName);
+function writeSkillActiveState(directory, skillName, sessionId, rawSkillName) {
+  const protection = getSkillProtectionLevel(skillName, rawSkillName);
   if (protection === 'none') return;
 
   const config = SKILL_PROTECTION_CONFIGS[protection];
@@ -439,7 +463,10 @@ async function main() {
       if (skillName) {
         const sid = typeof data.session_id === 'string' ? data.session_id
           : typeof data.sessionId === 'string' ? data.sessionId : '';
-        writeSkillActiveState(directory, skillName, sid);
+        // Pass rawSkillName to distinguish OMC skills from project custom skills (issue #1581)
+        const rawSkill = toolInput.skill || toolInput.skill_name || toolInput.skillName || toolInput.command || '';
+        const rawSkillName = typeof rawSkill === 'string' && rawSkill.trim() ? rawSkill.trim() : undefined;
+        writeSkillActiveState(directory, skillName, sid, rawSkillName);
       }
     }
 

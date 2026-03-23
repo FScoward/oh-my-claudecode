@@ -349,6 +349,18 @@ function readStateFileWithSession(stateDir, globalStateDir, filename, sessionId)
   return readStateFile(stateDir, globalStateDir, filename);
 }
 
+function getActiveSubagentCount(stateDir) {
+  try {
+    const tracking = readJsonFile(join(stateDir, "subagent-tracking.json"));
+    if (!tracking || !Array.isArray(tracking.agents)) {
+      return 0;
+    }
+    return tracking.agents.filter((agent) => agent?.status === "running").length;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Count incomplete Tasks from Claude Code's native Task system.
  */
@@ -700,7 +712,10 @@ async function main() {
             autopilot.state.last_checked_at = new Date().toISOString();
             writeJsonFile(autopilot.path, autopilot.state);
 
-            let reason = `[AUTOPILOT - Phase: ${phase}] Autopilot not complete. Continue working. When all phases are complete, run /oh-my-claudecode:cancel to cleanly exit and clean up state files. If cancel fails, retry with /oh-my-claudecode:cancel --force.`;
+            const cancelGuidance = hasValidSessionId && autopilot.state.session_id === sessionId
+              ? " When all phases are complete, run /oh-my-claudecode:cancel to cleanly exit and clean up this session's autopilot state files. If cancel fails, retry with /oh-my-claudecode:cancel --force."
+              : "";
+            let reason = `[AUTOPILOT - Phase: ${phase}] Autopilot not complete. Continue working.${cancelGuidance}`;
             if (errorGuidance) {
               reason = errorGuidance + reason;
             }
@@ -981,6 +996,11 @@ async function main() {
         const maxReinforcements = skillState.state.max_reinforcements || 3;
 
         if (count < maxReinforcements) {
+          if (getActiveSubagentCount(stateDir) > 0) {
+            console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+            return;
+          }
+
           const toolError = readLastToolError(stateDir);
           const errorGuidance = getToolErrorRetryGuidance(toolError);
 

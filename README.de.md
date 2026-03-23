@@ -7,6 +7,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Yeachan-Heo/oh-my-claudecode?style=flat&color=yellow)](https://github.com/Yeachan-Heo/oh-my-claudecode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Sponsor](https://img.shields.io/badge/Sponsor-❤️-red?style=flat&logo=github)](https://github.com/sponsors/Yeachan-Heo)
+[![Discord](https://img.shields.io/discord/1466022107199574193?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/qRJw62Gvh7)
 
 **Multi-Agenten-Orchestrierung für Claude Code. Null Lernkurve.**
 
@@ -130,6 +131,31 @@ Mehrere Strategien für verschiedene Anwendungsfälle — von Team-gestützter O
 - **HUD statusline** — Echtzeit-Orchestrierungsmetriken in Ihrer Statusleiste
 - **Skill-Lernen** — Wiederverwendbare Muster aus Ihren Sitzungen extrahieren
 - **Analytik & Kostenverfolgung** — Token-Nutzung über alle Sitzungen verstehen
+
+### Benutzerdefinierte Skills
+
+Einmal lernen, für immer wiederverwenden. OMC extrahiert hart erarbeitetes Debugging-Wissen in portable Skill-Dateien, die bei Bedarf automatisch injiziert werden.
+
+| | Projektbereich | Benutzerbereich |
+|---|---|---|
+| **Pfad** | `.omc/skills/` | `~/.omc/skills/` |
+| **Geteilt mit** | Team (versionskontrolliert) | Alle Ihre Projekte |
+| **Priorität** | Höher (überschreibt Benutzerbereich) | Niedriger (Fallback) |
+
+```yaml
+# .omc/skills/fix-proxy-crash.md
+---
+name: Fix Proxy Crash
+description: aiohttp proxy crashes on ClientDisconnectedError
+triggers: ["proxy", "aiohttp", "disconnected"]
+source: extracted
+---
+Umschließen Sie den Handler bei server.py:42 mit try/except ClientDisconnectedError...
+```
+
+**Skill-Verwaltung:** `/skill list | add | remove | edit | search`
+**Auto-Lernen:** `/learner` extrahiert wiederverwendbare Muster mit strengen Qualitätskriterien
+**Auto-Injektion:** Passende Skills werden automatisch in den Kontext geladen — kein manueller Aufruf nötig
 
 [Vollständige Feature-Liste →](docs/REFERENCE.md)
 

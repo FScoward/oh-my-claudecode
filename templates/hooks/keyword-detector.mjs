@@ -85,6 +85,17 @@ Perform a focused security review of the relevant changes or target area. Check 
 ---
 `;
 
+const SEARCH_MESSAGE = `<search-mode>
+MAXIMIZE SEARCH EFFORT. Launch multiple background agents IN PARALLEL:
+- explore agents (codebase patterns, file structures)
+- document-specialist agents (remote repos, official docs, GitHub examples)
+Plus direct tools: Grep, Glob
+NEVER stop at first result - be exhaustive.
+</search-mode>
+
+---
+`;
+
 // Extract prompt from various JSON structures
 function extractPrompt(input) {
   try {
@@ -129,6 +140,40 @@ function sanitizeForKeywordDetection(text) {
     .replace(/```[\s\S]*?```/g, '')
     // 6. Strip inline code (existing)
     .replace(/`[^`]+`/g, '');
+}
+
+const INFORMATIONAL_INTENT_PATTERNS = [
+  /\b(?:what(?:'s|\s+is)|what\s+are|how\s+(?:to|do\s+i)\s+use|explain|explanation|tell\s+me\s+about|describe)\b/i,
+  /(?:뭐야|무엇(?:이야|인가요)?|어떻게|설명|사용법)/u,
+  /(?:とは|って何|使い方|説明)/u,
+  /(?:什么是|什麼是|怎(?:么|樣)用|如何使用|解释|說明|说明)/u,
+];
+const INFORMATIONAL_CONTEXT_WINDOW = 80;
+
+function isInformationalKeywordContext(text, position, keywordLength) {
+  const start = Math.max(0, position - INFORMATIONAL_CONTEXT_WINDOW);
+  const end = Math.min(text.length, position + keywordLength + INFORMATIONAL_CONTEXT_WINDOW);
+  const context = text.slice(start, end);
+  return INFORMATIONAL_INTENT_PATTERNS.some((pattern) => pattern.test(context));
+}
+
+function hasActionableKeyword(text, pattern) {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+
+  for (const match of text.matchAll(globalPattern)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    if (isInformationalKeywordContext(text, match.index, match[0].length)) {
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
 }
 
 // Create state file for a mode
@@ -360,17 +405,17 @@ async function main() {
     const matches = [];
 
     // Cancel keywords
-    if (/\b(cancelomc|stopomc)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(cancelomc|stopomc)\b/i)) {
       matches.push({ name: 'cancel', args: '' });
     }
 
     // Ralph keywords
-    if (/\b(ralph)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ralph)\b/i)) {
       matches.push({ name: 'ralph', args: '' });
     }
 
     // Autopilot keywords
-    if (/\b(autopilot|auto[\s-]?pilot|fullsend|full\s+auto)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(autopilot|auto[\s-]?pilot|fullsend|full\s+auto)\b/i)) {
       matches.push({ name: 'autopilot', args: '' });
     }
 
@@ -378,23 +423,23 @@ async function main() {
     // This prevents infinite spawning when Claude workers receive prompts containing "team".
 
     // Ultrawork keywords
-    if (/\b(ultrawork|ulw)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrawork|ulw)\b/i)) {
       matches.push({ name: 'ultrawork', args: '' });
     }
 
 
     // CCG keywords (Claude-Codex-Gemini tri-model orchestration)
-    if (/\b(ccg|claude-codex-gemini)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ccg|claude-codex-gemini)\b/i)) {
       matches.push({ name: 'ccg', args: '' });
     }
 
     // Ralplan keyword
-    if (/\b(ralplan)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ralplan)\b/i)) {
       matches.push({ name: 'ralplan', args: '' });
     }
 
     // Deep interview keywords
-    if (/\b(deep[\s-]interview|ouroboros)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]interview|ouroboros)\b/i)) {
       matches.push({ name: 'deep-interview', args: '' });
     }
 
@@ -404,36 +449,36 @@ async function main() {
     }
 
     // TDD keywords
-    if (/\b(tdd)\b/i.test(cleanPrompt) ||
-        /\btest\s+first\b/i.test(cleanPrompt) ||
-        /\bred\s+green\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(tdd)\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\btest\s+first\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bred\s+green\b/i)) {
       matches.push({ name: 'tdd', args: '' });
     }
 
     // Code review keywords
-    if (/\b(code\s+review|review\s+code)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(code\s+review|review\s+code)\b/i)) {
       matches.push({ name: 'code-review', args: '' });
     }
 
     // Security review keywords
-    if (/\b(security\s+review|review\s+security)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(security\s+review|review\s+security)\b/i)) {
       matches.push({ name: 'security-review', args: '' });
     }
 
     // Ultrathink keywords
-    if (/\b(ultrathink)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrathink)\b/i)) {
       matches.push({ name: 'ultrathink', args: '' });
     }
 
     // Deepsearch keywords
-    if (/\b(deepsearch)\b/i.test(cleanPrompt) ||
-        /\bsearch\s+the\s+codebase\b/i.test(cleanPrompt) ||
-        /\bfind\s+in\s+(the\s+)?codebase\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deepsearch)\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bsearch\s+the\s+codebase\b/i) ||
+        hasActionableKeyword(cleanPrompt, /\bfind\s+in\s+(the\s+)?codebase\b/i)) {
       matches.push({ name: 'deepsearch', args: '' });
     }
 
     // Analyze keywords
-    if (/\b(deep[\s-]?analyze|deepanalyze)\b/i.test(cleanPrompt)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]?analyze|deepanalyze)\b/i)) {
       matches.push({ name: 'analyze', args: '' });
     }
 
@@ -480,6 +525,7 @@ async function main() {
     const additionalContextParts = [];
     for (const [keywordName, message] of [
       ['ultrathink', ULTRATHINK_MESSAGE],
+      ['deepsearch', SEARCH_MESSAGE],
       ['analyze', ANALYZE_MESSAGE],
       ['tdd', TDD_MESSAGE],
       ['code-review', CODE_REVIEW_MESSAGE],

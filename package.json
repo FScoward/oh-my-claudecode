@@ -1,6 +1,6 @@
 {
   "name": "oh-my-claude-sisyphus",
-  "version": "4.8.0",
+  "version": "4.9.0",
   "description": "Multi-agent orchestration system for Claude Code - Inspired by oh-my-opencode",
   "type": "module",
   "main": "dist/index.js",
@@ -60,9 +60,13 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src",
     "format": "prettier --write src/**/*.ts",
+    "sync-featured-contributors": "tsx scripts/generate-featured-contributors.ts",
+    "sync-featured-contributors:verify": "tsx scripts/generate-featured-contributors.ts --verify",
+    "sync-featured-contributors:dry-run": "tsx scripts/generate-featured-contributors.ts --dry-run",
     "sync-metadata": "tsx scripts/sync-metadata.ts",
     "sync-metadata:verify": "tsx scripts/sync-metadata.ts --verify",
     "sync-metadata:dry-run": "tsx scripts/sync-metadata.ts --dry-run",
+    "release": "tsx scripts/release.ts",
     "prepublishOnly": "npm run build && npm run compose-docs"
   },
   "dependencies": {

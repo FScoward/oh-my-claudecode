@@ -7,6 +7,7 @@ English | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](READM
 [![GitHub stars](https://img.shields.io/github/stars/Yeachan-Heo/oh-my-claudecode?style=flat&color=yellow)](https://github.com/Yeachan-Heo/oh-my-claudecode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Sponsor](https://img.shields.io/badge/Sponsor-❤️-red?style=flat&logo=github)](https://github.com/sponsors/Yeachan-Heo)
+[![Discord](https://img.shields.io/discord/1466022107199574193?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/qRJw62Gvh7)
 
 > **For Codex users:** Check out [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) — the same orchestration experience for OpenAI Codex CLI.
 
@@ -14,7 +15,7 @@ English | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](READM
 
 _Don't learn Claude Code. Just use OMC._
 
-[Get Started](#quick-start) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [Migration Guide](docs/MIGRATION.md)
+[Get Started](#quick-start) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [Migration Guide](docs/MIGRATION.md) • [Discord](https://discord.gg/qRJw62Gvh7)
 
 ---
 
@@ -185,6 +186,31 @@ Multiple strategies for different use cases — from Team-backed orchestration t
 - **HUD statusline** - Real-time orchestration metrics in your status bar
 - **Skill learning** - Extract reusable patterns from your sessions
 - **Analytics & cost tracking** - Understand token usage across all sessions
+
+### Custom Skills
+
+Learn once, reuse forever. OMC extracts hard-won debugging knowledge into portable skill files that auto-inject when relevant.
+
+| | Project Scope | User Scope |
+|---|---|---|
+| **Path** | `.omc/skills/` | `~/.omc/skills/` |
+| **Shared with** | Team (version-controlled) | All your projects |
+| **Priority** | Higher (overrides user) | Lower (fallback) |
+
+```yaml
+# .omc/skills/fix-proxy-crash.md
+---
+name: Fix Proxy Crash
+description: aiohttp proxy crashes on ClientDisconnectedError
+triggers: ["proxy", "aiohttp", "disconnected"]
+source: extracted
+---
+Wrap handler at server.py:42 in try/except ClientDisconnectedError...
+```
+
+**Manage skills:** `/skill list | add | remove | edit | search`
+**Auto-learn:** `/learner` extracts reusable patterns with strict quality gates
+**Auto-inject:** Matching skills load into context automatically — no manual recall needed
 
 [Full feature list →](docs/REFERENCE.md)
 
@@ -400,6 +426,22 @@ MIT
 **Zero learning curve. Maximum power.**
 
 </div>
+
+<!-- OMC:FEATURED-CONTRIBUTORS:START -->
+## Featured by OmC Contributors
+
+Top personal non-fork, non-archived repos from all-time OMC contributors (100+ GitHub stars).
+
+- [@Yeachan-Heo](https://github.com/Yeachan-Heo) — [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) (⭐ 9.4k)
+- [@junhoyeo](https://github.com/junhoyeo) — [tokscale](https://github.com/junhoyeo/tokscale) (⭐ 1.1k)
+- [@marlocarlo](https://github.com/marlocarlo) — [psmux](https://github.com/marlocarlo/psmux) (⭐ 450)
+- [@BowTiedSwan](https://github.com/BowTiedSwan) — [buildflow](https://github.com/BowTiedSwan/buildflow) (⭐ 282)
+- [@emgeee](https://github.com/emgeee) — [mean-tutorial](https://github.com/emgeee/mean-tutorial) (⭐ 200)
+- [@anduinnn](https://github.com/anduinnn) — [HiFiNi-Auto-CheckIn](https://github.com/anduinnn/HiFiNi-Auto-CheckIn) (⭐ 171)
+- [@Znuff](https://github.com/Znuff) — [consolas-powerline](https://github.com/Znuff/consolas-powerline) (⭐ 145)
+- [@shaun0927](https://github.com/shaun0927) — [openchrome](https://github.com/shaun0927/openchrome) (⭐ 136)
+
+<!-- OMC:FEATURED-CONTRIBUTORS:END -->
 
 ## Star History
 

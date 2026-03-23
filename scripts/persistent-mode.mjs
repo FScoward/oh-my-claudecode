@@ -593,7 +593,6 @@ async function main() {
 
           console.log(
             JSON.stringify({
-              continue: false,
               decision: "block",
               reason,
             }),
@@ -606,11 +605,11 @@ async function main() {
         ralph.state.last_checked_at = new Date().toISOString();
         writeJsonFile(ralph.path, ralph.state);
 
+        const ralphExtendedReason = `[RALPH LOOP - EXTENDED] Max iterations reached; extending to ${ralph.state.max_iterations} and continuing. When FULLY complete (after Architect verification), run /oh-my-claudecode:cancel (or --force).`;
         console.log(
           JSON.stringify({
-            continue: false,
             decision: "block",
-            reason: `[RALPH LOOP - EXTENDED] Max iterations reached; extending to ${ralph.state.max_iterations} and continuing. When FULLY complete (after Architect verification), run /oh-my-claudecode:cancel (or --force).`,
+            reason: ralphExtendedReason,
           }),
         );
         return;
@@ -638,14 +637,16 @@ async function main() {
             autopilot.state.last_checked_at = new Date().toISOString();
             writeJsonFile(autopilot.path, autopilot.state);
 
-            let reason = `[AUTOPILOT - Phase: ${phase}] Autopilot not complete. Continue working. When all phases are complete, run /oh-my-claudecode:cancel to cleanly exit and clean up state files. If cancel fails, retry with /oh-my-claudecode:cancel --force.`;
+            const cancelGuidance = hasValidSessionId && autopilot.state.session_id === sessionId
+              ? " When all phases are complete, run /oh-my-claudecode:cancel to cleanly exit and clean up this session's autopilot state files. If cancel fails, retry with /oh-my-claudecode:cancel --force."
+              : "";
+            let reason = `[AUTOPILOT - Phase: ${phase}] Autopilot not complete. Continue working.${cancelGuidance}`;
             if (errorGuidance) {
               reason = errorGuidance + reason;
             }
 
             console.log(
               JSON.stringify({
-                continue: false,
                 decision: "block",
                 reason,
               }),
@@ -686,7 +687,6 @@ async function main() {
 
           console.log(
             JSON.stringify({
-              continue: false,
               decision: "block",
               reason,
             }),
@@ -722,7 +722,6 @@ async function main() {
 
           console.log(
             JSON.stringify({
-              continue: false,
               decision: "block",
               reason,
             }),
@@ -760,7 +759,6 @@ async function main() {
 
           console.log(
             JSON.stringify({
-              continue: false,
               decision: "block",
               reason,
             }),
@@ -798,7 +796,6 @@ async function main() {
 
             console.log(
               JSON.stringify({
-                continue: false,
                 decision: "block",
                 reason,
               }),
@@ -835,7 +832,7 @@ async function main() {
               reason = errorGuidance + reason;
             }
 
-            console.log(JSON.stringify({ continue: false, decision: "block", reason }));
+            console.log(JSON.stringify({ decision: "block", reason }));
             return;
           }
         }
@@ -868,7 +865,6 @@ async function main() {
 
         console.log(
           JSON.stringify({
-            continue: false,
             decision: "block",
             reason,
           }),
@@ -927,7 +923,7 @@ async function main() {
         reason = errorGuidance + reason;
       }
 
-      console.log(JSON.stringify({ continue: false, decision: "block", reason }));
+      console.log(JSON.stringify({ decision: "block", reason }));
       return;
     }
 

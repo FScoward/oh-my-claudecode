@@ -39,11 +39,11 @@ function renderDeepInterviewRuntimeGuidance(availability: SkillRuntimeAvailabili
 
 export function renderSkillRuntimeGuidance(
   skillName: string,
-  availability: SkillRuntimeAvailability = detectSkillRuntimeAvailability(),
+  availability?: SkillRuntimeAvailability,
 ): string {
   switch (normalizeSkillName(skillName)) {
     case 'deep-interview':
-      return renderDeepInterviewRuntimeGuidance(availability);
+      return renderDeepInterviewRuntimeGuidance(availability ?? detectSkillRuntimeAvailability());
     default:
       return '';
   }

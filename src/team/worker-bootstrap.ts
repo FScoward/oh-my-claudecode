@@ -25,7 +25,7 @@ export function generateTriggerMessage(
   if (teamStateRoot !== '.omc/state') {
     return `Read ${inboxPath}, work now, report progress.`;
   }
-  return `Read ${inboxPath}, start work now, then report concrete progress (not ACK-only).`;
+  return `Read ${inboxPath}, start work now, report concrete progress (not ACK-only), and keep executing your assigned or next feasible work.`;
 }
 
 export function generateMailboxTriggerMessage(
@@ -39,7 +39,7 @@ export function generateMailboxTriggerMessage(
   if (teamStateRoot !== '.omc/state') {
     return `${normalizedCount} new msg(s): check ${mailboxPath}, act and report progress.`;
   }
-  return `You have ${normalizedCount} new message(s). Check ${mailboxPath}, act now, and reply with concrete progress (not ACK-only).`;
+  return `You have ${normalizedCount} new message(s). Check ${mailboxPath}, act now, reply with concrete progress (not ACK-only), and keep executing your assigned or next feasible work.`;
 }
 
 function agentTypeGuidance(agentType: CliAgentType): string {
@@ -88,7 +88,6 @@ export function generateWorkerOverlay(params: WorkerBootstrapParams): string {
   const heartbeatPath = `.omc/state/team/${teamName}/workers/${workerName}/heartbeat.json`;
   const inboxPath = `.omc/state/team/${teamName}/workers/${workerName}/inbox.md`;
   const statusPath = `.omc/state/team/${teamName}/workers/${workerName}/status.json`;
-  const taskDir = `.omc/state/team/${teamName}/tasks`;
 
   const taskList = sanitizedTasks.length > 0
     ? sanitizedTasks.map(t => `- **Task ${t.id}**: ${t.subject}\n  Description: ${t.description}\n  Status: pending`).join('\n')
@@ -116,7 +115,7 @@ You MUST complete ALL of these steps. Do NOT skip any step. Do NOT exit without 
 4. **Transition** the task status (REQUIRED before exit):
    - On success: \`omc team api transition-task-status --input "{\"team_name\":\"${teamName}\",\"task_id\":\"<id>\",\"from\":\"in_progress\",\"to\":\"completed\",\"claim_token\":\"<claim_token>\"}" --json\`
    - On failure: \`omc team api transition-task-status --input "{\"team_name\":\"${teamName}\",\"task_id\":\"<id>\",\"from\":\"in_progress\",\"to\":\"failed\",\"claim_token\":\"<claim_token>\"}" --json\`
-5. **Exit** immediately after transitioning.
+5. **Keep going after replies**: ACK/progress messages are not a stop signal. Keep executing your assigned or next feasible work until the task is actually complete or failed, then transition and exit.
 
 ## Identity
 - **Team**: ${teamName}

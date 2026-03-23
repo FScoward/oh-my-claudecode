@@ -169,6 +169,22 @@ World`);
                 expect(ralphMatch).toBeDefined();
                 expect(ralphMatch?.keyword).toBe('ralph');
             });
+            it('should NOT detect informational Korean questions about ralph and ralplan', () => {
+                const result = detectKeywordsWithType('ralph 와 ralplan 은 뭐야?');
+                expect(result).toEqual([]);
+            });
+            it('should NOT detect informational English questions about ralph', () => {
+                const result = detectKeywordsWithType('What is ralph and how do I use it?');
+                expect(result).toEqual([]);
+            });
+            it('should NOT detect informational Japanese questions about ralplan', () => {
+                const result = detectKeywordsWithType('ralplan とは？ 使い方を教えて');
+                expect(result).toEqual([]);
+            });
+            it('should NOT detect informational Chinese questions about ralph', () => {
+                const result = detectKeywordsWithType('ralph 是什么？怎么用？');
+                expect(result).toEqual([]);
+            });
             it('should NOT detect "don\'t stop" phrase', () => {
                 const result = detectKeywordsWithType("Don't stop until done");
                 const ralphMatch = result.find((r) => r.type === 'ralph');

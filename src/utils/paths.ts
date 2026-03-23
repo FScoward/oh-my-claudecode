@@ -138,7 +138,7 @@ function stripTrailing(p: string): string {
  * are still referenced by long-running sessions via CLAUDE_PLUGIN_ROOT. */
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
-export function purgeStalePluginCacheVersions(): PurgeCacheResult {
+export function purgeStalePluginCacheVersions(options?: { skipGracePeriod?: boolean }): PurgeCacheResult {
   const result: PurgeCacheResult = { removed: 0, removedPaths: [], errors: [] };
 
   const configDir = getClaudeConfigDir();
@@ -185,6 +185,7 @@ export function purgeStalePluginCacheVersions(): PurgeCacheResult {
   }
 
   const now = Date.now();
+  const activePathsArray = [...activePaths];
 
   for (const marketplace of marketplaces) {
     const marketDir = join(cacheDir, marketplace);
@@ -210,16 +211,18 @@ export function purgeStalePluginCacheVersions(): PurgeCacheResult {
 
         // Check if this version or any of its subdirectories are referenced
         const isActive = activePaths.has(normalised) ||
-          Array.from(activePaths).some(ap => ap.startsWith(normalised + '/'));
+          activePathsArray.some(ap => ap.startsWith(normalised + '/'));
 
         if (isActive) continue;
 
         // Grace period: skip recently modified directories to avoid
         // race conditions during concurrent plugin updates
-        try {
-          const stats = statSync(versionDir);
-          if (now - stats.mtimeMs < STALE_THRESHOLD_MS) continue;
-        } catch { continue; }
+        if (!options?.skipGracePeriod) {
+          try {
+            const stats = statSync(versionDir);
+            if (now - stats.mtimeMs < STALE_THRESHOLD_MS) continue;
+          } catch { continue; }
+        }
 
         if (safeRmSync(versionDir)) {
           result.removed++;

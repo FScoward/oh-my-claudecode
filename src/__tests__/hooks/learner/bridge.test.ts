@@ -59,6 +59,23 @@ describe("Skill Bridge Module", () => {
       expect(projectFiles[0].path).toContain("test-skill.md");
     });
 
+    it("should discover compatibility skills in project .agents/skills/", () => {
+      const skillsDir = join(testProjectRoot, ".agents", "skills");
+      mkdirSync(skillsDir, { recursive: true });
+
+      writeFileSync(
+        join(skillsDir, "compat-skill.md"),
+        "---\nname: Compat Skill\ntriggers:\n  - compat\n---\nContent",
+      );
+
+      const files = findSkillFiles(testProjectRoot);
+      const projectFiles = files.filter((f) => f.scope === "project");
+
+      expect(projectFiles).toHaveLength(1);
+      expect(projectFiles[0].sourceDir).toContain(join(".agents", "skills"));
+      expect(projectFiles[0].path).toContain("compat-skill.md");
+    });
+
     it("should discover skills recursively in subdirectories", () => {
       const skillsDir = join(testProjectRoot, ".omc", "skills");
       const subDir = join(skillsDir, "subdir", "nested");

@@ -14,6 +14,13 @@ import { readStdin } from './lib/stdin.mjs';
 
 const AGENT_OUTPUT_ANALYSIS_LIMIT = parseInt(process.env.OMC_AGENT_OUTPUT_ANALYSIS_LIMIT || '12000', 10);
 const AGENT_OUTPUT_SUMMARY_LIMIT = parseInt(process.env.OMC_AGENT_OUTPUT_SUMMARY_LIMIT || '360', 10);
+const QUIET_LEVEL = getQuietLevel();
+
+function getQuietLevel() {
+  const parsed = Number.parseInt(process.env.OMC_QUIET || '0', 10);
+  if (Number.isNaN(parsed)) return 0;
+  return Math.max(0, parsed);
+}
 
 // Get the directory of this script to resolve the dist module
 const __filename = fileURLToPath(import.meta.url);
@@ -299,7 +306,7 @@ export function detectWriteFailure(output) {
 }
 
 // Get agent completion summary from tracking state
-function getAgentCompletionSummary(directory) {
+function getAgentCompletionSummary(directory, quietLevel = QUIET_LEVEL) {
   const trackingFile = join(directory, '.omc', 'state', 'subagent-tracking.json');
   try {
     if (existsSync(trackingFile)) {
@@ -312,10 +319,10 @@ function getAgentCompletionSummary(directory) {
       if (running.length === 0 && completed === 0 && failed === 0) return '';
 
       const parts = [];
-      if (running.length > 0) {
+      if (quietLevel < 2 && running.length > 0) {
         parts.push(`Running: ${running.length} [${running.map(a => a.agent_type.replace('oh-my-claudecode:', '')).join(', ')}]`);
       }
-      if (completed > 0) parts.push(`Completed: ${completed}`);
+      if (quietLevel < 2 && completed > 0) parts.push(`Completed: ${completed}`);
       if (failed > 0) parts.push(`Failed: ${failed}`);
 
       return parts.join(' | ');
@@ -338,7 +345,7 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
         message = `Command exited with code ${code} but produced valid output. This may be expected behavior.`;
       } else if (detectBashFailure(toolOutput)) {
         message = 'Command failed. Please investigate the error and fix before continuing.';
-      } else if (detectBackgroundOperation(toolOutput)) {
+      } else if (QUIET_LEVEL < 2 && detectBackgroundOperation(toolOutput)) {
         message = 'Background operation detected. Remember to verify results before proceeding.';
       }
       break;
@@ -346,12 +353,12 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
     case 'Task':
     case 'TaskCreate':
     case 'TaskUpdate': {
-      const agentSummary = getAgentCompletionSummary(directory);
+      const agentSummary = getAgentCompletionSummary(directory, QUIET_LEVEL);
       if (detectWriteFailure(toolOutput)) {
         message = 'Task delegation failed. Verify agent name and parameters.';
-      } else if (detectBackgroundOperation(toolOutput)) {
+      } else if (QUIET_LEVEL < 2 && detectBackgroundOperation(toolOutput)) {
         message = 'Background task launched. Use TaskOutput to check results when needed.';
-      } else if (toolCount > 5) {
+      } else if (QUIET_LEVEL < 2 && toolCount > 5) {
         message = `Multiple tasks delegated (${toolCount} total). Track their completion status.`;
       }
       if (wasTruncated) {
@@ -366,7 +373,7 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
 
     case 'TaskOutput': {
       const summary = summarizeAgentResult(toolOutput);
-      if (summary) {
+      if (QUIET_LEVEL < 2 && summary) {
         message = `TaskOutput summary: ${summary}`;
       }
       if (wasTruncated) {
@@ -379,7 +386,7 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
     case 'Edit':
       if (detectWriteFailure(toolOutput)) {
         message = 'Edit operation failed. Verify file exists and content matches exactly.';
-      } else {
+      } else if (QUIET_LEVEL === 0) {
         message = 'Code modified. Verify changes work as expected before marking complete.';
       }
       break;
@@ -387,35 +394,35 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
     case 'Write':
       if (detectWriteFailure(toolOutput)) {
         message = 'Write operation failed. Check file permissions and directory existence.';
-      } else {
+      } else if (QUIET_LEVEL === 0) {
         message = 'File written. Test the changes to ensure they work correctly.';
       }
       break;
 
     case 'TodoWrite':
-      if (/created|added/i.test(toolOutput)) {
+      if (QUIET_LEVEL === 0 && /created|added/i.test(toolOutput)) {
         message = 'Todo list updated. Proceed with next task on the list.';
-      } else if (/completed|done/i.test(toolOutput)) {
+      } else if (QUIET_LEVEL === 0 && /completed|done/i.test(toolOutput)) {
         message = 'Task marked complete. Continue with remaining todos.';
-      } else if (/in_progress/i.test(toolOutput)) {
+      } else if (QUIET_LEVEL === 0 && /in_progress/i.test(toolOutput)) {
         message = 'Task marked in progress. Focus on completing this task.';
       }
       break;
 
     case 'Read':
-      if (toolCount > 10) {
+      if (QUIET_LEVEL === 0 && toolCount > 10) {
         message = `Extensive reading (${toolCount} files). Consider using Grep for pattern searches.`;
       }
       break;
 
     case 'Grep':
-      if (/^0$|no matches/i.test(toolOutput)) {
+      if (QUIET_LEVEL === 0 && /^0$|no matches/i.test(toolOutput)) {
         message = 'No matches found. Verify pattern syntax or try broader search.';
       }
       break;
 
     case 'Glob':
-      if (!toolOutput.trim() || /no files/i.test(toolOutput)) {
+      if (QUIET_LEVEL === 0 && (!toolOutput.trim() || /no files/i.test(toolOutput))) {
         message = 'No files matched pattern. Verify glob syntax and directory.';
       }
       break;

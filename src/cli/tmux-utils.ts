@@ -39,16 +39,30 @@ export function isClaudeAvailable(): boolean {
 }
 
 /**
- * Resolve launch policy based on environment
+ * Resolve launch policy based on environment and args
  * - inside-tmux: Already in tmux session, split pane for HUD
  * - outside-tmux: Not in tmux, create new session
  * - direct: tmux not available, run directly
+ * - direct: print mode requested so stdout can flow to parent process
  */
-export function resolveLaunchPolicy(env: NodeJS.ProcessEnv = process.env): ClaudeLaunchPolicy {
+export function resolveLaunchPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+  args: string[] = [],
+): ClaudeLaunchPolicy {
+  if (args.some((arg) => arg === '--print' || arg === '-p')) {
+    return 'direct';
+  }
   if (!isTmuxAvailable()) {
     return 'direct';
   }
-  return env.TMUX ? 'inside-tmux' : 'outside-tmux';
+  if (env.TMUX) return 'inside-tmux';
+  // Terminal emulators that embed their own multiplexer (e.g. cmux, a
+  // Ghostty-based terminal) set CMUX_SURFACE_ID but not TMUX.  tmux
+  // attach-session fails in these environments because the host PTY is
+  // not directly compatible, leaving orphaned detached sessions.
+  // Fall back to direct mode so Claude launches without tmux wrapping.
+  if (env.CMUX_SURFACE_ID) return 'direct';
+  return 'outside-tmux';
 }
 
 /**

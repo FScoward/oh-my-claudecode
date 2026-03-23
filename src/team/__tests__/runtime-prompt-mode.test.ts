@@ -490,7 +490,10 @@ describe('spawnWorkerForTask – model passthrough from environment variables', 
     expect(launchCmd).toContain('claude-sonnet-4-6-override');
     expect(launchCmd).toContain('OMC_MODEL_LOW=');
     expect(launchCmd).toContain('claude-haiku-4-5-override');
-    expect(launchCmd).not.toContain("'--model'");
+    // With Bedrock env vars set, resolveClaudeWorkerModel returns the sonnet model
+    // so --model IS expected now (this was the #1695 fix)
+    expect(launchCmd).toContain("'--model'");
+    expect(launchCmd).toContain('us.anthropic.claude-sonnet-4-6-v1:0');
   });
 
 

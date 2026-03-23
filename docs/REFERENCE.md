@@ -129,6 +129,33 @@ If both a legacy `{worktree}/.omc/` directory and a centralized directory exist,
 
 > **NOTE**: After updating the plugin (via `npm update`, `git pull`, or Claude Code's plugin update), you MUST re-run `/oh-my-claudecode:omc-setup` to apply the latest CLAUDE.md changes.
 
+### Remote OMC / Remote MCP Access
+
+Issue #1653 asked whether OMC can "connect to a remote OMC" so one development machine can browse files on lab/test machines without opening an interactive SSH session.
+
+The narrow, coherent answer today is:
+
+- **Supported**: connect to a **remote MCP server** through the unified MCP registry
+- **Not implemented**: a general "OMC cluster", shared remote filesystem view, or automatic remote-OMC federation
+- **Still appropriate for full remote shell workflows**: SSH, worktrees, or a mounted/network filesystem
+
+If a remote host already exposes an MCP endpoint, add it to your MCP registry (or Claude settings and then re-run setup so OMC syncs the registry to Codex too):
+
+```json
+{
+  "mcpServers": {
+    "remoteOmc": {
+      "url": "https://lab.example.com/mcp",
+      "timeout": 30
+    }
+  }
+}
+```
+
+This gives OMC a coherent remote connection surface for MCP-backed tools. It does **not** make all remote files magically appear as a local workspace, and it does **not** replace SSH for arbitrary shell access.
+
+If you need richer cross-machine behavior in the future, that would require a separate authenticated remote execution/filesystem design rather than stretching the current local-workspace architecture.
+
 ### Agent Customization
 
 Edit agent files in `~/.claude/agents/` to customize behavior:
@@ -217,6 +244,11 @@ omc team api claim-task --input '{"team_name":"auth-review","task_id":"1","worke
 ```
 
 Supported entrypoints: direct start (`omc team [N:agent] "<task>"`), `status`, `shutdown`, and `api`.
+
+Topology behavior:
+- inside classic tmux (`$TMUX` set): reuse the current tmux surface for split-pane or `--new-window` layouts
+- inside cmux (`CMUX_SURFACE_ID` without `$TMUX`): launch a detached tmux session for team workers
+- plain terminal: launch a detached tmux session for team workers
 
 ### `omc session search`
 
@@ -424,6 +456,12 @@ handoff: .omc/specs/deep-interview-{slug}.md
 ```
 
 When present, OMC appends a standardized **Skill Pipeline** section to the rendered skill prompt so the current stage, handoff artifact, and explicit next `Skill("oh-my-claudecode:...")` invocation are carried forward consistently.
+
+### Skills 2.0 Compatibility (MVP)
+
+OMC's canonical project-local skill directory remains `.omc/skills/`, but the runtime now also reads compatibility skills from `.agents/skills/`.
+
+For builtin and slash-loaded skills, OMC also appends a standardized **Skill Resources** section when the skill directory contains bundled assets such as helper scripts, templates, or support libraries. This helps agents reuse packaged skill resources instead of recreating them ad hoc.
 
 ---
 

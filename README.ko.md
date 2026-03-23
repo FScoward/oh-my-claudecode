@@ -7,6 +7,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Yeachan-Heo/oh-my-claudecode?style=flat&color=yellow)](https://github.com/Yeachan-Heo/oh-my-claudecode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Sponsor](https://img.shields.io/badge/Sponsor-❤️-red?style=flat&logo=github)](https://github.com/sponsors/Yeachan-Heo)
+[![Discord](https://img.shields.io/discord/1466022107199574193?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/qRJw62Gvh7)
 
 > **Codex 사용자분들께:** [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex)를 확인해보세요 — OpenAI Codex CLI를 위한 동일한 오케스트레이션 경험을 제공합니다.
 
@@ -170,6 +171,31 @@ omc team shutdown auth-review
 - **HUD 상태바** - 상태바에서 실시간 오케스트레이션 메트릭 확인
 - **스킬 학습** - 세션에서 재사용 가능한 패턴 추출
 - **분석 및 비용 추적** - 모든 세션의 토큰 사용량 이해
+
+### 커스텀 스킬
+
+한 번 배운 것을 영원히 재사용합니다. OMC는 디버깅 과정에서 얻은 실전 지식을 이식 가능한 스킬 파일로 추출하고, 관련 상황에서 자동으로 주입합니다.
+
+| | 프로젝트 스코프 | 사용자 스코프 |
+|---|---|---|
+| **경로** | `.omc/skills/` | `~/.omc/skills/` |
+| **공유 대상** | 팀 (버전 관리됨) | 모든 프로젝트에서 사용 |
+| **우선순위** | 높음 (사용자 스코프를 오버라이드) | 낮음 (폴백) |
+
+```yaml
+# .omc/skills/fix-proxy-crash.md
+---
+name: Fix Proxy Crash
+description: aiohttp proxy crashes on ClientDisconnectedError
+triggers: ["proxy", "aiohttp", "disconnected"]
+source: extracted
+---
+server.py:42의 핸들러를 try/except ClientDisconnectedError로 감싸세요...
+```
+
+**스킬 관리:** `/skill list | add | remove | edit | search`
+**자동 학습:** `/learner`가 엄격한 품질 기준으로 재사용 가능한 패턴을 추출합니다
+**자동 주입:** 매칭되는 스킬이 컨텍스트에 자동으로 로드됩니다 — 수동 호출 불필요
 
 [전체 기능 목록 →](docs/REFERENCE.md)
 

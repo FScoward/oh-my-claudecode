@@ -7,12 +7,41 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync } from 'fs';
+import { join } from 'path';
 import {
+  getOmcRoot,
   resolveStatePath,
   resolveSessionStatePath,
   ensureSessionStateDir,
   ensureOmcDir,
 } from './worktree-paths.js';
+
+export function getStateSessionOwner(state: Record<string, unknown> | null | undefined): string | undefined {
+  if (!state || typeof state !== 'object') {
+    return undefined;
+  }
+
+  const meta = state._meta;
+  if (meta && typeof meta === 'object') {
+    const metaSessionId = (meta as Record<string, unknown>).sessionId;
+    if (typeof metaSessionId === 'string' && metaSessionId) {
+      return metaSessionId;
+    }
+  }
+
+  const topLevelSessionId = state.session_id;
+  return typeof topLevelSessionId === 'string' && topLevelSessionId
+    ? topLevelSessionId
+    : undefined;
+}
+
+export function canClearStateForSession(
+  state: Record<string, unknown> | null | undefined,
+  sessionId: string,
+): boolean {
+  const ownerSessionId = getStateSessionOwner(state);
+  return !ownerSessionId || ownerSessionId === sessionId;
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -29,6 +58,16 @@ function resolveFile(mode: string, directory?: string, sessionId?: string): stri
     return resolveSessionStatePath(mode, sessionId, baseDir);
   }
   return resolveStatePath(mode, baseDir);
+}
+
+function getLegacyStateCandidates(mode: string, directory?: string): string[] {
+  const baseDir = directory || process.cwd();
+  const normalizedName = mode.endsWith('-state') ? mode : `${mode}-state`;
+
+  return [
+    resolveStatePath(mode, baseDir),
+    join(getOmcRoot(baseDir), `${normalizedName}.json`),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -130,13 +169,16 @@ export function clearModeStateFile(
 
   // Ghost-legacy cleanup: if sessionId provided, also check legacy path
   if (sessionId) {
-    const legacyPath = resolveFile(mode, directory); // no sessionId = legacy
-    if (existsSync(legacyPath)) {
+    for (const legacyPath of getLegacyStateCandidates(mode, directory)) {
+      if (!existsSync(legacyPath)) {
+        continue;
+      }
+
       try {
         const content = readFileSync(legacyPath, 'utf-8');
-        const legacyState = JSON.parse(content);
+        const legacyState = JSON.parse(content) as Record<string, unknown>;
         // Only remove if it belongs to this session or is unowned
-        if (!legacyState.session_id || legacyState.session_id === sessionId) {
+        if (canClearStateForSession(legacyState, sessionId)) {
           unlinkSync(legacyPath);
         }
       } catch {

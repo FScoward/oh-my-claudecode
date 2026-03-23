@@ -51,6 +51,7 @@ export declare function getOmcToolNames(options?: {
     includeTrace?: boolean;
     includeInterop?: boolean;
     includeSharedMemory?: boolean;
+    includeDeepinit?: boolean;
 }): string[];
 /**
  * Test-only helper for deterministic category-filter verification independent of env startup state.
@@ -66,5 +67,6 @@ export declare function _getAllToolNamesForTests(options?: {
     includeTrace?: boolean;
     includeInterop?: boolean;
     includeSharedMemory?: boolean;
+    includeDeepinit?: boolean;
 }): string[];
 //# sourceMappingURL=omc-tools-server.d.ts.map

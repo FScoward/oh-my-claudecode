@@ -137,6 +137,32 @@ describe('state-tools', () => {
       expect(existsSync(join(sessionDir, 'ralplan-state.json'))).toBe(false);
     });
 
+    it('should also remove non-session legacy state files during session clear', async () => {
+      const sessionId = 'legacy-cleanup-session';
+      const sessionDir = join(TEST_DIR, '.omc', 'state', 'sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(
+        join(sessionDir, 'ralph-state.json'),
+        JSON.stringify({ active: true, session_id: sessionId }),
+      );
+
+      const legacyRootPath = join(TEST_DIR, '.omc', 'ralph-state.json');
+      writeFileSync(
+        legacyRootPath,
+        JSON.stringify({ active: true, session_id: sessionId }),
+      );
+
+      const result = await stateClearTool.handler({
+        mode: 'ralph',
+        session_id: sessionId,
+        workingDirectory: TEST_DIR,
+      });
+
+      expect(result.content[0].text).toContain('ghost legacy file also removed');
+      expect(existsSync(join(sessionDir, 'ralph-state.json'))).toBe(false);
+      expect(existsSync(legacyRootPath)).toBe(false);
+    });
+
     it('should clear only the requested session for every execution mode', async () => {
       const modes = ['autopilot', 'ralph', 'ultrawork', 'ultraqa', 'team'] as const;
       const sessionA = 'session-a';

@@ -168,7 +168,7 @@ The `plugin.json` defines the plugin's metadata and tools:
 
 ### Skill and Agent Discovery
 
-**Skills** are discovered from `SKILL.md` files in the skills directory. Each skill directory must contain a SKILL.md with frontmatter:
+**Skills** are discovered from `SKILL.md` files in the skills directory. OMC's canonical project-local write target remains `.omc/skills/`, and it now also reads project-local compatibility skills from `.agents/skills/`. Each skill directory must contain a SKILL.md with frontmatter:
 
 ```markdown
 ---
@@ -222,6 +222,23 @@ Located at `~/.claude/settings.json`:
   }
 }
 ```
+
+### Remote MCP / Remote OMC Shape
+
+OMC can sync and preserve **remote MCP** entries in the unified registry. That is the supported narrow answer to "connect to a remote OMC":
+
+```json
+{
+  "mcpServers": {
+    "remoteOmc": {
+      "url": "https://lab.example.com/mcp",
+      "timeout": 30
+    }
+  }
+}
+```
+
+This supports remote MCP endpoints. It does **not** create a general multi-host OMC cluster or a transparent shared remote filesystem view.
 
 ### Plugin-Embedded MCP Servers
 

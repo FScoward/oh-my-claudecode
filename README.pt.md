@@ -7,6 +7,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Yeachan-Heo/oh-my-claudecode?style=flat&color=yellow)](https://github.com/Yeachan-Heo/oh-my-claudecode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Sponsor](https://img.shields.io/badge/Sponsor-❤️-red?style=flat&logo=github)](https://github.com/sponsors/Yeachan-Heo)
+[![Discord](https://img.shields.io/discord/1466022107199574193?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/qRJw62Gvh7)
 
 > **Para usuários do Codex:** Confira [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) — a mesma experiência de orquestração para o OpenAI Codex CLI.
 
@@ -166,6 +167,31 @@ Múltiplas estratégias para diferentes casos de uso — da orquestração com T
 - **HUD statusline** - Métricas de orquestração em tempo real na sua barra de status
 - **Aprendizado de skills** - Extraia padrões reutilizáveis das suas sessões
 - **Analytics e rastreamento de custos** - Entenda o uso de tokens em todas as sessões
+
+### Skills Personalizadas
+
+Aprenda uma vez, reutilize para sempre. O OMC extrai conhecimento valioso de depuração em arquivos de skills portáteis que são auto-injetados quando relevantes.
+
+| | Escopo de Projeto | Escopo de Usuário |
+|---|---|---|
+| **Caminho** | `.omc/skills/` | `~/.omc/skills/` |
+| **Compartilhado com** | Equipe (versionado) | Todos os seus projetos |
+| **Prioridade** | Maior (sobrescreve escopo de usuário) | Menor (fallback) |
+
+```yaml
+# .omc/skills/fix-proxy-crash.md
+---
+name: Fix Proxy Crash
+description: aiohttp proxy crashes on ClientDisconnectedError
+triggers: ["proxy", "aiohttp", "disconnected"]
+source: extracted
+---
+Envolva o handler em server.py:42 com try/except ClientDisconnectedError...
+```
+
+**Gerenciamento de skills:** `/skill list | add | remove | edit | search`
+**Auto-aprendizado:** `/learner` extrai padrões reutilizáveis com critérios de qualidade rigorosos
+**Auto-injeção:** Skills correspondentes são carregadas no contexto automaticamente — sem necessidade de chamada manual
 
 [Lista completa de recursos →](docs/REFERENCE.md)
 

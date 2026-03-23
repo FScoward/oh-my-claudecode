@@ -20,6 +20,28 @@ function makeTempDir(): string {
   return tempDir;
 }
 
+function writeSubagentTrackingState(
+  tempDir: string,
+  agents: Array<Record<string, unknown>>,
+): void {
+  const stateDir = join(tempDir, '.omc', 'state');
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    join(stateDir, 'subagent-tracking.json'),
+    JSON.stringify(
+      {
+        agents,
+        total_spawned: agents.length,
+        total_completed: agents.filter((agent) => agent.status === 'completed').length,
+        total_failed: agents.filter((agent) => agent.status === 'failed').length,
+        last_updated: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 describe('skill-state', () => {
   let tempDir: string;
 
@@ -84,6 +106,30 @@ describe('skill-state', () => {
     it('is case-insensitive', () => {
       expect(getSkillProtection('SKILL')).toBe('light');
       expect(getSkillProtection('Plan')).toBe('medium');
+    });
+
+    it('returns none for project custom skills with same name as OMC skills (issue #1581)', () => {
+      // rawSkillName without oh-my-claudecode: prefix → project custom skill
+      expect(getSkillProtection('plan', 'plan')).toBe('none');
+      expect(getSkillProtection('review', 'review')).toBe('none');
+      expect(getSkillProtection('tdd', 'tdd')).toBe('none');
+    });
+
+    it('returns protection for OMC skills when rawSkillName has prefix', () => {
+      expect(getSkillProtection('plan', 'oh-my-claudecode:plan')).toBe('medium');
+      expect(getSkillProtection('deepinit', 'oh-my-claudecode:deepinit')).toBe('heavy');
+    });
+
+    it('returns none for other plugin skills with rawSkillName', () => {
+      // ouroboros:plan, claude-mem:make-plan etc. should not get OMC protection
+      expect(getSkillProtection('plan', 'ouroboros:plan')).toBe('none');
+      expect(getSkillProtection('make-plan', 'claude-mem:make-plan')).toBe('none');
+    });
+
+    it('falls back to map lookup when rawSkillName is not provided', () => {
+      // Backward compatibility: no rawSkillName → use SKILL_PROTECTION map
+      expect(getSkillProtection('plan')).toBe('medium');
+      expect(getSkillProtection('deepinit')).toBe('heavy');
     });
   });
 
@@ -153,6 +199,20 @@ describe('skill-state', () => {
     it('strips namespace prefix from skill name', () => {
       const state = writeSkillActiveState(tempDir, 'oh-my-claudecode:plan', 'session-1');
       expect(state!.skill_name).toBe('plan');
+    });
+
+    it('does not write state for project custom skills with same name as OMC skills (issue #1581)', () => {
+      // rawSkillName='plan' (no prefix) → project custom skill → no state
+      const state = writeSkillActiveState(tempDir, 'plan', 'session-1', 'plan');
+      expect(state).toBeNull();
+      expect(readSkillActiveState(tempDir, 'session-1')).toBeNull();
+    });
+
+    it('writes state for OMC skills when rawSkillName has prefix', () => {
+      const state = writeSkillActiveState(tempDir, 'plan', 'session-1', 'oh-my-claudecode:plan');
+      expect(state).not.toBeNull();
+      expect(state!.skill_name).toBe('plan');
+      expect(state!.max_reinforcements).toBe(5);
     });
 
     it('overwrites existing state when new skill is invoked', () => {
@@ -336,6 +396,25 @@ describe('skill-state', () => {
       // Different session should not be blocked
       const result = checkSkillActiveState(tempDir, 'session-2');
       expect(result.shouldBlock).toBe(false);
+    });
+
+    it('allows orchestrator idle while delegated subagents are still running', () => {
+      writeSkillActiveState(tempDir, 'plan', 'session-1');
+      writeSubagentTrackingState(tempDir, [
+        {
+          agent_id: 'agent-1',
+          agent_type: 'executor',
+          started_at: new Date().toISOString(),
+          parent_mode: 'none',
+          status: 'running',
+        },
+      ]);
+
+      const result = checkSkillActiveState(tempDir, 'session-1');
+      expect(result.shouldBlock).toBe(false);
+
+      const state = readSkillActiveState(tempDir, 'session-1');
+      expect(state?.reinforcement_count).toBe(0);
     });
 
     it('clears stale state and allows stop', () => {
