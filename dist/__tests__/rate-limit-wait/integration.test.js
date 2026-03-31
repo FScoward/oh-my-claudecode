@@ -12,11 +12,15 @@ import { tmpdir } from 'os';
 vi.mock('../../hud/usage-api.js', () => ({
     getUsage: vi.fn(),
 }));
-vi.mock('child_process', () => ({
-    execSync: vi.fn(),
-    spawnSync: vi.fn(),
-    spawn: vi.fn(),
-}));
+vi.mock('child_process', async () => {
+    const actual = await vi.importActual('child_process');
+    return {
+        ...actual,
+        execSync: vi.fn(),
+        spawnSync: vi.fn(),
+        spawn: vi.fn(),
+    };
+});
 import { getUsage } from '../../hud/usage-api.js';
 import { execSync, spawnSync } from 'child_process';
 import { checkRateLimitStatus, analyzePaneContent, scanForBlockedPanes, formatDaemonState, } from '../../features/rate-limit-wait/index.js';

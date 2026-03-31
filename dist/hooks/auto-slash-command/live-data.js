@@ -17,6 +17,7 @@
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import safe from "safe-regex";
 import { getWorktreeRoot, getOmcRoot } from "../../lib/worktree-paths.js";
 const TIMEOUT_MS = 10_000;
 const MAX_OUTPUT_BYTES = 50 * 1024;
@@ -130,6 +131,11 @@ function checkSecurity(command) {
     if (policy.denied_patterns) {
         for (const pat of policy.denied_patterns) {
             try {
+                if (!safe(pat)) {
+                    // Unsafe regex in deny list: block the command to fail closed.
+                    // A ReDoS-capable pattern is treated as a blanket deny.
+                    return { allowed: false, reason: `unsafe regex rejected: ${pat}` };
+                }
                 if (new RegExp(pat).test(command)) {
                     return { allowed: false, reason: `denied by pattern: ${pat}` };
                 }
@@ -163,6 +169,12 @@ function checkSecurity(command) {
     if (policy.allowed_patterns) {
         for (const pat of policy.allowed_patterns) {
             try {
+                if (!safe(pat)) {
+                    // Unsafe regex in allow list: skip to fail closed.
+                    // The pattern cannot grant access — remaining patterns
+                    // or allowed_commands may still match.
+                    continue;
+                }
                 if (new RegExp(pat).test(command)) {
                     patternAllowed = true;
                     break;

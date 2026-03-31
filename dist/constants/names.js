@@ -27,6 +27,7 @@ export const TOOL_CATEGORIES = {
     CODEX: 'codex',
     GEMINI: 'gemini',
     SHARED_MEMORY: 'shared-memory',
+    DEEPINIT: 'deepinit',
 };
 // Hook event names
 export const HOOK_EVENTS = {

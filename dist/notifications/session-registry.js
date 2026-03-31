@@ -5,13 +5,14 @@
  * Uses JSONL append format for atomic writes, following the pattern from
  * session-replay.ts with secure file permissions from daemon.ts.
  *
- * Registry location: ~/.omc/state/reply-session-registry.jsonl (global, not worktree-local)
+ * Registry location: XDG-aware global OMC state (legacy ~/.omc/state fallback for reads)
  * File permissions: 0600 (owner read/write only)
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, openSync, closeSync, writeSync, unlinkSync, statSync, constants, } from 'fs';
 import { join, dirname } from 'path';
-import { homedir } from 'os';
 import { randomUUID } from 'crypto';
+import { isProcessAlive } from '../platform/index.js';
+import { getGlobalOmcStateCandidates, getGlobalOmcStateRoot } from '../utils/paths.js';
 // ============================================================================
 // Constants
 // ============================================================================
@@ -26,15 +27,21 @@ const LOCK_STALE_MS = 10000;
 const LOCK_MAX_WAIT_MS = 10000;
 /**
  * Return the registry state directory.
- * OMC_TEST_REGISTRY_DIR overrides the default (~/.omc/state) so that tests
+ * OMC_TEST_REGISTRY_DIR overrides the default global state dir so that tests
  * can redirect all I/O to a temporary directory without touching global state.
  */
 function getRegistryStateDir() {
-    return process.env['OMC_TEST_REGISTRY_DIR'] ?? join(homedir(), '.omc', 'state');
+    return process.env['OMC_TEST_REGISTRY_DIR'] ?? getGlobalOmcStateRoot();
 }
 /** Global registry JSONL path */
 function getRegistryPath() {
     return join(getRegistryStateDir(), 'reply-session-registry.jsonl');
+}
+function getRegistryReadPaths() {
+    if (process.env['OMC_TEST_REGISTRY_DIR']) {
+        return [getRegistryPath()];
+    }
+    return getGlobalOmcStateCandidates('reply-session-registry.jsonl');
 }
 /** Lock file path for cross-process synchronization */
 function getLockPath() {
@@ -59,23 +66,6 @@ function ensureRegistryDir() {
  */
 function sleepMs(ms) {
     Atomics.wait(SLEEP_ARRAY, 0, 0, ms);
-}
-/**
- * Check whether a process is alive.
- * EPERM indicates a live process we can't signal.
- */
-function isPidAlive(pid) {
-    if (!Number.isFinite(pid) || pid <= 0) {
-        return false;
-    }
-    try {
-        process.kill(pid, 0);
-        return true;
-    }
-    catch (error) {
-        const err = error;
-        return err.code === 'EPERM';
-    }
 }
 /**
  * Read/parse lock snapshot.
@@ -167,7 +157,7 @@ function acquireRegistryLock() {
                         continue;
                     }
                     // Never reap an active lock held by a live process.
-                    if (snapshot.pid !== null && isPidAlive(snapshot.pid)) {
+                    if (snapshot.pid !== null && isProcessAlive(snapshot.pid)) {
                         sleepMs(LOCK_RETRY_MS);
                         continue;
                     }
@@ -223,7 +213,8 @@ function releaseRegistryLock(lock) {
 function withRegistryLockOrWait(onLocked) {
     const lock = acquireRegistryLockOrWait();
     if (lock === null) {
-        // Lock timed out (hung lock holder). Proceed best-effort without lock.
+        // Lock timed out — proceed best-effort. Write contention is mitigated
+        // by JSONL append-only format (each write appends a complete line).
         return onLocked();
     }
     try {
@@ -279,27 +270,30 @@ export function loadAllMappings() {
  * Caller must already hold lock (or accept race risk).
  */
 function readAllMappingsUnsafe() {
-    if (!existsSync(getRegistryPath())) {
-        return [];
+    for (const registryPath of getRegistryReadPaths()) {
+        if (!existsSync(registryPath)) {
+            continue;
+        }
+        try {
+            const content = readFileSync(registryPath, 'utf-8');
+            return content
+                .split('\n')
+                .filter(line => line.trim())
+                .map(line => {
+                try {
+                    return JSON.parse(line);
+                }
+                catch {
+                    return null;
+                }
+            })
+                .filter((m) => m !== null);
+        }
+        catch {
+            continue;
+        }
     }
-    try {
-        const content = readFileSync(getRegistryPath(), 'utf-8');
-        return content
-            .split('\n')
-            .filter(line => line.trim())
-            .map(line => {
-            try {
-                return JSON.parse(line);
-            }
-            catch {
-                return null;
-            }
-        })
-            .filter((m) => m !== null);
-    }
-    catch {
-        return [];
-    }
+    return [];
 }
 /**
  * Look up a mapping by platform and message ID.

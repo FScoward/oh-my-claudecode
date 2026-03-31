@@ -15,6 +15,11 @@ const {
   readdirSync,
   mkdirSync,
   unlinkSync,
+  openSync,
+  readSync,
+  closeSync,
+  renameSync,
+  statSync,
 } = require("fs");
 const { join, dirname, resolve, normalize } = require("path");
 const { homedir } = require("os");
@@ -49,7 +54,9 @@ function writeJsonFile(path, data) {
     if (dir && dir !== "." && !existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(path, JSON.stringify(data, null, 2));
+    const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(data, null, 2));
+    renameSync(tmp, path);
     return true;
   } catch {
     return false;
@@ -195,6 +202,10 @@ function getSafeReinforcementCount(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : 0;
+}
+
+function isAwaitingConfirmation(state) {
+  return state?.awaiting_confirmation === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,7 +515,15 @@ function estimateContextPercent(transcriptPath) {
   if (!transcriptPath || !existsSync(transcriptPath)) return 0;
 
   try {
-    const content = readFileSync(transcriptPath, "utf-8");
+    const size = statSync(transcriptPath).size;
+    const readSize = 4096;
+    const offset = Math.max(0, size - readSize);
+    const buf = Buffer.alloc(Math.min(readSize, size));
+    const fd = openSync(transcriptPath, "r");
+    readSync(fd, buf, 0, buf.length, offset);
+    closeSync(fd);
+    const content = buf.toString("utf-8");
+
     const windowMatch = content.match(/"context_window"\s{0,5}:\s{0,5}(\d+)/g);
     const inputMatch = content.match(/"input_tokens"\s{0,5}:\s{0,5}(\d+)/g);
     if (!windowMatch || !inputMatch) return 0;
@@ -641,7 +660,7 @@ async function main() {
 
     // Priority 1: Ralph Loop (explicit persistence mode)
     // Skip if state is stale (older than 2 hours) - prevents blocking new sessions
-    if (ralph.state?.active && !isStaleState(ralph.state) && isSessionMatch(ralph.state, sessionId)) {
+    if (ralph.state?.active && !isAwaitingConfirmation(ralph.state) && !isStaleState(ralph.state) && isSessionMatch(ralph.state, sessionId)) {
       const iteration = ralph.state.iteration || 1;
       const maxIter = ralph.state.max_iterations || 100;
 
@@ -674,7 +693,7 @@ async function main() {
     }
 
     // Priority 2: Autopilot (high-level orchestration)
-    if (autopilot.state?.active && !isStaleState(autopilot.state) && isSessionMatch(autopilot.state, sessionId)) {
+    if (autopilot.state?.active && !isAwaitingConfirmation(autopilot.state) && !isStaleState(autopilot.state) && isSessionMatch(autopilot.state, sessionId)) {
       const phase = autopilot.state.phase || "unknown";
       if (phase !== "complete") {
         const newCount = (autopilot.state.reinforcement_count || 0) + 1;
@@ -765,7 +784,7 @@ async function main() {
     }
 
     // Priority 2.6: Ralplan (standalone consensus planning — first-class enforcement)
-    if (ralplan.state?.active && !isStaleState(ralplan.state) && isSessionMatch(ralplan.state, sessionId)) {
+    if (ralplan.state?.active && !isAwaitingConfirmation(ralplan.state) && !isStaleState(ralplan.state) && isSessionMatch(ralplan.state, sessionId)) {
       // Terminal phase detection
       const currentPhase = ralplan.state.current_phase;
       let ralplanTerminal = false;
@@ -950,7 +969,7 @@ async function main() {
     // Session isolation: only block if state belongs to this session (issue #311)
     // Project isolation: only block if state belongs to this project
     if (
-      ultrawork.state?.active &&
+      ultrawork.state?.active && !isAwaitingConfirmation(ultrawork.state) &&
       !isStaleState(ultrawork.state) &&
       isSessionMatch(ultrawork.state, sessionId) &&
       isStateForCurrentProject(ultrawork.state, directory, ultrawork.isGlobal)

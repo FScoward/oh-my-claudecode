@@ -13,14 +13,17 @@
  * ```
  */
 import { pathToFileURL } from "url";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from "fs";
 import { dirname, join } from "path";
 import { resolveToWorktreeRoot, getOmcRoot } from "../lib/worktree-paths.js";
+import { writeModeState } from "../lib/mode-state-io.js";
+import { formatOmcCliInvocation } from "../utils/omc-cli-rendering.js";
+import { createSwallowedErrorLogger } from "../lib/swallowed-error.js";
 // Hot-path imports: needed on every/most hook invocations (keyword-detector, pre/post-tool-use)
 import { removeCodeBlocks, getAllKeywordsWithSizeCheck, applyRalplanGate, sanitizeForKeywordDetection, NON_LATIN_SCRIPT_PATTERN, } from "./keyword-detector/index.js";
 import { processOrchestratorPreTool, processOrchestratorPostTool, } from "./omc-orchestrator/index.js";
 import { normalizeHookInput } from "./bridge-normalize.js";
-import { addBackgroundTask, getRunningTaskCount, } from "../hud/background-tasks.js";
+import { addBackgroundTask, completeBackgroundTask, completeMostRecentMatchingBackgroundTask, getRunningTaskCount, remapBackgroundTaskId, remapMostRecentMatchingBackgroundTaskId, } from "../hud/background-tasks.js";
 import { readHudState, writeHudState } from "../hud/state.js";
 import { compactOmcStartupGuidance, loadConfig } from "../config/loader.js";
 import { resolveAutopilotPlanPath, resolveOpenQuestionsPlanPath, } from "../config/plan-output.js";
@@ -68,6 +71,135 @@ const TEAM_STAGE_ALIASES = {
     fix: "team-fix",
     fixing: "team-fix",
 };
+const BACKGROUND_AGENT_ID_PATTERN = /agentId:\s*([a-zA-Z0-9_-]+)/;
+const TASK_OUTPUT_ID_PATTERN = /<task_id>([^<]+)<\/task_id>/i;
+const TASK_OUTPUT_STATUS_PATTERN = /<status>([^<]+)<\/status>/i;
+const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
+const MODE_CONFIRMATION_SKILL_MAP = {
+    ralph: ["ralph", "ultrawork"],
+    ultrawork: ["ultrawork"],
+    autopilot: ["autopilot"],
+    ralplan: ["ralplan"],
+};
+function getExtraField(input, key) {
+    return input[key];
+}
+function getHookToolUseId(input) {
+    const value = getExtraField(input, "tool_use_id");
+    return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+function extractAsyncAgentId(toolOutput) {
+    if (typeof toolOutput !== "string") {
+        return undefined;
+    }
+    return toolOutput.match(BACKGROUND_AGENT_ID_PATTERN)?.[1];
+}
+function parseTaskOutputLifecycle(toolOutput) {
+    if (typeof toolOutput !== "string") {
+        return null;
+    }
+    const taskId = toolOutput.match(TASK_OUTPUT_ID_PATTERN)?.[1]?.trim();
+    const status = toolOutput.match(TASK_OUTPUT_STATUS_PATTERN)?.[1]?.trim().toLowerCase();
+    if (!taskId || !status) {
+        return null;
+    }
+    return { taskId, status };
+}
+function taskOutputDidFail(status) {
+    return status === "failed" || status === "error";
+}
+function taskLaunchDidFail(toolOutput) {
+    if (typeof toolOutput !== "string") {
+        return false;
+    }
+    const normalized = toolOutput.toLowerCase();
+    return normalized.includes("error") || normalized.includes("failed");
+}
+function getModeStatePaths(directory, modeName, sessionId) {
+    const stateDir = join(getOmcRoot(directory), "state");
+    const safeSessionId = typeof sessionId === "string" && SAFE_SESSION_ID_PATTERN.test(sessionId)
+        ? sessionId
+        : undefined;
+    return [
+        safeSessionId ? join(stateDir, "sessions", safeSessionId, `${modeName}-state.json`) : null,
+        join(stateDir, `${modeName}-state.json`),
+    ].filter((statePath) => Boolean(statePath));
+}
+function updateModeAwaitingConfirmation(directory, modeName, sessionId, awaitingConfirmation) {
+    for (const statePath of getModeStatePaths(directory, modeName, sessionId)) {
+        if (!existsSync(statePath)) {
+            continue;
+        }
+        try {
+            const state = JSON.parse(readFileSync(statePath, "utf-8"));
+            if (!state || typeof state !== "object") {
+                continue;
+            }
+            if (awaitingConfirmation) {
+                state.awaiting_confirmation = true;
+            }
+            else if (state.awaiting_confirmation === true) {
+                delete state.awaiting_confirmation;
+            }
+            else {
+                continue;
+            }
+            const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+            writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+            renameSync(tmpPath, statePath);
+        }
+        catch {
+            // Best-effort state sync only.
+        }
+    }
+}
+function markModeAwaitingConfirmation(directory, sessionId, ...modeNames) {
+    for (const modeName of modeNames) {
+        updateModeAwaitingConfirmation(directory, modeName, sessionId, true);
+    }
+}
+function confirmSkillModeStates(directory, skillName, sessionId) {
+    for (const modeName of MODE_CONFIRMATION_SKILL_MAP[skillName] ?? []) {
+        updateModeAwaitingConfirmation(directory, modeName, sessionId, false);
+    }
+}
+function getSkillInvocationArgs(toolInput) {
+    if (!toolInput || typeof toolInput !== "object") {
+        return "";
+    }
+    const input = toolInput;
+    const candidates = [
+        input.args,
+        input.arguments,
+        input.argument,
+        input.skill_args,
+        input.skillArgs,
+        input.prompt,
+        input.description,
+        input.input,
+    ];
+    return candidates.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() ?? "";
+}
+function isConsensusPlanningSkillInvocation(skillName, toolInput) {
+    if (!skillName) {
+        return false;
+    }
+    if (skillName === "ralplan") {
+        return true;
+    }
+    if (skillName !== "omc-plan" && skillName !== "plan") {
+        return false;
+    }
+    return getSkillInvocationArgs(toolInput).toLowerCase().includes("--consensus");
+}
+function activateRalplanState(directory, sessionId) {
+    writeModeState("ralplan", {
+        active: true,
+        session_id: sessionId,
+        current_phase: "ralplan",
+        started_at: new Date().toISOString(),
+    }, directory, sessionId);
+}
 function readTeamStagedState(directory, sessionId) {
     const stateDir = join(getOmcRoot(directory), "state");
     const statePaths = sessionId
@@ -214,7 +346,7 @@ function workerBashBlockReason(command) {
         return "Team worker cannot run tmux pane/session orchestration commands.";
     }
     if (WORKER_BLOCKED_TEAM_CLI_PATTERN.test(command)) {
-        return "Team worker cannot run team orchestration commands. Use only `omc team api ... --json`.";
+        return `Team worker cannot run team orchestration commands. Use only \`${formatOmcCliInvocation("team api ... --json")}\`.`;
     }
     if (WORKER_BLOCKED_SKILL_PATTERN.test(command)) {
         return "Team worker cannot invoke orchestration skills (`$team`, `$ultrawork`, `$autopilot`, `$ralph`).";
@@ -255,6 +387,10 @@ function validateHookInput(input, requiredFields, hookType) {
         return false;
     }
     return true;
+}
+function isDelegationToolName(toolName) {
+    const normalizedToolName = (toolName || "").toLowerCase();
+    return normalizedToolName === "task" || normalizedToolName === "agent";
 }
 /**
  * Extract prompt text from various input formats
@@ -405,7 +541,10 @@ async function processKeywordDetector(input) {
                 }
                 // Activate ralph state which also auto-activates ultrawork
                 const hook = createRalphLoopHook(directory);
-                hook.startLoop(sessionId, cleanPrompt, criticMode ? { criticMode } : undefined);
+                const started = hook.startLoop(sessionId, cleanPrompt, criticMode ? { criticMode } : undefined);
+                if (started) {
+                    markModeAwaitingConfirmation(directory, sessionId, 'ralph', 'ultrawork');
+                }
                 messages.push(RALPH_MESSAGE);
                 break;
             }
@@ -413,7 +552,10 @@ async function processKeywordDetector(input) {
                 // Lazy-load ultrawork module
                 const { activateUltrawork } = await import("./ultrawork/index.js");
                 // Activate persistent ultrawork state
-                activateUltrawork(promptText, sessionId, directory);
+                const activated = activateUltrawork(promptText, sessionId, directory);
+                if (activated) {
+                    markModeAwaitingConfirmation(directory, sessionId, 'ultrawork');
+                }
                 messages.push(ULTRAWORK_MESSAGE);
                 break;
             }
@@ -445,10 +587,11 @@ async function processKeywordDetector(input) {
                 break;
             case "codex":
             case "gemini": {
+                const teamStartCommand = formatOmcCliInvocation(`team start --agent ${keywordType} --count N --task "<task from user message>"`);
                 messages.push(`[MAGIC KEYWORD: team]\n` +
-                    `User intent: delegate to ${keywordType} CLI workers via omc team CLI.\n` +
+                    `User intent: delegate to ${keywordType} CLI workers via ${formatOmcCliInvocation('team')}.\n` +
                     `Agent type: ${keywordType}. Parse N from user message (default 1).\n` +
-                    `Invoke: omc team start --agent ${keywordType} --count N --task "<task from user message>"`);
+                    `Invoke: ${teamStartCommand}`);
                 break;
             }
             default:
@@ -535,13 +678,14 @@ async function processPersistentMode(input) {
                 const stateDir = join(getOmcRoot(directory), "state");
                 if (shouldSendIdleNotification(stateDir, sessionId)) {
                     recordIdleNotificationSent(stateDir, sessionId);
+                    const logSessionIdleNotifyFailure = createSwallowedErrorLogger('hooks.bridge session-idle notification failed');
                     import("../notifications/index.js")
                         .then(({ notify }) => notify("session-idle", {
                         sessionId,
                         projectPath: directory,
                         profileName: process.env.OMC_NOTIFY_PROFILE,
-                    }).catch(() => { }))
-                        .catch(() => { });
+                    }).catch(logSessionIdleNotifyFailure))
+                        .catch(logSessionIdleNotifyFailure);
                 }
             }
             // IMPORTANT: Do NOT clean up reply-listener/session-registry on Stop hooks.
@@ -614,13 +758,14 @@ async function processSessionStart(input) {
     initSilentAutoUpdate();
     // Send session-start notification (non-blocking, swallows errors)
     if (sessionId) {
+        const logSessionStartNotifyFailure = createSwallowedErrorLogger('hooks.bridge session-start notification failed');
         import("../notifications/index.js")
             .then(({ notify }) => notify("session-start", {
             sessionId,
             projectPath: directory,
             profileName: process.env.OMC_NOTIFY_PROFILE,
-        }).catch(() => { }))
-            .catch(() => { });
+        }).catch(logSessionStartNotifyFailure))
+            .catch(logSessionStartNotifyFailure);
         // Wake OpenClaw gateway for session-start (non-blocking)
         _openclaw.wake("session-start", { sessionId, projectPath: directory });
     }
@@ -816,14 +961,15 @@ export function dispatchAskUserQuestionNotification(sessionId, directory, toolIn
         .map((q) => q.question || "")
         .filter(Boolean)
         .join("; ") || "User input requested";
+    const logAskUserQuestionNotifyFailure = createSwallowedErrorLogger('hooks.bridge ask-user-question notification failed');
     import("../notifications/index.js")
         .then(({ notify }) => notify("ask-user-question", {
         sessionId,
         projectPath: directory,
         question: questionText,
         profileName: process.env.OMC_NOTIFY_PROFILE,
-    }).catch(() => { }))
-        .catch(() => { });
+    }).catch(logAskUserQuestionNotifyFailure))
+        .catch(logAskUserQuestionNotifyFailure);
 }
 /** @internal Object wrapper so tests can spy on the dispatch call. */
 export const _notify = {
@@ -841,9 +987,10 @@ export const _openclaw = {
     wake: (event, context) => {
         if (process.env.OMC_OPENCLAW !== "1")
             return;
+        const logOpenClawWakeFailure = createSwallowedErrorLogger(`hooks.bridge openclaw wake failed for ${event}`);
         import("../openclaw/index.js")
-            .then(({ wakeOpenClaw }) => wakeOpenClaw(event, context).catch(() => { }))
-            .catch(() => { });
+            .then(({ wakeOpenClaw }) => wakeOpenClaw(event, context).catch(logOpenClawWakeFailure))
+            .catch(logOpenClawWakeFailure);
     },
 };
 /**
@@ -906,7 +1053,7 @@ function processPreToolUse(input) {
     // silently strip the model. Instead, deny the call so Claude retries without
     // the model param, letting agents inherit the parent session's model.
     // (issues #1135, #1201, #1415)
-    if (input.toolName === "Task" || input.toolName === "Agent") {
+    if (isDelegationToolName(input.toolName)) {
         const originalInput = input.toolInput;
         const inputModel = originalInput?.model;
         if (inputModel) {
@@ -982,17 +1129,24 @@ function processPreToolUse(input) {
     // Activate skill state when Skill tool is invoked (issue #1033)
     // This writes skill-active-state.json so the Stop hook can prevent premature
     // session termination while a skill is executing.
+    // Pass rawSkillName so writeSkillActiveState can distinguish OMC built-in
+    // skills from project custom skills with the same name (issue #1581).
     if (input.toolName === "Skill") {
         const skillName = getInvokedSkillName(input.toolInput);
         if (skillName) {
+            const rawSkillName = getRawSkillName(input.toolInput);
             // Use the statically-imported synchronous write so it completes before
             // the Stop hook can fire. The previous fire-and-forget .then() raced with
             // the Stop hook in short-lived processes.
             try {
-                writeSkillActiveState(directory, skillName, input.sessionId);
+                writeSkillActiveState(directory, skillName, input.sessionId, rawSkillName);
+                confirmSkillModeStates(directory, skillName, input.sessionId);
+                if (isConsensusPlanningSkillInvocation(skillName, input.toolInput)) {
+                    activateRalplanState(directory, input.sessionId);
+                }
             }
             catch {
-                // Skill-state write is best-effort; don't fail the hook on error.
+                // Skill-state/state-sync writes are best-effort; don't fail the hook on error.
             }
         }
     }
@@ -1004,6 +1158,7 @@ function processPreToolUse(input) {
         const agentName = agentType?.includes(":")
             ? agentType.split(":").pop()
             : agentType;
+        const logAgentCallNotifyFailure = createSwallowedErrorLogger('hooks.bridge agent-call notification failed');
         import("../notifications/index.js")
             .then(({ notify }) => notify("agent-call", {
             sessionId: input.sessionId,
@@ -1011,8 +1166,8 @@ function processPreToolUse(input) {
             agentName,
             agentType,
             profileName: process.env.OMC_NOTIFY_PROFILE,
-        }).catch(() => { }))
-            .catch(() => { });
+        }).catch(logAgentCallNotifyFailure))
+            .catch(logAgentCallNotifyFailure);
     }
     // Warn about pkill -f self-termination risk (issue #210)
     // Matches: pkill -f, pkill -9 -f, pkill --full, etc.
@@ -1052,11 +1207,12 @@ function processPreToolUse(input) {
             }
         }
     }
-    // Track Task tool invocations for HUD background tasks display
+    // Track Task tool invocations for HUD display
     if (input.toolName === "Task") {
         const toolInput = (modifiedToolInput ?? input.toolInput);
         if (toolInput?.description) {
-            const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const taskId = getHookToolUseId(input)
+                ?? `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             addBackgroundTask(taskId, toolInput.description, toolInput.subagent_type, directory);
         }
     }
@@ -1119,6 +1275,19 @@ function getInvokedSkillName(toolInput) {
         : normalized;
     return namespaced?.toLowerCase() || null;
 }
+/**
+ * Extract the raw (un-normalized) skill name from Skill tool input.
+ * Used to distinguish OMC built-in skills (prefixed with 'oh-my-claudecode:')
+ * from project custom skills or other plugin skills with the same bare name.
+ * See: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/1581
+ */
+function getRawSkillName(toolInput) {
+    if (!toolInput || typeof toolInput !== "object")
+        return undefined;
+    const input = toolInput;
+    const raw = input.skill ?? input.skill_name ?? input.skillName ?? input.command ?? null;
+    return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
+}
 async function processPostToolUse(input) {
     const directory = resolveToWorktreeRoot(input.directory);
     const messages = [];
@@ -1177,11 +1346,44 @@ async function processPostToolUse(input) {
     if (orchestratorResult.message) {
         messages.push(orchestratorResult.message);
     }
-    // After Task completion, show updated agent dashboard
+    if (orchestratorResult.modifiedOutput) {
+        messages.push(orchestratorResult.modifiedOutput);
+    }
     if (input.toolName === "Task") {
+        const toolInput = input.toolInput;
+        const toolUseId = getHookToolUseId(input);
+        const asyncAgentId = extractAsyncAgentId(input.toolOutput);
+        const description = toolInput?.description;
+        const agentType = toolInput?.subagent_type;
+        if (asyncAgentId) {
+            if (toolUseId) {
+                remapBackgroundTaskId(toolUseId, asyncAgentId, directory);
+            }
+            else if (description) {
+                remapMostRecentMatchingBackgroundTaskId(description, asyncAgentId, directory, agentType);
+            }
+        }
+        else {
+            const failed = taskLaunchDidFail(input.toolOutput);
+            if (toolUseId) {
+                completeBackgroundTask(toolUseId, directory, failed);
+            }
+            else if (description) {
+                completeMostRecentMatchingBackgroundTask(description, directory, failed, agentType);
+            }
+        }
+    }
+    // After delegation completion, show updated agent dashboard
+    if (isDelegationToolName(input.toolName)) {
         const dashboard = getAgentDashboard(directory);
         if (dashboard) {
             messages.push(dashboard);
+        }
+    }
+    if (input.toolName === "TaskOutput") {
+        const taskOutput = parseTaskOutputLifecycle(input.toolOutput);
+        if (taskOutput) {
+            completeBackgroundTask(taskOutput.taskId, directory, taskOutputDidFail(taskOutput.status));
         }
     }
     // Wake OpenClaw gateway for post-tool-use (non-blocking, fires for all tools).

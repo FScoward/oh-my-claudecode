@@ -15,6 +15,5 @@ export declare function convergeJobWithResultArtifact(job: OmcTeamJob, jobId: st
     changed: boolean;
 };
 export declare function isJobTerminal(job: OmcTeamJob): boolean;
-export declare function isPidAlive(pid: number): boolean;
 export declare function clearScopedTeamState(job: Pick<OmcTeamJob, 'cwd' | 'teamName'>): string;
 //# sourceMappingURL=team-job-convergence.d.ts.map

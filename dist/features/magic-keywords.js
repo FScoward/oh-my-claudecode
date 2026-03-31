@@ -28,8 +28,14 @@ function isInformationalKeywordContext(text, position, keywordLength) {
     const context = text.slice(start, end);
     return INFORMATIONAL_INTENT_PATTERNS.some(pattern => pattern.test(context));
 }
+/**
+ * Escape regex metacharacters so a string matches literally inside new RegExp().
+ */
+function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 function hasActionableTrigger(text, trigger) {
-    const pattern = new RegExp(`\\b${trigger}\\b`, 'gi');
+    const pattern = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, 'gi');
     for (const match of text.matchAll(pattern)) {
         if (match.index === undefined) {
             continue;
@@ -236,10 +242,10 @@ THE USER ASKED FOR X. DELIVER EXACTLY X. NOT A SUBSET. NOT A DEMO. NOT A STARTIN
 const ultraworkEnhancement = {
     triggers: ['ultrawork', 'ulw', 'uw'],
     description: 'Activates maximum performance mode with parallel agent orchestration',
-    action: (prompt) => {
+    action: (prompt, agentName) => {
         // Remove the trigger word and add enhancement instructions
         const cleanPrompt = removeTriggerWords(prompt, ['ultrawork', 'ulw', 'uw']);
-        return getUltraworkMessage() + cleanPrompt;
+        return getUltraworkMessage(agentName) + cleanPrompt;
     }
 };
 /**
@@ -334,7 +340,7 @@ Use maximum cognitive effort before responding.`;
 function removeTriggerWords(prompt, triggers) {
     let result = prompt;
     for (const trigger of triggers) {
-        const regex = new RegExp(`\\b${trigger}\\b`, 'gi');
+        const regex = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, 'gi');
         result = result.replace(regex, '');
     }
     return result.trim();
@@ -380,14 +386,14 @@ export function createMagicKeywordProcessor(config) {
             }
         }
     }
-    return (prompt) => {
+    return (prompt, agentName) => {
         let result = prompt;
         for (const keyword of keywords) {
             const hasKeyword = keyword.triggers.some(trigger => {
                 return hasActionableTrigger(removeCodeBlocks(result), trigger);
             });
             if (hasKeyword) {
-                result = keyword.action(result);
+                result = keyword.action(result, agentName);
             }
         }
         return result;

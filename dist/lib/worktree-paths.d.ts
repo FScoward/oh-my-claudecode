@@ -24,6 +24,7 @@ export declare const OmcPaths: {
     readonly AUTOPILOT: ".omc/autopilot";
     readonly SKILLS: ".omc/skills";
     readonly SHARED_MEMORY: ".omc/state/shared-memory";
+    readonly DEEPINIT_MANIFEST: ".omc/deepinit-manifest.json";
 };
 /**
  * Get the git worktree root for the current or specified directory.

@@ -8,6 +8,7 @@ import { listDispatchRequests, markDispatchRequestDelivered, markDispatchRequest
 import { generateMailboxTriggerMessage } from './worker-bootstrap.js';
 import { shutdownTeam } from './runtime.js';
 import { shutdownTeamV2 } from './runtime-v2.js';
+import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
 const TEAM_UPDATE_TASK_MUTABLE_FIELDS = new Set(['subject', 'description', 'blocked_by', 'requires_code_change']);
 const TEAM_UPDATE_TASK_REQUEST_FIELDS = new Set(['team_name', 'task_id', 'workingDirectory', ...TEAM_UPDATE_TASK_MUTABLE_FIELDS]);
 export const LEGACY_TEAM_MCP_TOOLS = [
@@ -204,9 +205,11 @@ function resolveTeamWorkingDirectoryFromMetadata(teamName, candidateCwd, workerC
     const fromConfig = readTeamStateRootFromFile(join(teamRoot, 'config.json'));
     if (fromConfig)
         return stateRootToWorkingDirectory(fromConfig);
-    const fromManifest = readTeamStateRootFromFile(join(teamRoot, 'manifest.v2.json'));
-    if (fromManifest)
-        return stateRootToWorkingDirectory(fromManifest);
+    for (const manifestName of ['manifest.json', 'manifest.v2.json']) {
+        const fromManifest = readTeamStateRootFromFile(join(teamRoot, manifestName));
+        if (fromManifest)
+            return stateRootToWorkingDirectory(fromManifest);
+    }
     return null;
 }
 function resolveTeamWorkingDirectory(teamName, preferredCwd) {
@@ -317,17 +320,19 @@ async function findMailboxDispatchRequestId(teamName, workerName, messageId, cwd
     return matching[0]?.request_id ?? null;
 }
 async function syncMailboxDispatchNotified(teamName, workerName, messageId, cwd) {
+    const logDispatchSyncFailure = createSwallowedErrorLogger('team.api-interop syncMailboxDispatchNotified dispatch state sync failed');
     const requestId = await findMailboxDispatchRequestId(teamName, workerName, messageId, cwd);
     if (!requestId)
         return;
-    await markDispatchRequestNotified(teamName, requestId, { message_id: messageId, last_reason: 'mailbox_mark_notified' }, cwd).catch(() => { });
+    await markDispatchRequestNotified(teamName, requestId, { message_id: messageId, last_reason: 'mailbox_mark_notified' }, cwd).catch(logDispatchSyncFailure);
 }
 async function syncMailboxDispatchDelivered(teamName, workerName, messageId, cwd) {
+    const logDispatchSyncFailure = createSwallowedErrorLogger('team.api-interop syncMailboxDispatchDelivered dispatch state sync failed');
     const requestId = await findMailboxDispatchRequestId(teamName, workerName, messageId, cwd);
     if (!requestId)
         return;
-    await markDispatchRequestNotified(teamName, requestId, { message_id: messageId, last_reason: 'mailbox_mark_delivered' }, cwd).catch(() => { });
-    await markDispatchRequestDelivered(teamName, requestId, { message_id: messageId, last_reason: 'mailbox_mark_delivered' }, cwd).catch(() => { });
+    await markDispatchRequestNotified(teamName, requestId, { message_id: messageId, last_reason: 'mailbox_mark_delivered' }, cwd).catch(logDispatchSyncFailure);
+    await markDispatchRequestDelivered(teamName, requestId, { message_id: messageId, last_reason: 'mailbox_mark_delivered' }, cwd).catch(logDispatchSyncFailure);
 }
 function validateCommonFields(args) {
     const teamName = String(args.team_name || '').trim();

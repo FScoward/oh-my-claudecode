@@ -253,6 +253,27 @@ describe('resolveLiveData - security', () => {
         expect(result).toContain('files\n</live-data>');
         expect(result).not.toContain('error');
     });
+    it('rejects unsafe regex in denied_patterns (ReDoS prevention)', () => {
+        setupPolicy({
+            denied_patterns: ['(a+)+$'],
+            allowed_commands: ['echo'],
+        });
+        const result = resolveLiveData('!echo hello');
+        // Unsafe denied pattern → fail closed: command blocked
+        expect(result).toContain('error="true"');
+        expect(result).toContain('unsafe regex rejected');
+        expect(mockedExecSync).not.toHaveBeenCalled();
+    });
+    it('skips unsafe regex in allowed_patterns without crashing', () => {
+        setupPolicy({
+            allowed_patterns: ['(a+)+$'],
+        });
+        const result = resolveLiveData('!echo hello');
+        // Unsafe allowed pattern → skipped (fail closed), no pattern matches
+        expect(result).toContain('error="true"');
+        expect(result).toContain('not in allowlist');
+        expect(mockedExecSync).not.toHaveBeenCalled();
+    });
     it('blocks commands when no policy file exists (secure by default)', () => {
         mockedExistsSync.mockReturnValue(false);
         resetSecurityPolicy(); // Clear cached policy so new one is loaded

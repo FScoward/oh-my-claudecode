@@ -6,7 +6,7 @@
  * and file permissions so that individual mode modules don't duplicate this logic.
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync } from 'fs';
+import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import {
   getOmcRoot,
@@ -14,7 +14,9 @@ import {
   resolveSessionStatePath,
   ensureSessionStateDir,
   ensureOmcDir,
+  listSessionIds,
 } from './worktree-paths.js';
+import { atomicWriteJsonSync } from './atomic-write.js';
 
 export function getStateSessionOwner(state: Record<string, unknown> | null | undefined): string | undefined {
   if (!state || typeof state !== 'object') {
@@ -97,10 +99,11 @@ export function writeModeState(
       ensureOmcDir('state', baseDir);
     }
     const filePath = resolveFile(mode, directory, sessionId);
-    const envelope = { ...state, _meta: { written_at: new Date().toISOString(), mode } };
-    const tmpPath = filePath + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify(envelope, null, 2), { mode: 0o600 });
-    renameSync(tmpPath, filePath);
+    const envelope = {
+      ...state,
+      _meta: { written_at: new Date().toISOString(), mode, ...(sessionId ? { sessionId } : {}) },
+    };
+    atomicWriteJsonSync(filePath, envelope);
     return true;
   } catch {
     return false;
@@ -157,13 +160,27 @@ export function clearModeStateFile(
   sessionId?: string,
 ): boolean {
   let success = true;
-  const filePath = resolveFile(mode, directory, sessionId);
+  const unlinkIfPresent = (filePath: string): void => {
+    if (!existsSync(filePath)) {
+      return;
+    }
 
-  if (existsSync(filePath)) {
     try {
       unlinkSync(filePath);
     } catch {
       success = false;
+    }
+  };
+
+  if (sessionId) {
+    unlinkIfPresent(resolveFile(mode, directory, sessionId));
+  } else {
+    for (const legacyPath of getLegacyStateCandidates(mode, directory)) {
+      unlinkIfPresent(legacyPath);
+    }
+
+    for (const sid of listSessionIds(directory)) {
+      unlinkIfPresent(resolveSessionStatePath(mode, sid, directory));
     }
   }
 

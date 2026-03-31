@@ -302,6 +302,11 @@ describe('Keyword Detector', () => {
                 expect(hasAnalyze).toBe(false);
             }
         });
+        it('should NOT trigger autopilot for "오토파일럿 설명" (bare 설명 is informational)', () => {
+            const detected = detectKeywordsWithType('오토파일럿 설명');
+            const hasAutopilot = detected.some(d => d.type === 'autopilot');
+            expect(hasAutopilot).toBe(false);
+        });
     });
     describe('hasKeyword', () => {
         it('should return true when keyword exists', () => {
@@ -475,7 +480,7 @@ describe('Team staged workflow integration', () => {
         expect(result.message || '').toContain('team-exec');
     });
     it('compacts OMC-style root AGENTS guidance on session-start without dropping key sections', async () => {
-        const agentsContent = `# oh-my-codex - Intelligent Multi-Agent Orchestration
+        const agentsContent = `# oh-my-claudecode - Intelligent Multi-Agent Orchestration
 
 <guidance_schema_contract>
 schema

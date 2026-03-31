@@ -11,7 +11,48 @@ MODE="${1:?Usage: setup-claude-md.sh <local|global>}"
 DOWNLOAD_URL="https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claudecode/main/docs/CLAUDE.md"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CANONICAL_CLAUDE_MD="${SCRIPT_PLUGIN_ROOT}/docs/CLAUDE.md"
+
+# Resolve active plugin root from installed_plugins.json.
+# Handles stale CLAUDE_PLUGIN_ROOT when a session was started before a plugin
+# update (e.g. 4.8.2 session invoking setup after updating to 4.9.0).
+# Same pattern as run.cjs resolveTarget() fallback.
+resolve_active_plugin_root() {
+  local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  local installed_plugins="${config_dir}/plugins/installed_plugins.json"
+
+  if [ -f "$installed_plugins" ] && command -v jq >/dev/null 2>&1; then
+    local active_path
+    active_path=$(jq -r '
+      (.plugins // .)
+      | to_entries[]
+      | select(.key | startswith("oh-my-claudecode"))
+      | .value[0].installPath // empty
+    ' "$installed_plugins" 2>/dev/null)
+
+    if [ -n "$active_path" ] && [ -d "$active_path" ]; then
+      echo "$active_path"
+      return 0
+    fi
+  fi
+
+  # Fallback: scan sibling version directories for the latest (mirrors run.cjs)
+  local cache_base
+  cache_base="$(dirname "$SCRIPT_PLUGIN_ROOT")"
+  if [ -d "$cache_base" ]; then
+    local latest
+    latest=$(ls -1 "$cache_base" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
+    if [ -n "$latest" ] && [ -d "${cache_base}/${latest}" ]; then
+      echo "${cache_base}/${latest}"
+      return 0
+    fi
+  fi
+
+  echo "$SCRIPT_PLUGIN_ROOT"
+}
+
+ACTIVE_PLUGIN_ROOT="$(resolve_active_plugin_root)"
+CANONICAL_CLAUDE_MD="${ACTIVE_PLUGIN_ROOT}/docs/CLAUDE.md"
+CANONICAL_OMC_REFERENCE_SKILL="${ACTIVE_PLUGIN_ROOT}/skills/omc-reference/SKILL.md"
 
 ensure_local_omc_git_exclude() {
   local exclude_path
@@ -47,15 +88,47 @@ EOF
 
 # Determine target path
 if [ "$MODE" = "local" ]; then
-  mkdir -p .claude
+  mkdir -p .claude/skills/omc-reference
   TARGET_PATH=".claude/CLAUDE.md"
+  SKILL_TARGET_PATH=".claude/skills/omc-reference/SKILL.md"
 elif [ "$MODE" = "global" ]; then
-  mkdir -p "$HOME/.claude"
+  mkdir -p "$HOME/.claude/skills/omc-reference"
   TARGET_PATH="$HOME/.claude/CLAUDE.md"
+  SKILL_TARGET_PATH="$HOME/.claude/skills/omc-reference/SKILL.md"
 else
   echo "ERROR: Invalid mode '$MODE'. Use 'local' or 'global'." >&2
   exit 1
 fi
+
+
+install_omc_reference_skill() {
+  local source_label=""
+  local temp_skill
+  temp_skill=$(mktemp /tmp/omc-reference-skill-XXXXXX.md)
+
+  if [ -f "$CANONICAL_OMC_REFERENCE_SKILL" ]; then
+    cp "$CANONICAL_OMC_REFERENCE_SKILL" "$temp_skill"
+    source_label="$CANONICAL_OMC_REFERENCE_SKILL"
+  elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/skills/omc-reference/SKILL.md" ]; then
+    cp "${CLAUDE_PLUGIN_ROOT}/skills/omc-reference/SKILL.md" "$temp_skill"
+    source_label="${CLAUDE_PLUGIN_ROOT}/skills/omc-reference/SKILL.md"
+  else
+    rm -f "$temp_skill"
+    echo "Skipped omc-reference skill install (canonical skill source unavailable)"
+    return 0
+  fi
+
+  if [ ! -s "$temp_skill" ]; then
+    rm -f "$temp_skill"
+    echo "Skipped omc-reference skill install (empty canonical skill source: $source_label)"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$SKILL_TARGET_PATH")"
+  cp "$temp_skill" "$SKILL_TARGET_PATH"
+  rm -f "$temp_skill"
+  echo "Installed omc-reference skill to $SKILL_TARGET_PATH"
+}
 
 # Extract old version before download
 OLD_VERSION=$(grep -m1 'OMC:VERSION:' "$TARGET_PATH" 2>/dev/null | sed -E 's/.*OMC:VERSION:([^ ]+).*/\1/' || true)
@@ -176,6 +249,8 @@ if ! grep -q '<!-- OMC:START -->' "$TARGET_PATH" || ! grep -q '<!-- OMC:END -->'
   echo "ERROR: Installed CLAUDE.md is missing required OMC markers: $TARGET_PATH" >&2
   exit 1
 fi
+
+install_omc_reference_skill
 
 if [ "$MODE" = "local" ]; then
   ensure_local_omc_git_exclude

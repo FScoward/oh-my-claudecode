@@ -29,6 +29,7 @@ export const OmcPaths = {
     AUTOPILOT: '.omc/autopilot',
     SKILLS: '.omc/skills',
     SHARED_MEMORY: '.omc/state/shared-memory',
+    DEEPINIT_MANIFEST: '.omc/deepinit-manifest.json',
 };
 /**
  * LRU cache for worktree root lookups to avoid repeated git subprocess calls.

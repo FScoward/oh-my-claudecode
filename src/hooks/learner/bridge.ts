@@ -19,6 +19,7 @@ import {
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
 import { OmcPaths } from "../../lib/worktree-paths.js";
+import { expandTriggers } from "./transliteration-map.js";
 
 // Re-export constants
 export const USER_SKILLS_DIR = join(
@@ -133,7 +134,7 @@ function getSkillMetadataCache(projectRoot: string): CachedSkillData[] {
         path: candidate.path,
         name,
         triggers,
-        triggersLower: triggers.map((t) => t.toLowerCase()),
+        triggersLower: expandTriggers(triggers.map((t) => t.toLowerCase())),
         matching: parsed.metadata.matching,
         content: parsed.content,
         scope: candidate.scope,
@@ -352,8 +353,12 @@ function safeRealpathSync(filePath: string): string {
  * Check if a resolved path is within a boundary directory.
  */
 function isWithinBoundary(realPath: string, boundary: string): boolean {
-  const normalizedReal = realPath.replace(/\\/g, "/").replace(/\/+/g, "/");
-  const normalizedBoundary = boundary.replace(/\\/g, "/").replace(/\/+/g, "/");
+  const normalizedReal = safeRealpathSync(realPath)
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/");
+  const normalizedBoundary = safeRealpathSync(boundary)
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/");
   return (
     normalizedReal === normalizedBoundary ||
     normalizedReal.startsWith(normalizedBoundary + "/")

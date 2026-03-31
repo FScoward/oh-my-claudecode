@@ -30,9 +30,11 @@ export interface AutoresearchDeepInterviewResult {
     launchReady: boolean;
     blockedReasons: string[];
 }
+export declare const AUTORESEARCH_DEEP_INTERVIEW_RESULT_KIND = "omc.autoresearch.deep-interview/v1";
 export declare function buildMissionContent(topic: string): string;
 export declare function buildSandboxContent(evaluatorCommand: string, keepPolicy?: AutoresearchKeepPolicy): string;
 export declare function isLaunchReadyEvaluatorCommand(command: string): boolean;
+export declare function buildAutoresearchDraftArtifactContent(compileTarget: AutoresearchDraftCompileTarget, seedInputs: AutoresearchSeedInputs, launchReady: boolean, blockedReasons: readonly string[]): string;
 export declare function writeAutoresearchDraftArtifact(input: {
     repoRoot: string;
     topic: string;
@@ -49,4 +51,10 @@ export declare function writeAutoresearchDeepInterviewArtifacts(input: {
     slug?: string;
     seedInputs?: AutoresearchSeedInputs;
 }): Promise<AutoresearchDeepInterviewResult>;
+export declare function listAutoresearchDeepInterviewResultPaths(repoRoot: string): Promise<string[]>;
+export declare function resolveAutoresearchDeepInterviewResult(repoRoot: string, options?: {
+    slug?: string;
+    newerThanMs?: number;
+    excludeResultPaths?: ReadonlySet<string>;
+}): Promise<AutoresearchDeepInterviewResult | null>;
 //# sourceMappingURL=autoresearch-intake.d.ts.map

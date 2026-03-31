@@ -2,16 +2,29 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { getConfigDir } from '../utils/config-dir.js';
+import { getGlobalOmcConfigPath, getGlobalOmcConfigCandidates, getGlobalOmcStatePath, getGlobalOmcStateCandidates, } from '../utils/paths.js';
 const MANAGED_START = '# BEGIN OMC MANAGED MCP REGISTRY';
 const MANAGED_END = '# END OMC MANAGED MCP REGISTRY';
-function getOmcHomeDir() {
-    return process.env.OMC_HOME?.trim() || join(homedir(), '.omc');
-}
 export function getUnifiedMcpRegistryPath() {
-    return process.env.OMC_MCP_REGISTRY_PATH?.trim() || join(getOmcHomeDir(), 'mcp-registry.json');
+    return process.env.OMC_MCP_REGISTRY_PATH?.trim() || getGlobalOmcConfigPath('mcp-registry.json');
 }
 function getUnifiedMcpRegistryStatePath() {
-    return join(getOmcHomeDir(), 'mcp-registry-state.json');
+    return getGlobalOmcStatePath('mcp-registry-state.json');
+}
+function getUnifiedMcpRegistryPathCandidates() {
+    if (process.env.OMC_MCP_REGISTRY_PATH?.trim()) {
+        return [process.env.OMC_MCP_REGISTRY_PATH.trim()];
+    }
+    return getGlobalOmcConfigCandidates('mcp-registry.json');
+}
+function getUnifiedMcpRegistryStatePathCandidates() {
+    return getGlobalOmcStateCandidates('mcp-registry-state.json');
+}
+export function getClaudeMcpConfigPath() {
+    if (process.env.CLAUDE_MCP_CONFIG_PATH?.trim()) {
+        return process.env.CLAUDE_MCP_CONFIG_PATH.trim();
+    }
+    return join(dirname(getConfigDir()), '.claude.json');
 }
 export function getCodexConfigPath() {
     const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), '.codex');
@@ -86,19 +99,21 @@ function ensureParentDir(path) {
     }
 }
 function readManagedServerNames() {
-    const statePath = getUnifiedMcpRegistryStatePath();
-    if (!existsSync(statePath)) {
-        return [];
+    for (const statePath of getUnifiedMcpRegistryStatePathCandidates()) {
+        if (!existsSync(statePath)) {
+            continue;
+        }
+        try {
+            const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+            return Array.isArray(state.managedServers)
+                ? state.managedServers.filter((item) => typeof item === 'string').sort((a, b) => a.localeCompare(b))
+                : [];
+        }
+        catch {
+            return [];
+        }
     }
-    try {
-        const state = JSON.parse(readFileSync(statePath, 'utf-8'));
-        return Array.isArray(state.managedServers)
-            ? state.managedServers.filter((item) => typeof item === 'string').sort((a, b) => a.localeCompare(b))
-            : [];
-    }
-    catch {
-        return [];
-    }
+    return [];
 }
 function writeManagedServerNames(serverNames) {
     const statePath = getUnifiedMcpRegistryStatePath();
@@ -115,14 +130,16 @@ function bootstrapRegistryFromClaude(settings, registryPath) {
     return registry;
 }
 function loadOrBootstrapRegistry(settings) {
-    const registryPath = getUnifiedMcpRegistryPath();
-    if (existsSync(registryPath)) {
-        return {
-            registry: loadRegistryFromDisk(registryPath),
-            registryExists: true,
-            bootstrappedFromClaude: false,
-        };
+    for (const registryPath of getUnifiedMcpRegistryPathCandidates()) {
+        if (existsSync(registryPath)) {
+            return {
+                registry: loadRegistryFromDisk(registryPath),
+                registryExists: true,
+                bootstrappedFromClaude: false,
+            };
+        }
     }
+    const registryPath = getUnifiedMcpRegistryPath();
     const registry = bootstrapRegistryFromClaude(settings, registryPath);
     return {
         registry,
@@ -133,28 +150,34 @@ function loadOrBootstrapRegistry(settings) {
 function entriesEqual(left, right) {
     return JSON.stringify(left) === JSON.stringify(right);
 }
-export function applyRegistryToClaudeSettings(settings, registry, managedServerNames = []) {
-    const existingServers = extractClaudeMcpRegistry(settings);
-    const nextServers = { ...existingServers };
+export function applyRegistryToClaudeSettings(settings) {
+    const nextSettings = { ...settings };
+    const changed = Object.prototype.hasOwnProperty.call(nextSettings, 'mcpServers');
+    delete nextSettings.mcpServers;
+    return {
+        settings: nextSettings,
+        changed,
+    };
+}
+function syncClaudeMcpConfig(existingClaudeConfig, registry, managedServerNames = [], legacySettingsServers = {}) {
+    const existingServers = extractClaudeMcpRegistry(existingClaudeConfig);
+    const nextServers = { ...legacySettingsServers, ...existingServers };
     for (const managedName of managedServerNames) {
         delete nextServers[managedName];
     }
     for (const [name, entry] of Object.entries(registry)) {
         nextServers[name] = entry;
     }
-    if (entriesEqual(existingServers, nextServers)) {
-        return { settings, changed: false };
-    }
-    const nextSettings = { ...settings };
+    const nextClaudeConfig = { ...existingClaudeConfig };
     if (Object.keys(nextServers).length === 0) {
-        delete nextSettings.mcpServers;
+        delete nextClaudeConfig.mcpServers;
     }
     else {
-        nextSettings.mcpServers = nextServers;
+        nextClaudeConfig.mcpServers = nextServers;
     }
     return {
-        settings: nextSettings,
-        changed: true,
+        claudeConfig: nextClaudeConfig,
+        changed: !entriesEqual(existingClaudeConfig, nextClaudeConfig),
     };
 }
 function escapeTomlString(value) {
@@ -317,12 +340,23 @@ function parseCodexMcpRegistryEntries(content) {
 }
 export function syncUnifiedMcpRegistryTargets(settings) {
     const registryPath = getUnifiedMcpRegistryPath();
+    const claudeConfigPath = getClaudeMcpConfigPath();
     const codexConfigPath = getCodexConfigPath();
     const managedServerNames = readManagedServerNames();
-    const registryState = loadOrBootstrapRegistry(settings);
+    const legacyClaudeRegistry = extractClaudeMcpRegistry(settings);
+    const currentClaudeConfig = readJsonObject(claudeConfigPath);
+    const claudeConfigForBootstrap = Object.keys(extractClaudeMcpRegistry(currentClaudeConfig)).length > 0
+        ? currentClaudeConfig
+        : settings;
+    const registryState = loadOrBootstrapRegistry(claudeConfigForBootstrap);
     const registry = registryState.registry;
     const serverNames = Object.keys(registry);
-    const claude = applyRegistryToClaudeSettings(settings, registry, managedServerNames);
+    const cleanedSettings = applyRegistryToClaudeSettings(settings);
+    const claude = syncClaudeMcpConfig(currentClaudeConfig, registry, managedServerNames, legacyClaudeRegistry);
+    if (claude.changed) {
+        ensureParentDir(claudeConfigPath);
+        writeFileSync(claudeConfigPath, JSON.stringify(claude.claudeConfig, null, 2));
+    }
     let codexChanged = false;
     const currentCodexConfig = existsSync(codexConfigPath) ? readFileSync(codexConfigPath, 'utf-8') : '';
     const nextCodexConfig = syncCodexConfigToml(currentCodexConfig, registry);
@@ -331,18 +365,19 @@ export function syncUnifiedMcpRegistryTargets(settings) {
         writeFileSync(codexConfigPath, nextCodexConfig.content);
         codexChanged = true;
     }
-    if (registryState.registryExists) {
+    if (registryState.registryExists || Object.keys(legacyClaudeRegistry).length > 0 || managedServerNames.length > 0) {
         writeManagedServerNames(serverNames);
     }
     return {
-        settings: claude.settings,
+        settings: cleanedSettings.settings,
         result: {
             registryPath,
+            claudeConfigPath,
             codexConfigPath,
             registryExists: registryState.registryExists,
             bootstrappedFromClaude: registryState.bootstrappedFromClaude,
             serverNames,
-            claudeChanged: claude.changed,
+            claudeChanged: cleanedSettings.changed || claude.changed,
             codexChanged,
         },
     };
@@ -363,10 +398,12 @@ function readJsonObject(path) {
 }
 export function inspectUnifiedMcpRegistrySync() {
     const registryPath = getUnifiedMcpRegistryPath();
+    const claudeConfigPath = getClaudeMcpConfigPath();
     const codexConfigPath = getCodexConfigPath();
     if (!existsSync(registryPath)) {
         return {
             registryPath,
+            claudeConfigPath,
             codexConfigPath,
             registryExists: false,
             serverNames: [],
@@ -378,7 +415,7 @@ export function inspectUnifiedMcpRegistrySync() {
     }
     const registry = loadRegistryFromDisk(registryPath);
     const serverNames = Object.keys(registry);
-    const claudeSettings = readJsonObject(join(getConfigDir(), 'settings.json'));
+    const claudeSettings = readJsonObject(claudeConfigPath);
     const claudeEntries = extractClaudeMcpRegistry(claudeSettings);
     const codexEntries = existsSync(codexConfigPath)
         ? parseCodexMcpRegistryEntries(readFileSync(codexConfigPath, 'utf-8'))
@@ -403,6 +440,7 @@ export function inspectUnifiedMcpRegistrySync() {
     }
     return {
         registryPath,
+        claudeConfigPath,
         codexConfigPath,
         registryExists: true,
         serverNames,

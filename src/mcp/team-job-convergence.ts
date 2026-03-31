@@ -2,6 +2,7 @@ import { existsSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { cleanupTeamWorktrees } from '../team/git-worktree.js';
 import { validateTeamName } from '../team/team-name.js';
+import { isProcessAlive } from '../platform/index.js';
 
 export interface OmcTeamJob {
   status: 'running' | 'completed' | 'failed' | 'timeout';
@@ -92,15 +93,6 @@ export function convergeJobWithResultArtifact(
 
 export function isJobTerminal(job: OmcTeamJob): boolean {
   return job.status === 'completed' || job.status === 'failed' || job.status === 'timeout';
-}
-
-export function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function clearScopedTeamState(job: Pick<OmcTeamJob, 'cwd' | 'teamName'>): string {

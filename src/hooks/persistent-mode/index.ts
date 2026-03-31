@@ -13,8 +13,7 @@
 import { existsSync, readFileSync, unlinkSync, statSync, openSync, readSync, closeSync, mkdirSync } from 'fs';
 import { atomicWriteJsonSync } from '../../lib/atomic-write.js';
 import { join } from 'path';
-import { homedir } from 'os';
-import { getClaudeConfigDir } from '../../utils/paths.js';
+import { getClaudeConfigDir, getGlobalOmcConfigCandidates } from '../../utils/paths.js';
 import {
   readUltraworkState,
   writeUltraworkState,
@@ -49,6 +48,7 @@ import {
 import { checkAutopilot } from '../autopilot/enforcement.js';
 import { readTeamPipelineState } from '../team-pipeline/state.js';
 import type { TeamPipelinePhase } from '../team-pipeline/types.js';
+import { getActiveAgentSnapshot } from '../subagent-tracker/index.js';
 
 export interface ToolErrorState {
   tool_name: string;
@@ -225,6 +225,7 @@ Do NOT skip this step. Do NOT move on without fixing the error.
  * Get or increment todo-continuation attempt counter
  */
 function trackTodoContinuationAttempt(sessionId: string): number {
+  if (todoContinuationAttempts.size > 200) todoContinuationAttempts.clear();
   const current = todoContinuationAttempts.get(sessionId) || 0;
   const next = current + 1;
   todoContinuationAttempts.set(sessionId, next);
@@ -239,19 +240,21 @@ export function resetTodoContinuationAttempts(sessionId: string): void {
 }
 
 /**
- * Read the session-idle notification cooldown in seconds from ~/.omc/config.json.
+ * Read the session-idle notification cooldown in seconds from global OMC config.
  * Default: 60 seconds. 0 = disabled (no cooldown).
  */
 export function getIdleNotificationCooldownSeconds(): number {
-  const configPath = join(homedir(), '.omc', 'config.json');
-  try {
-    if (!existsSync(configPath)) return 60;
-    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
-    const cooldown = (config?.notificationCooldown as Record<string, unknown> | undefined);
-    const val = cooldown?.sessionIdleSeconds;
-    if (typeof val === 'number' && Number.isFinite(val)) return Math.max(0, val);
-  } catch {
-    // ignore parse errors
+  for (const configPath of getGlobalOmcConfigCandidates('config.json')) {
+    try {
+      if (!existsSync(configPath)) continue;
+      const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+      const cooldown = (config?.notificationCooldown as Record<string, unknown> | undefined);
+      const val = cooldown?.sessionIdleSeconds;
+      if (typeof val === 'number' && Number.isFinite(val)) return Math.max(0, val);
+      return 60;
+    } catch {
+      return 60;
+    }
   }
   return 60;
 }
@@ -360,6 +363,14 @@ function isCriticalContextStop(stopContext?: StopContext): boolean {
   return estimateTranscriptContextPercent(transcriptPath) >= CRITICAL_CONTEXT_STOP_PERCENT;
 }
 
+function isAwaitingConfirmation(state: unknown): boolean {
+  return Boolean(
+    state &&
+    typeof state === 'object' &&
+    (state as Record<string, unknown>).awaiting_confirmation === true
+  );
+}
+
 /**
  * Check for architect approval in session transcript
  */
@@ -431,6 +442,10 @@ async function checkRalphLoop(
 
   // Strict session isolation: only process state for matching session
   if (state.session_id !== sessionId) {
+    return null;
+  }
+
+  if (isAwaitingConfirmation(state)) {
     return null;
   }
 
@@ -836,6 +851,7 @@ When done, run \`/oh-my-claudecode:cancel\` to cleanly exit.
 
 const RALPLAN_STOP_BLOCKER_MAX = 30;
 const RALPLAN_STOP_BLOCKER_TTL_MS = 45 * 60 * 1000; // 45 min
+const RALPLAN_ACTIVE_AGENT_RECENCY_WINDOW_MS = 5_000;
 
 interface RalplanState {
   active: boolean;
@@ -864,6 +880,10 @@ async function checkRalplan(
     return null;
   }
 
+  if (isAwaitingConfirmation(state)) {
+    return null;
+  }
+
   // Terminal phase detection — allow stop when ralplan has completed
   const currentPhase = (state as unknown as Record<string, unknown>).current_phase;
   if (typeof currentPhase === 'string') {
@@ -881,6 +901,26 @@ async function checkRalplan(
       shouldBlock: false,
       message: '',
       mode: 'ralplan'
+    };
+  }
+
+  // Orchestrators are allowed to go idle while delegated work is still active,
+  // but the raw running-agent count can lag behind the real lifecycle because
+  // SubagentStop/post-tool-use bookkeeping lands after the stop event. Only
+  // trust the bypass when the tracker itself was updated recently enough to
+  // look live; otherwise fail closed and keep consensus enforcement active.
+  const activeAgents = getActiveAgentSnapshot(workingDir);
+  const activeAgentStateUpdatedAt = activeAgents.lastUpdatedAt ? new Date(activeAgents.lastUpdatedAt).getTime() : NaN;
+  const hasFreshActiveAgentState =
+    Number.isFinite(activeAgentStateUpdatedAt)
+    && Date.now() - activeAgentStateUpdatedAt <= RALPLAN_ACTIVE_AGENT_RECENCY_WINDOW_MS;
+
+  if (activeAgents.count > 0 && hasFreshActiveAgentState) {
+    writeStopBreaker(workingDir, 'ralplan', 0, sessionId);
+    return {
+      shouldBlock: false,
+      message: '',
+      mode: 'ralplan',
     };
   }
 
@@ -933,6 +973,10 @@ async function checkUltrawork(
 
   // Strict session isolation: only process state for matching session
   if (state.session_id !== sessionId) {
+    return null;
+  }
+
+  if (isAwaitingConfirmation(state)) {
     return null;
   }
 

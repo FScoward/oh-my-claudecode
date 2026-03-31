@@ -114,11 +114,13 @@ export declare function isRunningAsPlugin(): boolean;
  * @returns true if running as a project-scoped plugin, false otherwise
  */
 export declare function isProjectScopedPlugin(): boolean;
+export declare function getInstalledOmcPluginRoots(): string[];
 /**
  * Detect whether an installed Claude Code plugin already provides OMC agent
  * markdown files, so the legacy ~/.claude/agents copy can be skipped.
  */
 export declare function hasPluginProvidedAgentFiles(): boolean;
+export declare function getRuntimePackageRoot(): string;
 /**
  * Extract the embedded OMC version from a CLAUDE.md file.
  *

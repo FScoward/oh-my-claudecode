@@ -110,7 +110,8 @@ describe('getUsage lock failure fallback', () => {
     vi.doMock('../../utils/ssrf-guard.js', () => ({
       validateAnthropicBaseUrl: () => ({ allowed: true }),
     }));
-    vi.doMock('child_process', () => ({
+    vi.doMock('child_process', async () => ({
+      ...(await vi.importActual<typeof import('child_process')>('child_process')),
       execSync: vi.fn(),
     }));
     vi.doMock('fs', () => fsModule);
@@ -156,7 +157,8 @@ describe('getUsage lock failure fallback', () => {
     vi.doMock('../../utils/ssrf-guard.js', () => ({
       validateAnthropicBaseUrl: () => ({ allowed: true }),
     }));
-    vi.doMock('child_process', () => ({
+    vi.doMock('child_process', async () => ({
+      ...(await vi.importActual<typeof import('child_process')>('child_process')),
       execSync: vi.fn(),
     }));
     vi.doMock('fs', () => fsModule);
@@ -217,7 +219,8 @@ describe('getUsage lock behavior', () => {
     vi.doMock('../../utils/ssrf-guard.js', () => ({
       validateAnthropicBaseUrl: () => ({ allowed: true }),
     }));
-    vi.doMock('child_process', () => ({
+    vi.doMock('child_process', async () => ({
+      ...(await vi.importActual<typeof import('child_process')>('child_process')),
       execSync: vi.fn(),
     }));
     vi.doMock('fs', () => fsModule);

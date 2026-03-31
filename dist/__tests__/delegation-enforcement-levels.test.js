@@ -385,6 +385,10 @@ describe('delegation-enforcement-levels', () => {
             vi.mock('../hud/background-tasks.js', () => ({
                 addBackgroundTask: vi.fn(),
                 completeBackgroundTask: vi.fn(),
+                completeMostRecentMatchingBackgroundTask: vi.fn(),
+                getRunningTaskCount: vi.fn(() => 0),
+                remapBackgroundTaskId: vi.fn(),
+                remapMostRecentMatchingBackgroundTaskId: vi.fn(),
             }));
             vi.mock('../hooks/ralph/index.js', () => ({
                 readRalphState: vi.fn(() => null),

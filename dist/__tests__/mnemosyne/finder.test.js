@@ -25,6 +25,16 @@ describe('Skill Finder', () => {
         expect(projectCandidates[0].scope).toBe('project');
         expect(projectCandidates[0].path).toBe(skillPath);
     });
+    it('should find compatibility project skills in .agents/skills', () => {
+        const compatDir = join(projectRoot, '.agents', 'skills');
+        mkdirSync(compatDir, { recursive: true });
+        const skillPath = join(compatDir, 'compat-skill.md');
+        writeFileSync(skillPath, '# Compat Skill');
+        const candidates = findSkillFiles(projectRoot);
+        const projectCandidates = candidates.filter(c => c.scope === 'project');
+        expect(projectCandidates.some(c => c.path === skillPath)).toBe(true);
+        expect(projectCandidates.find(c => c.path === skillPath)?.sourceDir).toBe(compatDir);
+    });
     it('should prioritize project skills over user skills', () => {
         // Create project skill
         const projectSkillPath = join(projectRoot, '.omc', 'skills', 'skill.md');

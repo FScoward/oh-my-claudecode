@@ -2,9 +2,10 @@
  * Unit tests for session-idle notification cooldown (issue #826)
  * Verifies that idle notifications are rate-limited per session.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { getGlobalOmcConfigCandidates } from '../../../utils/paths.js';
 import { getIdleNotificationCooldownSeconds, shouldSendIdleNotification, recordIdleNotificationSent, } from '../index.js';
 import { atomicWriteJsonSync } from '../../../lib/atomic-write.js';
 // Mock fs and os modules (hoisted before all imports)
@@ -22,21 +23,60 @@ vi.mock('fs', async () => {
 vi.mock('../../../lib/atomic-write.js', () => ({
     atomicWriteJsonSync: vi.fn(),
 }));
+const { TEST_HOME } = vi.hoisted(() => ({
+    TEST_HOME: process.env.HOME || '/tmp/omc-test-home',
+}));
 vi.mock('os', async () => {
     const actual = await vi.importActual('os');
     return {
         ...actual,
-        homedir: vi.fn().mockReturnValue('/home/testuser'),
+        homedir: vi.fn().mockReturnValue(TEST_HOME),
     };
 });
 const TEST_STATE_DIR = '/project/.omc/state';
 const COOLDOWN_PATH = join(TEST_STATE_DIR, 'idle-notif-cooldown.json');
 const TEST_SESSION_ID = 'session-123';
 const SESSION_COOLDOWN_PATH = join(TEST_STATE_DIR, 'sessions', TEST_SESSION_ID, 'idle-notif-cooldown.json');
-const CONFIG_PATH = '/home/testuser/.omc/config.json';
+function getConfigPaths() {
+    return getGlobalOmcConfigCandidates('config.json');
+}
 describe('getIdleNotificationCooldownSeconds', () => {
+    const originalHome = process.env.HOME;
     beforeEach(() => {
         vi.clearAllMocks();
+        process.env.HOME = TEST_HOME;
+        delete process.env.XDG_CONFIG_HOME;
+        delete process.env.XDG_STATE_HOME;
+        delete process.env.OMC_HOME;
+    });
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    const originalXdgStateHome = process.env.XDG_STATE_HOME;
+    const originalOmcHome = process.env.OMC_HOME;
+    afterEach(() => {
+        if (originalHome === undefined) {
+            delete process.env.HOME;
+        }
+        else {
+            process.env.HOME = originalHome;
+        }
+        if (originalXdgConfigHome === undefined) {
+            delete process.env.XDG_CONFIG_HOME;
+        }
+        else {
+            process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+        }
+        if (originalXdgStateHome === undefined) {
+            delete process.env.XDG_STATE_HOME;
+        }
+        else {
+            process.env.XDG_STATE_HOME = originalXdgStateHome;
+        }
+        if (originalOmcHome === undefined) {
+            delete process.env.OMC_HOME;
+        }
+        else {
+            process.env.OMC_HOME = originalOmcHome;
+        }
     });
     it('returns 60 when config file does not exist', () => {
         existsSync.mockReturnValue(false);
@@ -45,8 +85,21 @@ describe('getIdleNotificationCooldownSeconds', () => {
     it('returns configured value when set in config', () => {
         existsSync.mockReturnValue(true);
         readFileSync.mockReturnValue(JSON.stringify({ notificationCooldown: { sessionIdleSeconds: 120 } }));
+        const [configPath] = getConfigPaths();
         expect(getIdleNotificationCooldownSeconds()).toBe(120);
-        expect(readFileSync).toHaveBeenCalledWith(CONFIG_PATH, 'utf-8');
+        expect(readFileSync).toHaveBeenCalledWith(configPath, 'utf-8');
+    });
+    it('falls back to legacy ~/.omc config when XDG config is absent', () => {
+        const [, legacyConfigPath] = getConfigPaths();
+        existsSync.mockImplementation((p) => p === legacyConfigPath);
+        readFileSync.mockImplementation((p) => {
+            if (p === legacyConfigPath) {
+                return JSON.stringify({ notificationCooldown: { sessionIdleSeconds: 45 } });
+            }
+            throw new Error('not found');
+        });
+        expect(getIdleNotificationCooldownSeconds()).toBe(45);
+        expect(readFileSync).toHaveBeenCalledWith(legacyConfigPath, 'utf-8');
     });
     it('returns 0 when cooldown is disabled in config', () => {
         existsSync.mockReturnValue(true);
@@ -104,7 +157,8 @@ describe('shouldSendIdleNotification', () => {
     it('returns true when no cooldown file exists', () => {
         // config exists but no cooldown file
         existsSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return false; // use default 60s
             if (p === COOLDOWN_PATH)
                 return false;
@@ -143,14 +197,16 @@ describe('shouldSendIdleNotification', () => {
     it('returns true when cooldown is disabled (0 seconds)', () => {
         const recentTimestamp = new Date(Date.now() - 5_000).toISOString(); // 5s ago
         existsSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return true;
             if (p === COOLDOWN_PATH)
                 return true;
             return false;
         });
         readFileSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return JSON.stringify({ notificationCooldown: { sessionIdleSeconds: 0 } });
             if (p === COOLDOWN_PATH)
                 return JSON.stringify({ lastSentAt: recentTimestamp });
@@ -187,14 +243,16 @@ describe('shouldSendIdleNotification', () => {
     it('respects a custom cooldown from config', () => {
         const recentTimestamp = new Date(Date.now() - 10_000).toISOString(); // 10s ago
         existsSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return true;
             if (p === COOLDOWN_PATH)
                 return true;
             return false;
         });
         readFileSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return JSON.stringify({ notificationCooldown: { sessionIdleSeconds: 5 } });
             if (p === COOLDOWN_PATH)
                 return JSON.stringify({ lastSentAt: recentTimestamp });
@@ -206,14 +264,16 @@ describe('shouldSendIdleNotification', () => {
     it('uses session-scoped cooldown file when sessionId is provided', () => {
         const recentTimestamp = new Date(Date.now() - 10_000).toISOString(); // 10s ago
         existsSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return true;
             if (p === SESSION_COOLDOWN_PATH)
                 return true;
             return false;
         });
         readFileSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH) {
+            const [configPath] = getConfigPaths();
+            if (p === configPath) {
                 return JSON.stringify({ notificationCooldown: { sessionIdleSeconds: 30 } });
             }
             if (p === SESSION_COOLDOWN_PATH)
@@ -225,14 +285,16 @@ describe('shouldSendIdleNotification', () => {
     it('blocks notification when within custom shorter cooldown', () => {
         const recentTimestamp = new Date(Date.now() - 10_000).toISOString(); // 10s ago
         existsSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return true;
             if (p === COOLDOWN_PATH)
                 return true;
             return false;
         });
         readFileSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return JSON.stringify({ notificationCooldown: { sessionIdleSeconds: 30 } });
             if (p === COOLDOWN_PATH)
                 return JSON.stringify({ lastSentAt: recentTimestamp });
@@ -244,14 +306,16 @@ describe('shouldSendIdleNotification', () => {
     it('treats negative sessionIdleSeconds as 0 (disabled), always sends', () => {
         const recentTimestamp = new Date(Date.now() - 5_000).toISOString(); // 5s ago
         existsSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return true;
             if (p === COOLDOWN_PATH)
                 return true;
             return false;
         });
         readFileSync.mockImplementation((p) => {
-            if (p === CONFIG_PATH)
+            const [configPath] = getConfigPaths();
+            if (p === configPath)
                 return JSON.stringify({ notificationCooldown: { sessionIdleSeconds: -30 } });
             if (p === COOLDOWN_PATH)
                 return JSON.stringify({ lastSentAt: recentTimestamp });

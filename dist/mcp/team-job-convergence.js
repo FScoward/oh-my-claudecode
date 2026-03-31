@@ -68,15 +68,6 @@ export function convergeJobWithResultArtifact(job, jobId, omcJobsDir) {
 export function isJobTerminal(job) {
     return job.status === 'completed' || job.status === 'failed' || job.status === 'timeout';
 }
-export function isPidAlive(pid) {
-    try {
-        process.kill(pid, 0);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
 export function clearScopedTeamState(job) {
     if (!job.cwd || !job.teamName) {
         return 'team state cleanup skipped (missing job cwd/teamName).';

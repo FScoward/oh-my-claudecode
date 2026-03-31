@@ -3,7 +3,7 @@
  *
  * Unified state management that standardizes state file locations:
  * - Local state: .omc/state/{name}.json
- * - Global state: ~/.omc/state/{name}.json
+ * - Global state: XDG-aware user OMC state with legacy ~/.omc/state fallback
  *
  * Features:
  * - Type-safe read/write operations
@@ -24,7 +24,7 @@ export declare function getStatePath(name: string, location: StateLocation): str
 /**
  * Get legacy paths for a state file (for migration)
  */
-export declare function getLegacyPaths(name: string): string[];
+export declare function getLegacyPaths(name: string, location?: StateLocation): string[];
 /**
  * Ensure state directory exists
  */

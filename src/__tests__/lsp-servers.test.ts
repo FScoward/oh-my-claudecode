@@ -17,6 +17,11 @@ describe('LSP Server Configurations', () => {
     expect(config.installHint).toBeTruthy();
   });
 
+  it('kotlin should use stdio and an extended initialize timeout', () => {
+    expect(LSP_SERVERS.kotlin.args).toContain('--stdio');
+    expect(LSP_SERVERS.kotlin.initializeTimeoutMs).toBeGreaterThan(15_000);
+  });
+
   it('should have no duplicate extension mappings across servers', () => {
     const seen = new Map<string, string>();
     for (const [key, config] of Object.entries(LSP_SERVERS)) {

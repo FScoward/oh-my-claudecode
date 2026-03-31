@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseSandboxContract, slugifyMissionName } from '../autoresearch/contracts.js';
 const BLOCKED_EVALUATOR_PATTERNS = [
@@ -11,10 +12,39 @@ const BLOCKED_EVALUATOR_PATTERNS = [
 ];
 const DEEP_INTERVIEW_DRAFT_PREFIX = 'deep-interview-autoresearch-';
 const AUTORESEARCH_ARTIFACT_DIR_PREFIX = 'autoresearch-';
-const AUTORESEARCH_DEEP_INTERVIEW_RESULT_KIND = 'omc.autoresearch.deep-interview/v1';
+export const AUTORESEARCH_DEEP_INTERVIEW_RESULT_KIND = 'omc.autoresearch.deep-interview/v1';
 function defaultDraftEvaluator(topic) {
     const detail = topic.trim() || 'the mission';
     return `TODO replace with evaluator command for: ${detail}`;
+}
+function escapeRegex(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function extractMarkdownSection(markdown, heading) {
+    const pattern = new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`, 'im');
+    const match = pattern.exec(markdown);
+    if (!match || match.index < 0)
+        return '';
+    const start = match.index + match[0].length;
+    const remainder = markdown.slice(start);
+    const nextHeading = remainder.search(/^##\s+/m);
+    return (nextHeading >= 0 ? remainder.slice(0, nextHeading) : remainder).trim();
+}
+function parseLaunchReadinessSection(section) {
+    const normalized = section.trim();
+    if (!normalized) {
+        return { launchReady: false, blockedReasons: ['Launch readiness section is missing.'] };
+    }
+    const launchReady = /Launch-ready:\s*yes/i.test(normalized);
+    const blockedReasons = launchReady
+        ? []
+        : normalized
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => /^-\s+/.test(line))
+            .map((line) => line.replace(/^-\s+/, '').trim())
+            .filter(Boolean);
+    return { launchReady, blockedReasons };
 }
 function normalizeKeepPolicy(raw) {
     return raw.trim().toLowerCase() === 'pass_only' ? 'pass_only' : 'score_improvement';
@@ -52,7 +82,7 @@ function buildLaunchReadinessSection(launchReady, blockedReasons) {
         ...blockedReasons.map((reason) => `- ${reason}`),
     ].join('\n');
 }
-function buildAutoresearchDraftArtifactContent(compileTarget, seedInputs, launchReady, blockedReasons) {
+export function buildAutoresearchDraftArtifactContent(compileTarget, seedInputs, launchReady, blockedReasons) {
     const seedTopic = seedInputs.topic?.trim() || '(none)';
     const seedEvaluator = seedInputs.evaluatorCommand?.trim() || '(none)';
     const seedKeepPolicy = seedInputs.keepPolicy || '(none)';
@@ -149,5 +179,147 @@ export async function writeAutoresearchDeepInterviewArtifacts(input) {
         launchReady: draft.launchReady,
         blockedReasons: draft.blockedReasons,
     };
+}
+function parseDraftArtifactContent(content, repoRoot, draftArtifactPath) {
+    const missionDraft = extractMarkdownSection(content, 'Mission Draft').trim();
+    const evaluatorDraft = extractMarkdownSection(content, 'Evaluator Draft').trim().replace(/[\r\n]+/g, ' ');
+    const keepPolicyRaw = extractMarkdownSection(content, 'Keep Policy').trim();
+    const slugRaw = extractMarkdownSection(content, 'Session Slug').trim();
+    const launchReadiness = parseLaunchReadinessSection(extractMarkdownSection(content, 'Launch Readiness'));
+    if (!missionDraft) {
+        throw new Error(`Missing Mission Draft section in ${draftArtifactPath}`);
+    }
+    if (!evaluatorDraft) {
+        throw new Error(`Missing Evaluator Draft section in ${draftArtifactPath}`);
+    }
+    const slug = slugifyMissionName(slugRaw || missionDraft);
+    const compileTarget = {
+        topic: missionDraft,
+        evaluatorCommand: evaluatorDraft,
+        keepPolicy: normalizeKeepPolicy(keepPolicyRaw || 'score_improvement'),
+        slug,
+        repoRoot,
+    };
+    const missionContent = buildMissionContent(compileTarget.topic);
+    const sandboxContent = buildSandboxContent(compileTarget.evaluatorCommand, compileTarget.keepPolicy);
+    parseSandboxContract(sandboxContent);
+    return {
+        compileTarget,
+        draftArtifactPath,
+        missionArtifactPath: join(buildArtifactDir(repoRoot, slug), 'mission.md'),
+        sandboxArtifactPath: join(buildArtifactDir(repoRoot, slug), 'sandbox.md'),
+        resultPath: buildResultPath(repoRoot, slug),
+        missionContent,
+        sandboxContent,
+        launchReady: launchReadiness.launchReady,
+        blockedReasons: launchReadiness.blockedReasons,
+    };
+}
+async function readPersistedResult(resultPath) {
+    const raw = await readFile(resultPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed.kind !== AUTORESEARCH_DEEP_INTERVIEW_RESULT_KIND) {
+        throw new Error(`Unsupported autoresearch deep-interview result payload: ${resultPath}`);
+    }
+    if (!parsed.compileTarget) {
+        throw new Error(`Missing compileTarget in ${resultPath}`);
+    }
+    const compileTarget = parsed.compileTarget;
+    const draftArtifactPath = typeof parsed.draftArtifactPath === 'string' ? parsed.draftArtifactPath : buildDraftArtifactPath(compileTarget.repoRoot, compileTarget.slug);
+    const missionArtifactPath = typeof parsed.missionArtifactPath === 'string' ? parsed.missionArtifactPath : join(buildArtifactDir(compileTarget.repoRoot, compileTarget.slug), 'mission.md');
+    const sandboxArtifactPath = typeof parsed.sandboxArtifactPath === 'string' ? parsed.sandboxArtifactPath : join(buildArtifactDir(compileTarget.repoRoot, compileTarget.slug), 'sandbox.md');
+    if (!existsSync(missionArtifactPath)) {
+        throw new Error(`Missing mission artifact: ${missionArtifactPath} — the interview may have been interrupted before all files were written.`);
+    }
+    if (!existsSync(sandboxArtifactPath)) {
+        throw new Error(`Missing sandbox artifact: ${sandboxArtifactPath} — the interview may have been interrupted before all files were written.`);
+    }
+    const missionContent = await readFile(missionArtifactPath, 'utf-8');
+    const sandboxContent = await readFile(sandboxArtifactPath, 'utf-8');
+    parseSandboxContract(sandboxContent);
+    return {
+        compileTarget,
+        draftArtifactPath,
+        missionArtifactPath,
+        sandboxArtifactPath,
+        resultPath,
+        missionContent,
+        sandboxContent,
+        launchReady: parsed.launchReady === true,
+        blockedReasons: Array.isArray(parsed.blockedReasons)
+            ? parsed.blockedReasons.filter((value) => typeof value === 'string' && value.trim().length > 0)
+            : [],
+    };
+}
+async function listMarkdownDraftPaths(repoRoot) {
+    const specsDir = join(repoRoot, '.omc', 'specs');
+    if (!existsSync(specsDir))
+        return [];
+    const entries = await readdir(specsDir, { withFileTypes: true });
+    return entries
+        .filter((entry) => entry.isFile() && entry.name.startsWith(DEEP_INTERVIEW_DRAFT_PREFIX) && entry.name.endsWith('.md'))
+        .map((entry) => join(specsDir, entry.name));
+}
+export async function listAutoresearchDeepInterviewResultPaths(repoRoot) {
+    const specsDir = join(repoRoot, '.omc', 'specs');
+    if (!existsSync(specsDir))
+        return [];
+    const entries = await readdir(specsDir, { withFileTypes: true });
+    const resultPaths = entries
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith(AUTORESEARCH_ARTIFACT_DIR_PREFIX))
+        .map((entry) => join(specsDir, entry.name, 'result.json'))
+        .filter((path) => existsSync(path));
+    return resultPaths.sort((left, right) => left.localeCompare(right));
+}
+async function filterRecentPaths(paths, newerThanMs, excludePaths) {
+    const filtered = [];
+    for (const path of paths) {
+        if (excludePaths?.has(path)) {
+            continue;
+        }
+        if (typeof newerThanMs === 'number') {
+            const metadata = await stat(path).catch(() => null);
+            if (!metadata || metadata.mtimeMs < newerThanMs) {
+                continue;
+            }
+        }
+        filtered.push(path);
+    }
+    return filtered;
+}
+export async function resolveAutoresearchDeepInterviewResult(repoRoot, options = {}) {
+    const slug = options.slug?.trim() ? slugifyMissionName(options.slug) : null;
+    if (slug) {
+        const resultPath = buildResultPath(repoRoot, slug);
+        if (existsSync(resultPath)) {
+            const metadata = await stat(resultPath).catch(() => null);
+            if (!metadata || options.newerThanMs == null || metadata.mtimeMs >= options.newerThanMs) {
+                return readPersistedResult(resultPath);
+            }
+        }
+        const draftArtifactPath = buildDraftArtifactPath(repoRoot, slug);
+        if (existsSync(draftArtifactPath)) {
+            const metadata = await stat(draftArtifactPath).catch(() => null);
+            if (!metadata || options.newerThanMs == null || metadata.mtimeMs >= options.newerThanMs) {
+                const draftContent = await readFile(draftArtifactPath, 'utf-8');
+                return parseDraftArtifactContent(draftContent, repoRoot, draftArtifactPath);
+            }
+        }
+        return null;
+    }
+    const resultPaths = await filterRecentPaths(await listAutoresearchDeepInterviewResultPaths(repoRoot), options.newerThanMs, options.excludeResultPaths);
+    const resultEntries = await Promise.all(resultPaths.map(async (path) => ({ path, metadata: await stat(path) })));
+    const newestResultPath = resultEntries.sort((left, right) => right.metadata.mtimeMs - left.metadata.mtimeMs)[0]?.path;
+    if (newestResultPath) {
+        return readPersistedResult(newestResultPath);
+    }
+    const draftPaths = await filterRecentPaths(await listMarkdownDraftPaths(repoRoot), options.newerThanMs);
+    const draftEntries = await Promise.all(draftPaths.map(async (path) => ({ path, metadata: await stat(path) })));
+    const newestDraftPath = draftEntries.sort((left, right) => right.metadata.mtimeMs - left.metadata.mtimeMs)[0]?.path;
+    if (!newestDraftPath) {
+        return null;
+    }
+    const draftContent = await readFile(newestDraftPath, 'utf-8');
+    return parseDraftArtifactContent(draftContent, repoRoot, newestDraftPath);
 }
 //# sourceMappingURL=autoresearch-intake.js.map

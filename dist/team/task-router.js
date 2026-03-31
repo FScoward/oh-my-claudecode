@@ -68,7 +68,7 @@ export function routeTasks(teamName, workingDirectory, unassignedTasks, required
 // ---------------------------------------------------------------------------
 /** Maps lane intents to the worker capabilities that best serve them */
 const INTENT_CAPABILITY_MAP = {
-    'build-fix': ['testing'],
+    'build-fix': ['code-edit'],
     debug: ['general'],
     docs: ['documentation'],
     design: ['architecture', 'ui-design'],

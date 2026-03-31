@@ -10,8 +10,11 @@ import { join, basename } from 'path';
 import { getClaudeConfigDir } from '../../utils/paths.js';
 import { resolveLiveData } from './live-data.js';
 import { parseFrontmatter, parseFrontmatterAliases, stripOptionalQuotes } from '../../utils/frontmatter.js';
+import { formatOmcCliInvocation, rewriteOmcCliInvocations } from '../../utils/omc-cli-rendering.js';
 import { parseSkillPipelineMetadata, renderSkillPipelineGuidance } from '../../utils/skill-pipeline.js';
+import { renderSkillResourcesGuidance } from '../../utils/skill-resources.js';
 import { renderSkillRuntimeGuidance } from '../../features/builtin-skills/runtime-guidance.js';
+import { getSkillsDir } from '../../features/builtin-skills/skills.js';
 /** Claude config directory */
 const CLAUDE_CONFIG_DIR = getClaudeConfigDir();
 /**
@@ -89,76 +92,92 @@ function discoverCommandsFromDir(commandsDir, scope) {
     }
     return commands;
 }
+function discoverSkillsFromDir(skillsDir) {
+    if (!existsSync(skillsDir)) {
+        return [];
+    }
+    const skillCommands = [];
+    try {
+        const skillDirs = readdirSync(skillsDir, { withFileTypes: true });
+        for (const dir of skillDirs) {
+            if (!dir.isDirectory())
+                continue;
+            const skillPath = join(skillsDir, dir.name, 'SKILL.md');
+            if (!existsSync(skillPath))
+                continue;
+            try {
+                const content = readFileSync(skillPath, 'utf-8');
+                const { metadata: fm, body } = parseFrontmatter(content);
+                const rawName = getFrontmatterString(fm, 'name') || dir.name;
+                const canonicalName = toSafeSkillName(rawName);
+                const aliases = Array.from(new Set(parseFrontmatterAliases(fm.aliases)
+                    .map((alias) => toSafeSkillName(alias))
+                    .filter((alias) => alias.toLowerCase() !== canonicalName.toLowerCase())));
+                const commandNames = [canonicalName, ...aliases];
+                const description = getFrontmatterString(fm, 'description') || '';
+                const argumentHint = getFrontmatterString(fm, 'argument-hint');
+                const model = getFrontmatterString(fm, 'model');
+                const agent = getFrontmatterString(fm, 'agent');
+                const pipeline = parseSkillPipelineMetadata(fm);
+                for (const commandName of commandNames) {
+                    const isAlias = commandName !== canonicalName;
+                    const metadata = {
+                        name: commandName,
+                        description,
+                        argumentHint,
+                        model,
+                        agent,
+                        pipeline: isAlias ? undefined : pipeline,
+                        aliases: isAlias ? undefined : aliases,
+                        aliasOf: isAlias ? canonicalName : undefined,
+                        deprecatedAlias: isAlias || undefined,
+                        deprecationMessage: isAlias
+                            ? `Alias "/${commandName}" is deprecated. Use "/${canonicalName}" instead.`
+                            : undefined,
+                    };
+                    skillCommands.push({
+                        name: commandName,
+                        path: skillPath,
+                        metadata,
+                        content: body,
+                        scope: 'skill',
+                    });
+                }
+            }
+            catch {
+                continue;
+            }
+        }
+    }
+    catch {
+        return [];
+    }
+    return skillCommands;
+}
 /**
  * Discover all available commands from multiple sources
  */
 export function discoverAllCommands() {
     const userCommandsDir = join(CLAUDE_CONFIG_DIR, 'commands');
     const projectCommandsDir = join(process.cwd(), '.claude', 'commands');
-    const skillsDir = join(CLAUDE_CONFIG_DIR, 'skills');
+    const projectOmcSkillsDir = join(process.cwd(), '.omc', 'skills');
+    const projectAgentSkillsDir = join(process.cwd(), '.agents', 'skills');
+    const userSkillsDir = join(CLAUDE_CONFIG_DIR, 'skills');
     const userCommands = discoverCommandsFromDir(userCommandsDir, 'user');
     const projectCommands = discoverCommandsFromDir(projectCommandsDir, 'project');
-    // Discover skills (each skill directory may have a SKILL.md)
-    const skillCommands = [];
-    if (existsSync(skillsDir)) {
-        try {
-            const skillDirs = readdirSync(skillsDir, { withFileTypes: true });
-            for (const dir of skillDirs) {
-                if (!dir.isDirectory())
-                    continue;
-                const skillPath = join(skillsDir, dir.name, 'SKILL.md');
-                if (existsSync(skillPath)) {
-                    try {
-                        const content = readFileSync(skillPath, 'utf-8');
-                        const { metadata: fm, body } = parseFrontmatter(content);
-                        const rawName = getFrontmatterString(fm, 'name') || dir.name;
-                        const canonicalName = toSafeSkillName(rawName);
-                        const aliases = Array.from(new Set(parseFrontmatterAliases(fm.aliases)
-                            .map((alias) => toSafeSkillName(alias))
-                            .filter((alias) => alias.toLowerCase() !== canonicalName.toLowerCase())));
-                        const commandNames = [canonicalName, ...aliases];
-                        const description = getFrontmatterString(fm, 'description') || '';
-                        const argumentHint = getFrontmatterString(fm, 'argument-hint');
-                        const model = getFrontmatterString(fm, 'model');
-                        const agent = getFrontmatterString(fm, 'agent');
-                        const pipeline = parseSkillPipelineMetadata(fm);
-                        for (const commandName of commandNames) {
-                            const isAlias = commandName !== canonicalName;
-                            const metadata = {
-                                name: commandName,
-                                description,
-                                argumentHint,
-                                model,
-                                agent,
-                                pipeline: isAlias ? undefined : pipeline,
-                                aliases: isAlias ? undefined : aliases,
-                                aliasOf: isAlias ? canonicalName : undefined,
-                                deprecatedAlias: isAlias || undefined,
-                                deprecationMessage: isAlias
-                                    ? `Alias "/${commandName}" is deprecated. Use "/${canonicalName}" instead.`
-                                    : undefined,
-                            };
-                            skillCommands.push({
-                                name: commandName,
-                                path: skillPath,
-                                metadata,
-                                content: body,
-                                scope: 'skill',
-                            });
-                        }
-                    }
-                    catch {
-                        continue;
-                    }
-                }
-            }
-        }
-        catch {
-            // Ignore errors reading skills directory
-        }
-    }
-    // Priority: project > user > skills
-    const prioritized = [...projectCommands, ...userCommands, ...skillCommands];
+    const projectOmcSkills = discoverSkillsFromDir(projectOmcSkillsDir);
+    const projectAgentSkills = discoverSkillsFromDir(projectAgentSkillsDir);
+    const userSkills = discoverSkillsFromDir(userSkillsDir);
+    const builtinSkills = discoverSkillsFromDir(getSkillsDir());
+    // Priority: project commands > user commands > project OMC skills > project compatibility skills > user skills > builtin skills
+    const prioritized = [
+        ...projectCommands,
+        ...userCommands,
+        ...projectOmcSkills,
+        ...projectAgentSkills,
+        ...userSkills,
+        ...builtinSkills,
+    ];
     const seen = new Set();
     return prioritized.filter((command) => {
         const key = command.name.toLowerCase();
@@ -181,17 +200,52 @@ export function findCommand(commandName) {
 function resolveArguments(content, args) {
     return content.replace(/\$ARGUMENTS/g, args || '(no arguments provided)');
 }
+function hasInvocationFlag(args, flag) {
+    const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|\\s)${escaped}(?=\\s|$)`).test(args);
+}
+function stripInvocationFlag(args, flag) {
+    const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return args
+        .replace(new RegExp(`(^|\\s)${escaped}(?=\\s|$)`, 'g'), ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+function renderDeepInterviewAutoresearchGuidance(args) {
+    const missionSeed = stripInvocationFlag(args, '--autoresearch');
+    const lines = [
+        '## Autoresearch Setup Mode',
+        `This deep-interview invocation was launched as the zero-learning-curve setup lane for \`${formatOmcCliInvocation('autoresearch')}\`.`,
+        '',
+        'Required behavior in this mode:',
+        '- If the mission is not already clear, start by asking: "What should autoresearch improve or prove for this repo?"',
+        '- Treat evaluator clarity as a required readiness gate before launch.',
+        '- When the mission and evaluator are ready, launch direct execution with:',
+        `  \`${formatOmcCliInvocation('autoresearch --mission "<mission>" --eval "<evaluator>" [--keep-policy <policy>] [--slug <slug>]')}\``,
+        '- Do **not** hand off to `omc-plan`, `autopilot`, `ralph`, or `team` in this mode.',
+    ];
+    if (missionSeed) {
+        lines.push('', `Mission seed from invocation: \`${missionSeed}\``);
+    }
+    return lines.join('\n');
+}
 /**
  * Format command template with metadata header
  */
 function formatCommandTemplate(cmd, args) {
     const sections = [];
+    const isDeepInterviewAutoresearch = cmd.scope === 'skill'
+        && cmd.metadata.name.toLowerCase() === 'deep-interview'
+        && hasInvocationFlag(args, '--autoresearch');
+    const displayArgs = isDeepInterviewAutoresearch
+        ? stripInvocationFlag(args, '--autoresearch')
+        : args;
     sections.push(`<command-name>/${cmd.name}</command-name>\n`);
     if (cmd.metadata.description) {
         sections.push(`**Description**: ${cmd.metadata.description}\n`);
     }
-    if (args) {
-        sections.push(`**Arguments**: ${args}\n`);
+    if (displayArgs) {
+        sections.push(`**Arguments**: ${displayArgs}\n`);
     }
     if (cmd.metadata.model) {
         sections.push(`**Model**: ${cmd.metadata.model}\n`);
@@ -205,21 +259,27 @@ function formatCommandTemplate(cmd, args) {
     }
     sections.push('---\n');
     // Resolve arguments in content, then execute any live-data commands
-    const resolvedContent = resolveArguments(cmd.content || '', args);
-    const injectedContent = resolveLiveData(resolvedContent);
-    const runtimeGuidance = cmd.scope === 'skill'
+    const resolvedContent = resolveArguments(cmd.content || '', displayArgs);
+    const injectedContent = rewriteOmcCliInvocations(resolveLiveData(resolvedContent));
+    const runtimeGuidance = cmd.scope === 'skill' && !isDeepInterviewAutoresearch
         ? renderSkillRuntimeGuidance(cmd.metadata.name)
         : '';
-    const pipelineGuidance = cmd.scope === 'skill'
+    const pipelineGuidance = cmd.scope === 'skill' && !isDeepInterviewAutoresearch
         ? renderSkillPipelineGuidance(cmd.metadata.name, cmd.metadata.pipeline)
         : '';
-    sections.push([injectedContent.trim(), runtimeGuidance, pipelineGuidance]
+    const resourceGuidance = cmd.scope === 'skill' && cmd.path
+        ? renderSkillResourcesGuidance(cmd.path)
+        : '';
+    const invocationGuidance = isDeepInterviewAutoresearch
+        ? renderDeepInterviewAutoresearchGuidance(args)
+        : '';
+    sections.push([injectedContent.trim(), invocationGuidance, runtimeGuidance, pipelineGuidance, resourceGuidance]
         .filter((section) => section.trim().length > 0)
         .join('\n\n'));
-    if (args && !cmd.content?.includes('$ARGUMENTS')) {
+    if (displayArgs && !cmd.content?.includes('$ARGUMENTS')) {
         sections.push('\n\n---\n');
         sections.push('## User Request\n');
-        sections.push(args);
+        sections.push(displayArgs);
     }
     return sections.join('\n');
 }

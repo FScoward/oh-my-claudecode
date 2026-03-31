@@ -1,3 +1,5 @@
+export type TeamMultiplexerContext = 'tmux' | 'cmux' | 'none';
+export declare function detectTeamMultiplexerContext(env?: NodeJS.ProcessEnv): TeamMultiplexerContext;
 /**
  * True when running on Windows under MSYS2/Git Bash.
  * Tmux panes run bash in this environment, not cmd.exe.
@@ -73,11 +75,15 @@ export declare function spawnBridgeInSession(tmuxSession: string, bridgeScriptPa
 /**
  * Create a tmux team topology for a team leader/worker layout.
  *
- * Must be run inside an existing tmux session ($TMUX must be set).
- * By default, creates splits in the CURRENT window so panes appear immediately
- * in the user's view. When options.newWindow is true, creates a detached
- * dedicated tmux window first and then splits worker panes there.
- * Returns sessionName in "session:window" form.
+ * When running inside a classic tmux session, creates splits in the CURRENT
+ * window so panes appear immediately in the user's view. When options.newWindow
+ * is true, creates a detached dedicated tmux window first and then splits worker
+ * panes there.
+ *
+ * When running inside cmux (CMUX_SURFACE_ID without TMUX) or a plain terminal,
+ * falls back to a detached tmux session because the current surface cannot be
+ * targeted as a normal tmux pane/window. Returns sessionName in "session:window"
+ * form.
  *
  * Layout: leader pane on the left, worker panes stacked vertically on the right.
  * IMPORTANT: Uses pane IDs (%N format) not pane indices for stable targeting.
@@ -135,6 +141,7 @@ export declare function killWorkerPanes(opts: {
     cwd: string;
     graceMs?: number;
 }): Promise<void>;
+export declare function resolveSplitPaneWorkerPaneIds(sessionName: string, recordedPaneIds?: string[], leaderPaneId?: string): Promise<string[]>;
 /**
  * Kill the team tmux session or just the worker panes, depending on how the
  * team was created.

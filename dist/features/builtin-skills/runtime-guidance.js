@@ -24,10 +24,10 @@ function renderDeepInterviewRuntimeGuidance(availability) {
         'If Codex becomes unavailable, briefly note that and fall back to the Claude-only recommendations already listed in Phase 5.',
     ].join('\n');
 }
-export function renderSkillRuntimeGuidance(skillName, availability = detectSkillRuntimeAvailability()) {
+export function renderSkillRuntimeGuidance(skillName, availability) {
     switch (normalizeSkillName(skillName)) {
         case 'deep-interview':
-            return renderDeepInterviewRuntimeGuidance(availability);
+            return renderDeepInterviewRuntimeGuidance(availability ?? detectSkillRuntimeAvailability());
         default:
             return '';
     }

@@ -207,7 +207,7 @@ describe("reply-listener", () => {
         });
         it("detects stale PID file", () => {
             const pid = 99999; // Non-existent process
-            // isProcessRunning would return false
+            // isProcessAlive would return false
             let isRunning = false;
             try {
                 process.kill(pid, 0);

@@ -2,31 +2,34 @@ import { execFileSync, spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { loadAutoresearchMissionContract, slugifyMissionName, } from '../autoresearch/contracts.js';
 import { assertModeStartAllowed, buildAutoresearchRunTag, countTrailingAutoresearchNoops, finalizeAutoresearchRunState, loadAutoresearchRunManifest, materializeAutoresearchMissionToWorktree, prepareAutoresearchRuntime, processAutoresearchCandidate, resumeAutoresearchRuntime, } from '../autoresearch/runtime.js';
-import { guidedAutoresearchSetup, initAutoresearchMission, parseInitArgs, spawnAutoresearchTmux } from './autoresearch-guided.js';
+import { guidedAutoresearchSetup, initAutoresearchMission, parseInitArgs, spawnAutoresearchSetupTmux, spawnAutoresearchTmux, } from './autoresearch-guided.js';
 const CLAUDE_BYPASS_FLAG = '--dangerously-skip-permissions';
 export const AUTORESEARCH_HELP = `omc autoresearch - Launch OMC autoresearch with thin-supervisor parity semantics
 
 Usage:
-  omc autoresearch                                                (launch interactive intake, then background launch)
+  omc autoresearch                                                (detached Claude deep-interview setup session)
   omc autoresearch [--topic T] [--evaluator CMD] [--keep-policy P] [--slug S]
-  omc autoresearch init [--topic T] [--evaluator CMD] [--keep-policy P] [--slug S]
-  omc autoresearch --mission TEXT --sandbox CMD [--keep-policy P] [--slug S]
+  omc autoresearch --mission TEXT --eval CMD [--keep-policy P] [--slug S]
+  omc autoresearch init [--topic T] [--eval CMD] [--keep-policy P] [--slug S]
   omc autoresearch <mission-dir> [claude-args...]
   omc autoresearch --resume <run-id> [claude-args...]
 
 Arguments:
-  (no args)        Launch interactive intake that refines the mission/evaluator, writes .omc/specs
-                   artifacts, and launches only after explicit confirmation.
-  --topic/...      Seed the intake with draft values; still requires refinement/confirmation before launch.
-  init             Bare init is an interactive alias on TTYs; init with flags is the expert scaffold path.
-  --mission/       Expert bypass path. --mission is raw mission text and --sandbox is the raw
-  --sandbox        evaluator/sandbox command. Both flags are required together; --keep-policy and
-                   --slug remain optional only when both are present.
+  (no args)        Launches a detached Claude session and starts /deep-interview --autoresearch.
+                   That interview lane should clarify the mission/evaluator, then launch direct
+                   execution via omc autoresearch --mission ... --eval ... from inside Claude.
+  --topic/...      Seed the legacy guided intake with draft values; still requires
+                   refinement/confirmation before launch.
+  --mission/       Explicit bypass path. --mission is raw mission text and --eval is the raw
+  --eval           evaluator command. --sandbox remains accepted as a backward-compatible alias.
+                   Both flags are required together; --keep-policy and --slug remain optional.
+  init             Non-interactive mission scaffolding via flags (--topic, --eval, --slug;
+                   optional --keep-policy).
   <mission-dir>    Directory inside a git repository containing mission.md and sandbox.md
   <run-id>         Existing autoresearch run id from .omc/logs/autoresearch/<run-id>/manifest.json
 
 Behavior:
-  - intake writes canonical artifacts under .omc/specs before launch
+  - guided intake writes canonical artifacts under .omc/specs before launch when using --topic/--evaluator flow
   - validates mission.md and sandbox.md
   - requires sandbox.md YAML frontmatter with evaluator.command and evaluator.format=json
   - fresh launch creates a run-tagged autoresearch/<slug>/<run-tag> lane
@@ -84,6 +87,8 @@ function parseAutoresearchBypassArgs(args) {
     let slug;
     const hasBypassFlag = args.some((arg) => arg === '--mission'
         || arg.startsWith('--mission=')
+        || arg === '--eval'
+        || arg.startsWith('--eval=')
         || arg === '--sandbox'
         || arg.startsWith('--sandbox='));
     if (!hasBypassFlag) {
@@ -103,15 +108,19 @@ function parseAutoresearchBypassArgs(args) {
             missionText = arg.slice('--mission='.length);
             continue;
         }
-        if (arg === '--sandbox') {
+        if (arg === '--sandbox' || arg === '--eval' || arg === '--evaluator') {
             if (!next)
-                throw new Error('--sandbox requires a value.');
+                throw new Error(`${arg} requires a value.`);
             sandboxCommand = next;
             i++;
             continue;
         }
-        if (arg.startsWith('--sandbox=')) {
-            sandboxCommand = arg.slice('--sandbox='.length);
+        if (arg.startsWith('--sandbox=') || arg.startsWith('--eval=') || arg.startsWith('--evaluator=')) {
+            sandboxCommand = arg.startsWith('--sandbox=')
+                ? arg.slice('--sandbox='.length)
+                : arg.startsWith('--eval=')
+                    ? arg.slice('--eval='.length)
+                    : arg.slice('--evaluator='.length);
             continue;
         }
         if (arg === '--keep-policy') {
@@ -138,20 +147,20 @@ function parseAutoresearchBypassArgs(args) {
         }
         if (arg.startsWith('-')) {
             throw new Error(`Unknown autoresearch flag: ${arg.split('=')[0]}.\n`
-                + 'Use --mission plus --sandbox to bypass the intake, seed with --topic/--evaluator/--slug, or provide a mission-dir.\n\n'
+                + 'Use --mission plus --eval/--sandbox to bypass the interview, seed with --topic/--evaluator/--slug, or provide a mission-dir.\n\n'
                 + `${AUTORESEARCH_HELP}`);
         }
-        throw new Error(`Positional arguments are not supported with --mission/--sandbox bypass mode: ${arg}.\n\n${AUTORESEARCH_HELP}`);
+        throw new Error(`Positional arguments are not supported with --mission/--eval bypass mode: ${arg}.\n\n${AUTORESEARCH_HELP}`);
     }
     const hasMission = typeof missionText === 'string' && missionText.trim().length > 0;
     const hasSandbox = typeof sandboxCommand === 'string' && sandboxCommand.trim().length > 0;
     if (hasMission !== hasSandbox) {
-        throw new Error('Both --mission and --sandbox are required together to bypass the intake. '
-            + 'Provide both flags, or neither to use interactive intake.\n\n'
+        throw new Error('Both --mission and --eval/--sandbox are required together to bypass the interview. '
+            + 'Provide both flags, or neither to use interactive setup.\n\n'
             + `${AUTORESEARCH_HELP}`);
     }
     if (!hasMission || !hasSandbox) {
-        throw new Error('Use --mission plus --sandbox together to bypass the intake. '
+        throw new Error('Use --mission plus --eval/--sandbox together to bypass the interview. '
             + '--keep-policy and --slug are optional only when both are present.\n\n'
             + `${AUTORESEARCH_HELP}`);
     }
@@ -260,6 +269,11 @@ export async function autoresearchCommand(args) {
         console.log(AUTORESEARCH_HELP);
         return;
     }
+    if (parsed.guided && !parsed.missionText && !(parsed.initArgs && parsed.initArgs.length > 0) && !parsed.seedArgs) {
+        const repoRoot = resolveRepoRoot(process.cwd());
+        spawnAutoresearchSetupTmux(repoRoot);
+        return;
+    }
     if (parsed.guided || parsed.missionText) {
         const repoRoot = resolveRepoRoot(process.cwd());
         let result;
@@ -275,7 +289,7 @@ export async function autoresearchCommand(args) {
         else if (parsed.initArgs && parsed.initArgs.length > 0) {
             const initOpts = parseInitArgs(parsed.initArgs);
             if (!initOpts.topic || !initOpts.evaluatorCommand || !initOpts.slug) {
-                throw new Error('init requires --topic, --evaluator, and --slug flags.\n'
+                throw new Error('init requires --topic, --eval/--evaluator, and --slug flags.\n'
                     + 'Optional: --keep-policy\n\n'
                     + `${AUTORESEARCH_HELP}`);
             }

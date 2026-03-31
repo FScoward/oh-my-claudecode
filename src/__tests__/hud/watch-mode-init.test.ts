@@ -37,6 +37,9 @@ const fakeConfig = {
 describe('HUD watch mode initialization', () => {
   const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
   let initializeHUDState: ReturnType<typeof vi.fn>;
+  let readRalphStateForHud: ReturnType<typeof vi.fn>;
+  let readUltraworkStateForHud: ReturnType<typeof vi.fn>;
+  let readAutopilotStateForHud: ReturnType<typeof vi.fn>;
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
@@ -44,6 +47,9 @@ describe('HUD watch mode initialization', () => {
     vi.resetModules();
 
     initializeHUDState = vi.fn(async () => {});
+    readRalphStateForHud = vi.fn(() => null);
+    readUltraworkStateForHud = vi.fn(() => null);
+    readAutopilotStateForHud = vi.fn(() => null);
 
     vi.doMock('../../hud/stdin.js', () => ({
       readStdin: vi.fn(async () => null),
@@ -76,10 +82,10 @@ describe('HUD watch mode initialization', () => {
     }));
 
     vi.doMock('../../hud/omc-state.js', () => ({
-      readRalphStateForHud: vi.fn(() => null),
-      readUltraworkStateForHud: vi.fn(() => null),
+      readRalphStateForHud,
+      readUltraworkStateForHud,
       readPrdStateForHud: vi.fn(() => null),
-      readAutopilotStateForHud: vi.fn(() => null),
+      readAutopilotStateForHud,
     }));
 
     vi.doMock('../../hud/usage-api.js', () => ({ getUsage: vi.fn(async () => null) }));
@@ -109,6 +115,7 @@ describe('HUD watch mode initialization', () => {
   });
 
   afterEach(() => {
+    fakeStdin.transcript_path = '/tmp/worktree/transcript.jsonl';
     vi.resetModules();
     vi.clearAllMocks();
     vi.doUnmock('../../hud/stdin.js');
@@ -147,5 +154,26 @@ describe('HUD watch mode initialization', () => {
     await hud.main(true, false);
 
     expect(initializeHUDState).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes resolved cwd to initializeHUDState instead of defaulting to process.cwd()', async () => {
+    const hud = await importHudModule();
+    initializeHUDState.mockClear();
+
+    await hud.main(true, false);
+
+    // initializeHUDState must receive the resolved cwd from stdin, not undefined/process.cwd()
+    expect(initializeHUDState).toHaveBeenCalledWith('/tmp/worktree');
+  });
+
+  it('passes the current session id to OMC state readers', async () => {
+    const hud = await importHudModule();
+    fakeStdin.transcript_path = '/tmp/worktree/transcripts/123e4567-e89b-12d3-a456-426614174000.jsonl';
+
+    await hud.main(true, false);
+
+    expect(readRalphStateForHud).toHaveBeenCalledWith('/tmp/worktree', '123e4567-e89b-12d3-a456-426614174000');
+    expect(readUltraworkStateForHud).toHaveBeenCalledWith('/tmp/worktree', '123e4567-e89b-12d3-a456-426614174000');
+    expect(readAutopilotStateForHud).toHaveBeenCalledWith('/tmp/worktree', '123e4567-e89b-12d3-a456-426614174000');
   });
 });

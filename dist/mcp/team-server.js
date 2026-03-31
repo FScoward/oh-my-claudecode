@@ -8,15 +8,18 @@ import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextpro
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { fileURLToPath } from 'url';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { homedir } from 'os';
 import { killWorkerPanes, killTeamSession } from '../team/tmux-session.js';
 import { validateTeamName } from '../team/team-name.js';
 import { NudgeTracker } from '../team/idle-nudge.js';
-import { clearScopedTeamState, convergeJobWithResultArtifact, isJobTerminal, isPidAlive, } from './team-job-convergence.js';
+import { clearScopedTeamState, convergeJobWithResultArtifact, isJobTerminal, } from './team-job-convergence.js';
+import { isProcessAlive } from '../platform/index.js';
+import { getGlobalOmcStatePath } from '../utils/paths.js';
 const omcTeamJobs = new Map();
-const OMC_JOBS_DIR = process.env.OMC_JOBS_DIR || join(homedir(), '.omc', 'team-jobs');
+const OMC_JOBS_DIR = process.env.OMC_JOBS_DIR || getGlobalOmcStatePath('team-jobs');
 const DEPRECATION_CODE = 'deprecated_cli_only';
 const TEAM_CLI_REPLACEMENT_HINTS = {
     omc_run_team_start: 'omc team start',
@@ -265,7 +268,7 @@ export async function handleStatus(args) {
     if (isJobTerminal(job)) {
         return makeJobResponse(job_id, job);
     }
-    if (job.pid != null && !isPidAlive(job.pid)) {
+    if (job.pid != null && !isProcessAlive(job.pid)) {
         job = saveJobState(job_id, {
             ...job,
             status: 'failed',
@@ -310,7 +313,7 @@ export async function handleWait(args) {
             }
             return out;
         }
-        if (job.pid != null && !isPidAlive(job.pid)) {
+        if (job.pid != null && !isProcessAlive(job.pid)) {
             job = saveJobState(job_id, {
                 ...job,
                 status: 'failed',
@@ -448,9 +451,10 @@ const server = new Server({ name: 'team', version: '1.0.0' }, { capabilities: { 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    if (isDeprecatedTeamToolName(name)) {
-        return createDeprecatedCliOnlyEnvelopeWithArgs(name, args);
-    }
+    // Dispatch live handlers first. The deprecation guard below currently overlaps
+    // with these same tool names but is kept as a safety net for future tool
+    // renames — if a tool name is removed from this dispatch block, the
+    // deprecation guard will catch stale callers and return a migration hint.
     try {
         if (name === 'omc_run_team_start')
             return await handleStart(args ?? {});
@@ -460,11 +464,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return await handleWait(args ?? {});
         if (name === 'omc_run_team_cleanup')
             return await handleCleanup(args ?? {});
-        return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
     catch (error) {
         return { content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }
+    if (isDeprecatedTeamToolName(name)) {
+        return createDeprecatedCliOnlyEnvelopeWithArgs(name, args);
+    }
+    return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
 });
 async function main() {
     const transport = new StdioServerTransport();

@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync } from 'fs';
 import { getClaudeConfigDir } from '../utils/paths.js';
 import { join, dirname } from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { userInfo } from 'os';
 import https from 'https';
@@ -134,7 +134,7 @@ function getUsagePollIntervalMs() {
 }
 function getRateLimitedBackoffMs(pollIntervalMs, count) {
     const normalizedPollIntervalMs = sanitizePollIntervalMs(pollIntervalMs);
-    return Math.min(normalizedPollIntervalMs * Math.pow(2, Math.max(0, count - 1)), Math.max(MAX_RATE_LIMITED_BACKOFF_MS, normalizedPollIntervalMs));
+    return Math.min(normalizedPollIntervalMs * Math.pow(2, Math.max(0, count - 1)), MAX_RATE_LIMITED_BACKOFF_MS);
 }
 function getTransientNetworkBackoffMs(pollIntervalMs) {
     return Math.max(CACHE_TTL_TRANSIENT_NETWORK_MS, sanitizePollIntervalMs(pollIntervalMs));
@@ -211,8 +211,14 @@ function isCredentialExpired(creds) {
 }
 function readKeychainCredential(serviceName, account) {
     try {
-        const accountArg = account ? ` -a "${account}"` : '';
-        const result = execSync(`/usr/bin/security find-generic-password -s "${serviceName}"${accountArg} -w 2>/dev/null`, { encoding: 'utf-8', timeout: 2000 }).trim();
+        const args = account
+            ? ['find-generic-password', '-s', serviceName, '-a', account, '-w']
+            : ['find-generic-password', '-s', serviceName, '-w'];
+        const result = execFileSync('/usr/bin/security', args, {
+            encoding: 'utf-8',
+            timeout: 2000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
         if (!result)
             return null;
         const parsed = JSON.parse(result);

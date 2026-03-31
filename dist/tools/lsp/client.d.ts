@@ -4,9 +4,11 @@
  * Manages connections to language servers using JSON-RPC 2.0 over stdio.
  * Handles server lifecycle, message buffering, and request/response matching.
  */
+import type { DevContainerContext } from './devcontainer.js';
 import type { LspServerConfig } from './servers.js';
 /** Default timeout (ms) for LSP requests. Override with OMC_LSP_TIMEOUT_MS env var. */
 export declare const DEFAULT_LSP_REQUEST_TIMEOUT_MS: number;
+export declare function getLspRequestTimeout(serverConfig: Pick<LspServerConfig, 'initializeTimeoutMs'>, method: string, baseTimeout?: number): number;
 export interface Position {
     line: number;
     character: number;
@@ -95,8 +97,9 @@ export declare class LspClient {
     private diagnosticWaiters;
     private workspaceRoot;
     private serverConfig;
+    private devContainerContext;
     private initialized;
-    constructor(workspaceRoot: string, serverConfig: LspServerConfig);
+    constructor(workspaceRoot: string, serverConfig: LspServerConfig, devContainerContext?: DevContainerContext | null);
     /**
      * Start the LSP server and initialize the connection
      */
@@ -198,6 +201,12 @@ export declare class LspClient {
      * Get code actions
      */
     codeActions(filePath: string, range: Range, diagnostics?: Diagnostic[]): Promise<CodeAction[] | null>;
+    private getServerWorkspaceRoot;
+    private getWorkspaceRootUri;
+    private toServerUri;
+    private toHostUri;
+    private translateIncomingPayload;
+    private translateIncomingValue;
 }
 /** Idle timeout: disconnect LSP clients unused for 5 minutes */
 export declare const IDLE_TIMEOUT_MS: number;
@@ -207,10 +216,11 @@ export declare const IDLE_CHECK_INTERVAL_MS: number;
  * Client manager - maintains a pool of LSP clients per workspace/server
  * with idle eviction to free resources and in-flight request protection.
  */
-declare class LspClientManager {
+export declare class LspClientManager {
     private clients;
     private lastUsed;
     private inFlightCount;
+    private idleDeadlines;
     private idleTimer;
     constructor();
     /**
@@ -229,6 +239,9 @@ declare class LspClientManager {
      * The lastUsed timestamp is refreshed on both entry and exit.
      */
     runWithClientLease<T>(filePath: string, fn: (client: LspClient) => Promise<T>): Promise<T>;
+    private touchClient;
+    private scheduleIdleDeadline;
+    private clearIdleDeadline;
     /**
      * Find the workspace root for a file
      */
@@ -242,6 +255,7 @@ declare class LspClientManager {
      * Clients with in-flight requests are never evicted.
      */
     private evictIdleClients;
+    private evictClientIfIdle;
     /**
      * Disconnect all clients and stop idle checking.
      * Uses Promise.allSettled so one failing disconnect doesn't block others.
@@ -261,5 +275,4 @@ export declare const lspClientManager: LspClientManager;
  * Exported for use in session-end hooks.
  */
 export declare function disconnectAll(): Promise<void>;
-export {};
 //# sourceMappingURL=client.d.ts.map

@@ -8,6 +8,7 @@ export interface UnifiedMcpRegistryEntry {
 export type UnifiedMcpRegistry = Record<string, UnifiedMcpRegistryEntry>;
 export interface UnifiedMcpRegistrySyncResult {
     registryPath: string;
+    claudeConfigPath: string;
     codexConfigPath: string;
     registryExists: boolean;
     bootstrappedFromClaude: boolean;
@@ -17,6 +18,7 @@ export interface UnifiedMcpRegistrySyncResult {
 }
 export interface UnifiedMcpRegistryStatus {
     registryPath: string;
+    claudeConfigPath: string;
     codexConfigPath: string;
     registryExists: boolean;
     serverNames: string[];
@@ -26,9 +28,10 @@ export interface UnifiedMcpRegistryStatus {
     codexMismatched: string[];
 }
 export declare function getUnifiedMcpRegistryPath(): string;
+export declare function getClaudeMcpConfigPath(): string;
 export declare function getCodexConfigPath(): string;
 export declare function extractClaudeMcpRegistry(settings: Record<string, unknown>): UnifiedMcpRegistry;
-export declare function applyRegistryToClaudeSettings(settings: Record<string, unknown>, registry: UnifiedMcpRegistry, managedServerNames?: string[]): {
+export declare function applyRegistryToClaudeSettings(settings: Record<string, unknown>): {
     settings: Record<string, unknown>;
     changed: boolean;
 };

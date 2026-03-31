@@ -13,6 +13,7 @@ import { appendTeamEvent } from './events.js';
 import { deriveTeamLeaderGuidance } from './leader-nudge-guidance.js';
 import { waitForSentinelReadiness } from './sentinel-gate.js';
 import { isRuntimeV2Enabled, startTeamV2, monitorTeamV2, shutdownTeamV2 } from './runtime-v2.js';
+import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
 export function getTerminalStatus(taskCounts, expectedTaskCount) {
     const active = taskCounts.pending + taskCounts.inProgress;
     const terminal = taskCounts.completed + taskCounts.failed;
@@ -111,6 +112,7 @@ function collectTaskResults(stateRoot) {
 }
 async function main() {
     const startTime = Date.now();
+    const logLeaderNudgeEventFailure = createSwallowedErrorLogger('team.runtime-cli main appendTeamEvent failed');
     // Read stdin
     const chunks = [];
     for await (const chunk of process.stdin) {
@@ -306,7 +308,7 @@ async function main() {
                     reason: leaderGuidance.reason,
                     next_action: leaderGuidance.nextAction,
                     message: leaderGuidance.message,
-                }, cwd).catch(() => { });
+                }, cwd).catch(logLeaderNudgeEventFailure);
                 lastLeaderNudgeReason = leaderGuidance.reason;
             }
             // Terminal check via task counts

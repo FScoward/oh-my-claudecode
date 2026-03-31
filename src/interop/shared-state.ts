@@ -11,6 +11,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from 'fs';
 import { z } from 'zod';
 import { atomicWriteJsonSync } from '../lib/atomic-write.js';
+import { withFileLockSync } from '../lib/file-lock.js';
 
 export interface InteropConfig {
   sessionId: string;
@@ -146,7 +147,7 @@ export function addSharedTask(
 
   const fullTask: SharedTask = {
     ...task,
-    id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    id: `task-${Date.now()}-${crypto.randomUUID().replace(/-/g, '').slice(0, 9)}`,
     createdAt: new Date().toISOString(),
     status: 'pending',
   };
@@ -220,27 +221,29 @@ export function updateSharedTask(
   }
 
   try {
-    const content = readFileSync(taskPath, 'utf-8');
-    const parsed = SharedTaskSchema.safeParse(JSON.parse(content));
-    if (!parsed.success) return null;
-    const task = parsed.data;
+    return withFileLockSync(taskPath + '.lock', () => {
+      const content = readFileSync(taskPath, 'utf-8');
+      const parsed = SharedTaskSchema.safeParse(JSON.parse(content));
+      if (!parsed.success) return null;
+      const task = parsed.data;
 
-    const updatedTask: SharedTask = {
-      ...task,
-      ...updates,
-    };
+      const updatedTask: SharedTask = {
+        ...task,
+        ...updates,
+      };
 
-    // Set completedAt if status changed to completed/failed
-    if (
-      (updates.status === 'completed' || updates.status === 'failed') &&
-      !updatedTask.completedAt
-    ) {
-      updatedTask.completedAt = new Date().toISOString();
-    }
+      // Set completedAt if status changed to completed/failed
+      if (
+        (updates.status === 'completed' || updates.status === 'failed') &&
+        !updatedTask.completedAt
+      ) {
+        updatedTask.completedAt = new Date().toISOString();
+      }
 
-    atomicWriteJsonSync(taskPath, updatedTask);
+      atomicWriteJsonSync(taskPath, updatedTask);
 
-    return updatedTask;
+      return updatedTask;
+    });
   } catch {
     return null;
   }
@@ -257,7 +260,7 @@ export function addSharedMessage(
 
   const fullMessage: SharedMessage = {
     ...message,
-    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    id: `msg-${Date.now()}-${crypto.randomUUID().replace(/-/g, '').slice(0, 9)}`,
     timestamp: new Date().toISOString(),
     read: false,
   };

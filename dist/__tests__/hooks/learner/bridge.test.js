@@ -8,7 +8,7 @@
  * - Session cache persistence
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync, } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { findSkillFiles, parseSkillFile, matchSkillsForInjection, getInjectedSkillPaths, markSkillsInjected, clearSkillMetadataCache, } from "../../../hooks/learner/bridge.js";
@@ -40,6 +40,16 @@ describe("Skill Bridge Module", () => {
             expect(projectFiles[0].scope).toBe("project");
             expect(projectFiles[0].path).toContain("test-skill.md");
         });
+        it("should discover compatibility skills in project .agents/skills/", () => {
+            const skillsDir = join(testProjectRoot, ".agents", "skills");
+            mkdirSync(skillsDir, { recursive: true });
+            writeFileSync(join(skillsDir, "compat-skill.md"), "---\nname: Compat Skill\ntriggers:\n  - compat\n---\nContent");
+            const files = findSkillFiles(testProjectRoot);
+            const projectFiles = files.filter((f) => f.scope === "project");
+            expect(projectFiles).toHaveLength(1);
+            expect(projectFiles[0].sourceDir).toContain(join(".agents", "skills"));
+            expect(projectFiles[0].path).toContain("compat-skill.md");
+        });
         it("should discover skills recursively in subdirectories", () => {
             const skillsDir = join(testProjectRoot, ".omc", "skills");
             const subDir = join(skillsDir, "subdir", "nested");
@@ -65,6 +75,22 @@ describe("Skill Bridge Module", () => {
             const projectFiles = files.filter((f) => f.scope === "project");
             expect(projectFiles).toHaveLength(1);
             expect(projectFiles[0].path).toContain("valid.md");
+        });
+        it("should treat symlinked project roots as within boundary", () => {
+            const skillsDir = join(testProjectRoot, ".omc", "skills");
+            mkdirSync(skillsDir, { recursive: true });
+            writeFileSync(join(skillsDir, "linked-skill.md"), "---\nname: Linked Skill\ntriggers:\n  - linked\n---\nContent");
+            const linkedProjectRoot = join(tmpdir(), `omc-bridge-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+            try {
+                symlinkSync(testProjectRoot, linkedProjectRoot, "dir");
+                const files = findSkillFiles(linkedProjectRoot);
+                const projectFiles = files.filter((f) => f.scope === "project");
+                expect(projectFiles).toHaveLength(1);
+                expect(projectFiles[0].path).toContain("linked-skill.md");
+            }
+            finally {
+                rmSync(linkedProjectRoot, { recursive: true, force: true });
+            }
         });
     });
     describe("parseSkillFile", () => {

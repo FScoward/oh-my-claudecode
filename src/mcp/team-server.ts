@@ -12,9 +12,10 @@ import {
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { fileURLToPath } from 'url';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { homedir } from 'os';
 import { killWorkerPanes, killTeamSession } from '../team/tmux-session.js';
 import { validateTeamName } from '../team/team-name.js';
 import { NudgeTracker } from '../team/idle-nudge.js';
@@ -22,12 +23,13 @@ import {
   clearScopedTeamState,
   convergeJobWithResultArtifact,
   isJobTerminal,
-  isPidAlive,
 } from './team-job-convergence.js';
+import { isProcessAlive } from '../platform/index.js';
 import type { OmcTeamJob } from './team-job-convergence.js';
+import { getGlobalOmcStatePath } from '../utils/paths.js';
 
 const omcTeamJobs = new Map<string, OmcTeamJob>();
-const OMC_JOBS_DIR = process.env.OMC_JOBS_DIR || join(homedir(), '.omc', 'team-jobs');
+const OMC_JOBS_DIR = process.env.OMC_JOBS_DIR || getGlobalOmcStatePath('team-jobs');
 const DEPRECATION_CODE = 'deprecated_cli_only' as const;
 
 type DeprecatedTeamToolName =
@@ -176,8 +178,8 @@ async function loadPaneIds(jobId: string): Promise<{ paneIds: string[]; leaderPa
 }
 
 function validateJobId(job_id: string): void {
-  if (!/^omc-[a-z0-9]{1,12}$/.test(job_id)) {
-    throw new Error(`Invalid job_id: "${job_id}". Must match /^omc-[a-z0-9]{1,12}$/`);
+  if (!/^omc-[a-z0-9]{1,16}$/.test(job_id)) {
+    throw new Error(`Invalid job_id: "${job_id}". Must match /^omc-[a-z0-9]{1,16}$/`);
   }
 }
 
@@ -311,7 +313,7 @@ export async function handleStatus(args: unknown): Promise<{ content: Array<{ ty
     return makeJobResponse(job_id, job);
   }
 
-  if (job.pid != null && !isPidAlive(job.pid)) {
+  if (job.pid != null && !isProcessAlive(job.pid)) {
     job = saveJobState(job_id, {
       ...job,
       status: 'failed',
@@ -364,7 +366,7 @@ export async function handleWait(args: unknown): Promise<{ content: Array<{ type
       return out;
     }
 
-    if (job.pid != null && !isPidAlive(job.pid)) {
+    if (job.pid != null && !isProcessAlive(job.pid)) {
       job = saveJobState(job_id, {
         ...job,
         status: 'failed',
@@ -522,19 +524,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
-  if (isDeprecatedTeamToolName(name)) {
-    return createDeprecatedCliOnlyEnvelopeWithArgs(name, args);
-  }
 
+  // Dispatch live handlers first. The deprecation guard below currently overlaps
+  // with these same tool names but is kept as a safety net for future tool
+  // renames — if a tool name is removed from this dispatch block, the
+  // deprecation guard will catch stale callers and return a migration hint.
   try {
     if (name === 'omc_run_team_start') return await handleStart(args ?? {});
     if (name === 'omc_run_team_status') return await handleStatus(args ?? {});
     if (name === 'omc_run_team_wait') return await handleWait(args ?? {});
     if (name === 'omc_run_team_cleanup') return await handleCleanup(args ?? {});
-    return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
   } catch (error) {
     return { content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
   }
+
+  if (isDeprecatedTeamToolName(name)) {
+    return createDeprecatedCliOnlyEnvelopeWithArgs(name, args);
+  }
+
+  return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
 });
 
 async function main() {

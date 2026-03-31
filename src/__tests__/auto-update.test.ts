@@ -20,6 +20,7 @@ vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
   return {
     ...actual,
+    cpSync: vi.fn(),
     existsSync: vi.fn(),
     mkdirSync: vi.fn(),
     readFileSync: vi.fn(),
@@ -28,7 +29,7 @@ vi.mock('fs', async () => {
 });
 
 import { execSync, execFileSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { install, isProjectScopedPlugin, checkNodeVersion } from '../installer/index.js';
@@ -36,10 +37,13 @@ import * as hooksModule from '../installer/hooks.js';
 import {
   reconcileUpdateRuntime,
   performUpdate,
+  shouldBlockStandaloneUpdateInCurrentSession,
+  syncPluginCache,
 } from '../features/auto-update.js';
 
 const mockedExecSync = vi.mocked(execSync);
 const mockedExecFileSync = vi.mocked(execFileSync);
+const mockedCpSync = vi.mocked(cpSync);
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedMkdirSync = vi.mocked(mkdirSync);
 const mockedReadFileSync = vi.mocked(readFileSync);
@@ -59,6 +63,7 @@ function mockPlatform(platform: NodeJS.Platform): void {
 describe('auto-update reconciliation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedCpSync.mockImplementation(() => undefined);
     mockedExistsSync.mockReturnValue(true);
     mockedIsProjectScopedPlugin.mockReturnValue(false);
     mockedReadFileSync.mockImplementation((path: Parameters<typeof readFileSync>[0]) => {
@@ -148,6 +153,336 @@ describe('auto-update reconciliation', () => {
       forceHooks: true,
       refreshHooksInPlugin: true,
     });
+  });
+
+  it('syncs active plugin cache roots and logs when copy occurs', () => {
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const activeRoot = '/tmp/.claude/plugins/cache/omc/oh-my-claudecode/4.1.5';
+
+    mockedReadFileSync.mockImplementation((path: Parameters<typeof readFileSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized.includes('.omc-version.json')) {
+        return JSON.stringify({
+          version: '4.1.5',
+          installedAt: '2026-02-09T00:00:00.000Z',
+          installMethod: 'npm',
+        });
+      }
+      if (normalized.endsWith('/plugins/installed_plugins.json')) {
+        return JSON.stringify({
+          plugins: {
+            'oh-my-claudecode': [{ installPath: activeRoot }],
+          },
+        });
+      }
+      return '';
+    });
+
+    mockedExistsSync.mockImplementation((path: Parameters<typeof existsSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized.endsWith('/plugins/installed_plugins.json')) {
+        return true;
+      }
+      if (normalized === activeRoot) {
+        return true;
+      }
+      if (normalized.includes('/node_modules/')) {
+        return false;
+      }
+      return true;
+    });
+
+    const result = reconcileUpdateRuntime({ verbose: false });
+
+    expect(result.success).toBe(true);
+    expect(mockedCpSync).toHaveBeenCalledWith(
+      expect.stringContaining('/dist'),
+      `${activeRoot}/dist`,
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(mockedCpSync).toHaveBeenCalledWith(
+      expect.stringContaining('/package.json'),
+      `${activeRoot}/package.json`,
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(mockedCpSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('/node_modules'),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(consoleLogSpy).toHaveBeenCalledWith('[omc update] Synced plugin cache');
+  });
+
+  it('skips plugin cache sync silently when no active plugin roots exist', () => {
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockedExistsSync.mockImplementation((path: Parameters<typeof existsSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized.endsWith('/plugins/installed_plugins.json')) {
+        return false;
+      }
+      return true;
+    });
+
+    const result = reconcileUpdateRuntime({ verbose: false });
+
+    expect(result.success).toBe(true);
+    expect(mockedCpSync).not.toHaveBeenCalled();
+    expect(consoleLogSpy).not.toHaveBeenCalledWith('[omc update] Synced plugin cache');
+  });
+
+
+  it('syncs the plugin cache directory when cache root exists', () => {
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    const versionedCacheRoot = `${cacheRoot}/4.9.0`;
+
+    mockedExecSync.mockImplementation((command: string) => {
+      if (command === 'npm root -g') {
+        return '/usr/lib/node_modules\n';
+      }
+      return '';
+    });
+
+    mockedReadFileSync.mockImplementation((path: Parameters<typeof readFileSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized === '/usr/lib/node_modules/oh-my-claude-sisyphus/package.json') {
+        return JSON.stringify({ version: '4.9.0' });
+      }
+      if (normalized.includes('.omc-version.json')) {
+        return JSON.stringify({
+          version: '4.1.5',
+          installedAt: '2026-02-09T00:00:00.000Z',
+          installMethod: 'npm',
+        });
+      }
+      return '';
+    });
+
+    mockedExistsSync.mockImplementation((path: Parameters<typeof existsSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized === cacheRoot) {
+        return true;
+      }
+      if (normalized.startsWith('/usr/lib/node_modules/oh-my-claude-sisyphus/')) {
+        return normalized.endsWith('/dist') || normalized.endsWith('/package.json');
+      }
+      return true;
+    });
+
+    const result = syncPluginCache();
+
+    expect(result).toEqual({ synced: true, skipped: false, errors: [] });
+    expect(mockedExecSync).toHaveBeenCalledWith('npm root -g', expect.objectContaining({
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 10000,
+    }));
+    expect(mockedMkdirSync).toHaveBeenCalledWith(versionedCacheRoot, { recursive: true });
+    expect(mockedCpSync).toHaveBeenCalledWith(
+      '/usr/lib/node_modules/oh-my-claude-sisyphus/dist',
+      `${versionedCacheRoot}/dist`,
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(mockedCpSync).toHaveBeenCalledWith(
+      '/usr/lib/node_modules/oh-my-claude-sisyphus/package.json',
+      `${versionedCacheRoot}/package.json`,
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(consoleLogSpy).toHaveBeenCalledWith('[omc update] Plugin cache synced');
+  });
+
+  it('skips plugin cache sync gracefully when cache dir does not exist', () => {
+    const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    mockedExistsSync.mockImplementation((path: Parameters<typeof existsSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized === cacheRoot) {
+        return false;
+      }
+      return true;
+    });
+
+    const result = syncPluginCache();
+
+    expect(result).toEqual({ synced: false, skipped: true, errors: [] });
+    expect(mockedExecSync).not.toHaveBeenCalledWith('npm root -g', expect.anything());
+    expect(mockedCpSync).not.toHaveBeenCalled();
+  });
+
+  it('handles plugin cache sync errors non-fatally', () => {
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    const versionedCacheRoot = `${cacheRoot}/4.9.0`;
+
+    mockedExecSync.mockImplementation((command: string) => {
+      if (command === 'npm root -g') {
+        return '/usr/lib/node_modules\n';
+      }
+      return '';
+    });
+
+    mockedReadFileSync.mockImplementation((path: Parameters<typeof readFileSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized === '/usr/lib/node_modules/oh-my-claude-sisyphus/package.json') {
+        return JSON.stringify({ version: '4.9.0' });
+      }
+      if (normalized.includes('.omc-version.json')) {
+        return JSON.stringify({
+          version: '4.1.5',
+          installedAt: '2026-02-09T00:00:00.000Z',
+          installMethod: 'npm',
+        });
+      }
+      return '';
+    });
+
+    mockedExistsSync.mockImplementation((path: Parameters<typeof existsSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized === cacheRoot) {
+        return true;
+      }
+      if (normalized.startsWith('/usr/lib/node_modules/oh-my-claude-sisyphus/')) {
+        return normalized.endsWith('/dist');
+      }
+      return true;
+    });
+
+    mockedCpSync.mockImplementation(() => {
+      throw new Error('copy failed');
+    });
+
+    const result = syncPluginCache();
+
+    expect(result.synced).toBe(false);
+    expect(result.skipped).toBe(false);
+    expect(result.errors).toEqual([
+      `Failed to sync dist to ${versionedCacheRoot}: copy failed`,
+    ]);
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      `[omc update] Plugin cache sync warning: Failed to sync dist to ${versionedCacheRoot}: copy failed`,
+    );
+  });
+
+  it('only blocks standalone update inside an active plugin session', () => {
+    delete process.env.CLAUDE_PLUGIN_ROOT;
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDECODE_SESSION_ID;
+    expect(shouldBlockStandaloneUpdateInCurrentSession()).toBe(false);
+
+    process.env.CLAUDE_PLUGIN_ROOT = '/tmp/.claude/plugins/cache/omc/oh-my-claudecode/4.1.5';
+    expect(shouldBlockStandaloneUpdateInCurrentSession()).toBe(false);
+
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'hook';
+    expect(shouldBlockStandaloneUpdateInCurrentSession()).toBe(true);
+
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    process.env.CLAUDE_SESSION_ID = 'session-123';
+    expect(shouldBlockStandaloneUpdateInCurrentSession()).toBe(true);
+  });
+
+  it('dedupes plugin roots and ignores missing targets during sync', () => {
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const activeRoot = '/tmp/.claude/plugins/cache/omc/oh-my-claudecode/4.1.5';
+    const staleRoot = '/tmp/.claude/plugins/cache/omc/oh-my-claudecode/4.1.4';
+    process.env.CLAUDE_PLUGIN_ROOT = activeRoot;
+
+    mockedReadFileSync.mockImplementation((path: Parameters<typeof readFileSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized.includes('.omc-version.json')) {
+        return JSON.stringify({
+          version: '4.1.5',
+          installedAt: '2026-02-09T00:00:00.000Z',
+          installMethod: 'npm',
+        });
+      }
+      if (normalized.endsWith('/plugins/installed_plugins.json')) {
+        return JSON.stringify({
+          plugins: {
+            'oh-my-claudecode': [
+              { installPath: activeRoot },
+              { installPath: staleRoot },
+            ],
+          },
+        });
+      }
+      return '';
+    });
+
+    mockedExistsSync.mockImplementation((path: Parameters<typeof existsSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized.endsWith('/plugins/installed_plugins.json')) {
+        return true;
+      }
+      if (normalized === activeRoot) {
+        return true;
+      }
+      if (normalized === staleRoot) {
+        return false;
+      }
+      return true;
+    });
+
+    const result = reconcileUpdateRuntime({ verbose: false });
+
+    expect(result.success).toBe(true);
+    const targetCalls = mockedCpSync.mock.calls.filter(([, destination]) => String(destination).startsWith(activeRoot));
+    expect(targetCalls.length).toBeGreaterThan(0);
+    expect(mockedCpSync.mock.calls.some(([, destination]) => String(destination).startsWith(staleRoot))).toBe(false);
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy).toHaveBeenCalledWith('[omc update] Synced plugin cache');
+  });
+
+  it('allows standalone update when CLAUDE_PLUGIN_ROOT is inherited without an active Claude session', async () => {
+    const pluginRoot = join(homedir(), '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode', '4.1.5');
+    const cacheRoot = join(homedir(), '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    process.env.OMC_UPDATE_RECONCILE = '1';
+    process.env.CLAUDE_PLUGIN_ROOT = pluginRoot;
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDECODE_SESSION_ID;
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v4.1.5',
+        name: '4.1.5',
+        published_at: '2026-02-09T00:00:00.000Z',
+        html_url: 'https://example.com/release',
+        body: 'notes',
+        prerelease: false,
+        draft: false,
+      }),
+    }));
+
+    mockedExecSync.mockImplementation((command: string) => {
+      if (command === 'npm install -g oh-my-claude-sisyphus@latest') {
+        return '';
+      }
+      if (command === 'npm root -g') {
+        return '/usr/lib/node_modules\n';
+      }
+      return '';
+    });
+
+    mockedExistsSync.mockImplementation((path: Parameters<typeof existsSync>[0]) => {
+      const normalized = String(path).replace(/\\/g, '/');
+      if (normalized === pluginRoot.replace(/\\/g, '/')) {
+        return true;
+      }
+      if (normalized === cacheRoot.replace(/\\/g, '/')) {
+        return false;
+      }
+      if (normalized.endsWith('/plugins/installed_plugins.json')) {
+        return true;
+      }
+      return true;
+    });
+
+    const result = await performUpdate({ verbose: false });
+
+    expect(result.success).toBe(true);
+    expect(mockedExecSync).toHaveBeenCalledWith('npm install -g oh-my-claude-sisyphus@latest', expect.any(Object));
   });
 
   it('runs reconciliation as part of performUpdate', async () => {
@@ -453,6 +788,7 @@ describe('auto-update reconciliation', () => {
       encoding: 'utf-8',
       stdio: 'pipe',
       timeout: 60000,
+      shell: true,
       windowsHide: true,
       env: expect.objectContaining({ OMC_UPDATE_RECONCILE: '1' }),
     }));
@@ -502,6 +838,11 @@ describe('auto-update reconciliation', () => {
     expect(result.success).toBe(false);
     expect(result.message).toBe('Updated to 4.1.6, but runtime reconciliation failed');
     expect(result.errors).toEqual(['spawnSync C:\\Users\\bellman\\AppData\\Roaming\\npm\\omc.cmd ENOENT']);
+    expect(mockedExecFileSync).toHaveBeenNthCalledWith(2, 'C:\\Users\\bellman\\AppData\\Roaming\\npm\\omc.cmd', ['update-reconcile'], expect.objectContaining({
+      shell: true,
+      windowsHide: true,
+      env: expect.objectContaining({ OMC_UPDATE_RECONCILE: '1' }),
+    }));
     expect(mockedWriteFileSync).not.toHaveBeenCalled();
   });
 

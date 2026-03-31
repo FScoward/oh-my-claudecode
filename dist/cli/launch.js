@@ -58,7 +58,7 @@ export function extractNotifyFlag(args) {
  * This flag is stripped before passing args to Claude CLI.
  */
 export function extractOpenClawFlag(args) {
-    let openclawEnabled = false;
+    let openclawEnabled = undefined;
     const remainingArgs = [];
     for (const arg of args) {
         if (arg === OPENCLAW_FLAG) {
@@ -315,7 +315,13 @@ function runClaudeOutsideTmux(cwd, args, _sessionId) {
         execFileSync('tmux', tmuxArgs, { stdio: 'inherit' });
     }
     catch {
-        // tmux failed, fall back to direct launch
+        // tmux attach failed — kill the orphaned detached session that
+        // new-session -d just created so they don't accumulate.
+        try {
+            execFileSync('tmux', ['kill-session', '-t', sessionName], { stdio: 'ignore' });
+        }
+        catch { /* session may already be gone */ }
+        // fall back to direct launch
         runClaudeDirect(cwd, args);
     }
 }
@@ -411,7 +417,7 @@ export async function launchCommand(args) {
         process.exit(1);
     }
     const normalizedArgs = normalizeClaudeLaunchArgs(argsAfterWebhook);
-    const sessionId = `omc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId = `omc-${Date.now()}-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
     // Phase 1: preLaunch
     try {
         await preLaunch(cwd, sessionId);

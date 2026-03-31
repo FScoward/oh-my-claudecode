@@ -16,6 +16,7 @@
  * Fix for: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/1033
  */
 import { writeModeState, readModeState, clearModeStateFile } from '../../lib/mode-state-io.js';
+import { getActiveAgentCount } from '../subagent-tracker/index.js';
 // ---------------------------------------------------------------------------
 // Protection configuration per level
 // ---------------------------------------------------------------------------
@@ -94,18 +95,27 @@ const SKILL_PROTECTION = {
  * Anthropic's example-skills, document-skills, superpowers, data, etc.)
  * default to 'none' so the Stop hook does not block them.
  *
- * Note: bridge.ts strips the 'oh-my-claudecode:' prefix before calling
- * this function, so skill names arrive in bare form (e.g., 'plan', 'xlsx').
+ * @param skillName - The normalized (prefix-stripped) skill name.
+ * @param rawSkillName - The original skill name as invoked (e.g., 'oh-my-claudecode:plan'
+ *   or 'plan'). When provided, only skills invoked with the 'oh-my-claudecode:' prefix
+ *   are eligible for protection. This prevents project custom skills (e.g., a user's
+ *   `.claude/skills/plan/`) from being confused with OMC built-in skills of the same name.
+ *   See: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/1581
  */
-export function getSkillProtection(skillName) {
+export function getSkillProtection(skillName, rawSkillName) {
+    // When rawSkillName is provided, only apply protection to OMC-prefixed skills.
+    // Non-prefixed skills are project custom skills or other plugins — no protection.
+    if (rawSkillName != null && !rawSkillName.toLowerCase().startsWith('oh-my-claudecode:')) {
+        return 'none';
+    }
     const normalized = skillName.toLowerCase().replace(/^oh-my-claudecode:/, '');
     return SKILL_PROTECTION[normalized] ?? 'none';
 }
 /**
  * Get the protection config for a skill.
  */
-export function getSkillConfig(skillName) {
-    return PROTECTION_CONFIGS[getSkillProtection(skillName)];
+export function getSkillConfig(skillName, rawSkillName) {
+    return PROTECTION_CONFIGS[getSkillProtection(skillName, rawSkillName)];
 }
 /**
  * Read the current skill active state.
@@ -121,9 +131,12 @@ export function readSkillActiveState(directory, sessionId) {
 /**
  * Write skill active state.
  * Called when a skill is invoked via the Skill tool.
+ *
+ * @param rawSkillName - The original skill name as invoked, used to distinguish
+ *   OMC built-in skills from project custom skills. See getSkillProtection().
  */
-export function writeSkillActiveState(directory, skillName, sessionId) {
-    const protection = getSkillProtection(skillName);
+export function writeSkillActiveState(directory, skillName, sessionId, rawSkillName) {
+    const protection = getSkillProtection(skillName, rawSkillName);
     // Skills with 'none' protection don't need state tracking
     if (protection === 'none') {
         return null;
@@ -193,6 +206,12 @@ export function checkSkillActiveState(directory, sessionId) {
     if (state.reinforcement_count >= state.max_reinforcements) {
         clearSkillActiveState(directory, sessionId);
         return { shouldBlock: false, message: '' };
+    }
+    // Orchestrators are allowed to go idle while delegated work is still active.
+    // Do not consume a reinforcement here; the skill is still active and should
+    // resume enforcement only after the running subagents finish.
+    if (getActiveAgentCount(directory) > 0) {
+        return { shouldBlock: false, message: '', skillName: state.skill_name };
     }
     // Block the stop and increment reinforcement count
     state.reinforcement_count += 1;

@@ -26,6 +26,7 @@ export declare const TOOL_CATEGORIES: {
     readonly CODEX: "codex";
     readonly GEMINI: "gemini";
     readonly SHARED_MEMORY: "shared-memory";
+    readonly DEEPINIT: "deepinit";
 };
 export type ToolCategory = typeof TOOL_CATEGORIES[keyof typeof TOOL_CATEGORIES];
 export declare const HOOK_EVENTS: {

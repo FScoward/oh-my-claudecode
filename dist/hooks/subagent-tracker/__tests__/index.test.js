@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { recordToolUsage, getAgentDashboard, getStaleAgents, getTrackingStats, readTrackingState, writeTrackingState, recordToolUsageWithTiming, getAgentPerformance, updateTokenUsage, recordFileOwnership, detectFileConflicts, suggestInterventions, calculateParallelEfficiency, getAgentObservatory, flushPendingWrites, } from "../index.js";
+import { recordToolUsage, getAgentDashboard, getStaleAgents, getTrackingStats, processSubagentStart, readTrackingState, writeTrackingState, recordToolUsageWithTiming, getAgentPerformance, updateTokenUsage, recordFileOwnership, detectFileConflicts, suggestInterventions, calculateParallelEfficiency, getAgentObservatory, flushPendingWrites, } from "../index.js";
+import { readMissionBoardState } from "../../../hud/mission-board.js";
 describe("subagent-tracker", () => {
     let testDir;
     beforeEach(() => {
@@ -495,6 +496,46 @@ describe("subagent-tracker", () => {
             expect(stats.completed).toBe(0);
             expect(stats.failed).toBe(0);
             expect(stats.total).toBe(0);
+        });
+    });
+    describe("processSubagentStart", () => {
+        it("dedupes repeated start events for the same running agent", () => {
+            const startInput = {
+                session_id: "session-123",
+                transcript_path: join(testDir, "transcript.jsonl"),
+                cwd: testDir,
+                permission_mode: "default",
+                hook_event_name: "SubagentStart",
+                agent_id: "worker-3",
+                agent_type: "oh-my-claudecode:executor",
+                prompt: "Implement the dispatch changes",
+                model: "gpt-5.4-mini",
+            };
+            const first = processSubagentStart(startInput);
+            const second = processSubagentStart(startInput);
+            expect(first.hookSpecificOutput?.hookEventName).toBe("SubagentStart");
+            expect(first.hookSpecificOutput?.agent_count).toBe(1);
+            expect(second.hookSpecificOutput?.hookEventName).toBe("SubagentStart");
+            expect(second.hookSpecificOutput?.agent_count).toBe(1);
+            const pendingState = readTrackingState(testDir);
+            expect(pendingState.total_spawned).toBe(1);
+            expect(pendingState.agents.filter((agent) => agent.agent_id === "worker-3")).toHaveLength(1);
+            expect(pendingState.agents.filter((agent) => agent.status === "running")).toHaveLength(1);
+            const dashboard = getAgentDashboard(testDir);
+            expect(dashboard).toContain("Agent Dashboard (1 active)");
+            expect(dashboard.match(/\[worker-/g) ?? []).toHaveLength(1);
+            expect(dashboard).toContain("executor");
+            expect(dashboard).toContain("Implement the dispatch changes");
+            const missionBoard = readMissionBoardState(testDir);
+            const sessionMission = missionBoard?.missions.find((mission) => mission.id.startsWith("session:session-123:"));
+            expect(sessionMission?.agents).toHaveLength(1);
+            expect(sessionMission?.timeline).toHaveLength(1);
+            expect(sessionMission?.agents[0]?.ownership).toBe("worker-3");
+            flushPendingWrites();
+            const persistedState = readTrackingState(testDir);
+            expect(persistedState.total_spawned).toBe(1);
+            expect(persistedState.agents.filter((agent) => agent.agent_id === "worker-3")).toHaveLength(1);
+            expect(persistedState.agents.filter((agent) => agent.status === "running")).toHaveLength(1);
         });
     });
     describe("Tool Timing (Phase 1.1)", () => {

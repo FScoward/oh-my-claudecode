@@ -415,15 +415,16 @@ export function formatReport(report, json) {
     else {
         lines.push(`  ${colors.green('✓')} Registry servers: ${report.mcpRegistrySync.serverNames.join(', ')}`);
         lines.push(`    ${colors.gray(`Registry: ${report.mcpRegistrySync.registryPath}`)}`);
+        lines.push(`    ${colors.gray(`Claude MCP: ${report.mcpRegistrySync.claudeConfigPath}`)}`);
         lines.push(`    ${colors.gray(`Codex: ${report.mcpRegistrySync.codexConfigPath}`)}`);
         if (report.mcpRegistrySync.claudeMissing.length > 0) {
-            lines.push(`  ${colors.yellow('⚠')} Missing from Claude settings.json: ${report.mcpRegistrySync.claudeMissing.join(', ')}`);
+            lines.push(`  ${colors.yellow('⚠')} Missing from Claude MCP config: ${report.mcpRegistrySync.claudeMissing.join(', ')}`);
         }
         else if (report.mcpRegistrySync.claudeMismatched.length > 0) {
-            lines.push(`  ${colors.yellow('⚠')} Mismatched in Claude settings.json: ${report.mcpRegistrySync.claudeMismatched.join(', ')}`);
+            lines.push(`  ${colors.yellow('⚠')} Mismatched in Claude MCP config: ${report.mcpRegistrySync.claudeMismatched.join(', ')}`);
         }
         else {
-            lines.push(`  ${colors.green('✓')} Claude settings.json is in sync`);
+            lines.push(`  ${colors.green('✓')} Claude MCP config is in sync`);
         }
         if (report.mcpRegistrySync.codexMissing.length > 0) {
             lines.push(`  ${colors.yellow('⚠')} Missing from Codex config.toml: ${report.mcpRegistrySync.codexMissing.join(', ')}`);

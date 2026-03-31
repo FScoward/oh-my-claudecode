@@ -58,4 +58,99 @@ describe('session-start.mjs regression #1386', () => {
     expect(context).toContain("Prioritize the user's newest request");
     expect(context).not.toContain('Continue working in ultrawork mode until all tasks are complete.');
   });
+
+  it('injects persisted project memory into session-start additionalContext', () => {
+    mkdirSync(join(fakeProject, '.git'));
+    mkdirSync(join(fakeProject, '.omc'), { recursive: true });
+    writeFileSync(
+      join(fakeProject, '.omc', 'project-memory.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        lastScanned: Date.now(),
+        projectRoot: fakeProject,
+        techStack: {
+          languages: [
+            {
+              name: 'TypeScript',
+              version: '5.0.0',
+              confidence: 'high',
+              markers: ['tsconfig.json', 'package.json'],
+            },
+          ],
+          frameworks: [],
+          packageManager: 'pnpm',
+          runtime: 'node',
+        },
+        build: {
+          buildCommand: 'pnpm build',
+          testCommand: 'pnpm test',
+          lintCommand: null,
+          devCommand: null,
+          scripts: {},
+        },
+        conventions: {
+          namingStyle: null,
+          importStyle: null,
+          testPattern: null,
+          fileOrganization: null,
+        },
+        structure: {
+          isMonorepo: false,
+          workspaces: [],
+          mainDirectories: ['src'],
+          gitBranches: null,
+        },
+        customNotes: [
+          {
+            timestamp: Date.now(),
+            source: 'manual',
+            category: 'env',
+            content: 'Requires LOCAL_API_BASE for smoke tests',
+          },
+        ],
+        directoryMap: {},
+        hotPaths: [],
+        userDirectives: [
+          {
+            timestamp: Date.now(),
+            directive: 'Preserve project memory directives at session start',
+            context: '',
+            source: 'explicit',
+            priority: 'high',
+          },
+        ],
+      }),
+    );
+
+    const raw = execFileSync(NODE, [SCRIPT_PATH], {
+      input: JSON.stringify({
+        hook_event_name: 'SessionStart',
+        session_id: 'session-1779',
+        cwd: fakeProject,
+      }),
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+      },
+      timeout: 15000,
+    }).trim();
+
+    const output = JSON.parse(raw) as {
+      continue: boolean;
+      hookSpecificOutput?: { additionalContext?: string };
+    };
+    const context = output.hookSpecificOutput?.additionalContext || '';
+
+    expect(output.continue).toBe(true);
+    expect(context).toContain('<project-memory-context>');
+    expect(context).toContain('[PROJECT MEMORY]');
+    expect(context).toContain('Preserve project memory directives at session start');
+    expect(context).toContain('[Project Environment]');
+    expect(context).toContain('- TypeScript | pkg:pnpm | node');
+    expect(context).toContain('- build=pnpm build | test=pnpm test');
+    expect(context).toContain('[env] Requires LOCAL_API_BASE for smoke tests');
+    expect(context).toContain('</project-memory-context>');
+  });
 });

@@ -13,6 +13,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { appendTeamEvent } from '../team/events.js';
 import { deriveTeamLeaderGuidance } from '../team/leader-nudge-guidance.js';
+import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
 // ── Helpers ────────────────────────────────────────────────────────────────
 function safeString(value, fallback = '') {
     if (typeof value === 'string')
@@ -286,6 +287,7 @@ export async function maybeNudgeLeader(params) {
         return { nudged: false, reason: 'no_leader_pane_id' };
     // Send nudge
     const message = `[OMC] Leader nudge (${guidance.nextAction}): ${guidance.message} ${INJECT_MARKER}`;
+    const logNudgePersistenceFailure = createSwallowedErrorLogger('hooks.team-leader-nudge maybeNudgeLeader persistence failed');
     try {
         await tmux.sendKeys(leaderPaneId, message, true);
         await new Promise(r => setTimeout(r, 100));
@@ -297,14 +299,14 @@ export async function maybeNudgeLeader(params) {
             nudge_count: nudgeState.nudge_count + 1,
             last_nudge_at_ms: nowMs,
             last_nudge_at: nowIso,
-        }).catch(() => { });
+        }).catch(logNudgePersistenceFailure);
         await appendTeamEvent(teamName, {
             type: 'team_leader_nudge',
             worker: 'leader-fixed',
             reason: guidance.reason,
             next_action: guidance.nextAction,
             message: guidance.message,
-        }, params.cwd).catch(() => { });
+        }, params.cwd).catch(logNudgePersistenceFailure);
         return { nudged: true, reason: guidance.reason };
     }
     catch {

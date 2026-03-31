@@ -18,9 +18,11 @@ import type {
 } from './types.js';
 import { resolveLiveData } from './live-data.js';
 import { parseFrontmatter, parseFrontmatterAliases, stripOptionalQuotes } from '../../utils/frontmatter.js';
+import { formatOmcCliInvocation, rewriteOmcCliInvocations } from '../../utils/omc-cli-rendering.js';
 import { parseSkillPipelineMetadata, renderSkillPipelineGuidance } from '../../utils/skill-pipeline.js';
 import { renderSkillResourcesGuidance } from '../../utils/skill-resources.js';
 import { renderSkillRuntimeGuidance } from '../../features/builtin-skills/runtime-guidance.js';
+import { getSkillsDir } from '../../features/builtin-skills/skills.js';
 
 /** Claude config directory */
 const CLAUDE_CONFIG_DIR = getClaudeConfigDir();
@@ -198,14 +200,16 @@ export function discoverAllCommands(): CommandInfo[] {
   const projectOmcSkills = discoverSkillsFromDir(projectOmcSkillsDir);
   const projectAgentSkills = discoverSkillsFromDir(projectAgentSkillsDir);
   const userSkills = discoverSkillsFromDir(userSkillsDir);
+  const builtinSkills = discoverSkillsFromDir(getSkillsDir());
 
-  // Priority: project commands > user commands > project OMC skills > project compatibility skills > user skills
+  // Priority: project commands > user commands > project OMC skills > project compatibility skills > user skills > builtin skills
   const prioritized = [
     ...projectCommands,
     ...userCommands,
     ...projectOmcSkills,
     ...projectAgentSkills,
     ...userSkills,
+    ...builtinSkills,
   ];
   const seen = new Set<string>();
 
@@ -253,13 +257,13 @@ function renderDeepInterviewAutoresearchGuidance(args: string): string {
   const missionSeed = stripInvocationFlag(args, '--autoresearch');
   const lines = [
     '## Autoresearch Setup Mode',
-    'This deep-interview invocation was launched as the zero-learning-curve setup lane for `omc autoresearch`.',
+    `This deep-interview invocation was launched as the zero-learning-curve setup lane for \`${formatOmcCliInvocation('autoresearch')}\`.`,
     '',
     'Required behavior in this mode:',
     '- If the mission is not already clear, start by asking: "What should autoresearch improve or prove for this repo?"',
     '- Treat evaluator clarity as a required readiness gate before launch.',
     '- When the mission and evaluator are ready, launch direct execution with:',
-    '  `omc autoresearch --mission "<mission>" --eval "<evaluator>" [--keep-policy <policy>] [--slug <slug>]`',
+    `  \`${formatOmcCliInvocation('autoresearch --mission "<mission>" --eval "<evaluator>" [--keep-policy <policy>] [--slug <slug>]')}\``,
     '- Do **not** hand off to `omc-plan`, `autopilot`, `ralph`, or `team` in this mode.',
   ];
 
@@ -312,7 +316,7 @@ function formatCommandTemplate(cmd: CommandInfo, args: string): string {
 
   // Resolve arguments in content, then execute any live-data commands
   const resolvedContent = resolveArguments(cmd.content || '', displayArgs);
-  const injectedContent = resolveLiveData(resolvedContent);
+  const injectedContent = rewriteOmcCliInvocations(resolveLiveData(resolvedContent));
   const runtimeGuidance = cmd.scope === 'skill' && !isDeepInterviewAutoresearch
     ? renderSkillRuntimeGuidance(cmd.metadata.name)
     : '';

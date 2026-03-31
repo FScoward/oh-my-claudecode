@@ -98,7 +98,7 @@ describe('team cli', () => {
     });
 
     expect(result.status).toBe('running');
-    expect(result.jobId).toMatch(/^omc-[a-z0-9]{1,12}$/);
+    expect(result.jobId).toMatch(/^omc-[a-z0-9]{1,16}$/);
     expect(result.pid).toBe(4242);
 
     expect(mocks.spawn).toHaveBeenCalledWith(
@@ -155,7 +155,7 @@ describe('team cli', () => {
       status: string;
       pid: number;
     };
-    expect(output.jobId).toMatch(/^omc-[a-z0-9]{1,12}$/);
+    expect(output.jobId).toMatch(/^omc-[a-z0-9]{1,16}$/);
     expect(output.status).toBe('running');
     expect(output.pid).toBe(7777);
 
@@ -397,6 +397,54 @@ describe('team cli', () => {
     const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as { running: boolean; snapshot: { phase: string }; workerPaneIds: string[] };
     expect(payload.running).toBe(true);
     expect(payload.snapshot.phase).toBe('team-exec');
+    expect(payload.workerPaneIds).toEqual(['%1']);
+
+    rmSync(cwd, { recursive: true, force: true });
+    logSpy.mockRestore();
+  });
+
+  it('team status deduplicates workerPaneIds from duplicate worker config rows', async () => {
+    const { teamCommand } = await import('../team.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    mocks.isRuntimeV2Enabled.mockReturnValue(true);
+    mocks.monitorTeamV2.mockResolvedValue({
+      teamName: 'demo-team',
+      phase: 'team-exec',
+      workers: [],
+      tasks: { total: 1, pending: 0, blocked: 0, in_progress: 1, completed: 0, failed: 0, items: [] },
+      deadWorkers: [],
+      nonReportingWorkers: [],
+      recommendations: [],
+      allTasksTerminal: false,
+      performance: { total_ms: 1, list_tasks_ms: 1, worker_scan_ms: 0, mailbox_delivery_ms: 0, updated_at: new Date().toISOString() },
+    });
+
+    const cwd = mkdtempSync(join(tmpdir(), 'omc-team-cli-v2-status-dedup-'));
+    const root = join(cwd, '.omc', 'state', 'team', 'demo-team');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      name: 'demo-team',
+      task: 'demo',
+      agent_type: 'executor',
+      worker_count: 2,
+      max_workers: 20,
+      tmux_session: 'demo-session:0',
+      workers: [
+        { name: 'worker-1', index: 1, role: 'executor', assigned_tasks: [], pane_id: '%1' },
+        { name: 'worker-1', index: 0, role: 'executor', assigned_tasks: [] },
+      ],
+      created_at: new Date().toISOString(),
+      next_task_id: 2,
+      leader_pane_id: '%0',
+      hud_pane_id: null,
+      resize_hook_name: null,
+      resize_hook_target: null,
+    }));
+
+    await teamCommand(['status', 'demo-team', '--json', '--cwd', cwd]);
+
+    const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as { workerPaneIds: string[] };
     expect(payload.workerPaneIds).toEqual(['%1']);
 
     rmSync(cwd, { recursive: true, force: true });
