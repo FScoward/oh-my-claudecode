@@ -637,23 +637,35 @@ async function teamWriteWorkerInbox(teamName, workerName, prompt, cwd) {
   await writeAtomic(p, prompt);
 }
 async function teamCreateTask(teamName, task, cwd) {
-  const cfg = await teamReadConfig(teamName, cwd);
-  if (!cfg) throw new Error(`Team ${teamName} not found`);
-  const nextId = String(cfg.next_task_id ?? 1);
-  const created = {
-    ...task,
-    id: nextId,
-    status: task.status ?? "pending",
-    depends_on: task.depends_on ?? task.blocked_by ?? [],
-    version: 1,
-    created_at: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const taskPath2 = absPath(cwd, TeamPaths.tasks(teamName));
-  await mkdir(taskPath2, { recursive: true });
-  await writeAtomic(join3(taskPath2, `task-${nextId}.json`), JSON.stringify(created, null, 2));
-  cfg.next_task_id = Number(nextId) + 1;
-  await writeAtomic(absPath(cwd, TeamPaths.config(teamName)), JSON.stringify(cfg, null, 2));
-  return created;
+  const lockDir = join3(teamDir(teamName, cwd), ".lock-create-task");
+  const timeoutMs = 5e3;
+  const deadline = Date.now() + timeoutMs;
+  let delayMs = 20;
+  while (Date.now() < deadline) {
+    const result = await withLock(lockDir, async () => {
+      const cfg = await teamReadConfig(teamName, cwd);
+      if (!cfg) throw new Error(`Team ${teamName} not found`);
+      const nextId = String(cfg.next_task_id ?? 1);
+      const created = {
+        ...task,
+        id: nextId,
+        status: task.status ?? "pending",
+        depends_on: task.depends_on ?? task.blocked_by ?? [],
+        version: 1,
+        created_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const taskPath2 = absPath(cwd, TeamPaths.tasks(teamName));
+      await mkdir(taskPath2, { recursive: true });
+      await writeAtomic(join3(taskPath2, `task-${nextId}.json`), JSON.stringify(created, null, 2));
+      cfg.next_task_id = Number(nextId) + 1;
+      await writeAtomic(absPath(cwd, TeamPaths.config(teamName)), JSON.stringify(cfg, null, 2));
+      return created;
+    });
+    if (result.ok) return result.value;
+    await new Promise((resolve4) => setTimeout(resolve4, delayMs));
+    delayMs = Math.min(delayMs * 2, 200);
+  }
+  throw new Error(`Failed to acquire task creation lock for team ${teamName} after ${timeoutMs}ms`);
 }
 async function teamReadTask(teamName, taskId, cwd) {
   for (const candidate of taskFileCandidates(teamName, taskId, cwd)) {
@@ -1328,7 +1340,6 @@ async function markLeaderPaneMissingDeferred(params) {
   ).catch(logTransitionFailure);
 }
 async function queueInboxInstruction(params) {
-  await params.deps.writeWorkerInbox(params.teamName, params.workerName, params.inbox, params.cwd);
   const queued = await enqueueDispatchRequest(
     params.teamName,
     {
@@ -1350,6 +1361,17 @@ async function queueInboxInstruction(params) {
       reason: "duplicate_pending_dispatch_request",
       request_id: queued.request.request_id
     };
+  }
+  try {
+    await params.deps.writeWorkerInbox(params.teamName, params.workerName, params.inbox, params.cwd);
+  } catch (error) {
+    await markImmediateDispatchFailure({
+      teamName: params.teamName,
+      request: queued.request,
+      reason: "inbox_write_failed",
+      cwd: params.cwd
+    });
+    throw error;
   }
   const notifyOutcome = await Promise.resolve(params.notify(
     { workerName: params.workerName, workerIndex: params.workerIndex, paneId: params.paneId },
@@ -1542,6 +1564,7 @@ var init_team_name = __esm({
 // src/team/tmux-session.ts
 var tmux_session_exports = {};
 __export(tmux_session_exports, {
+  applyMainVerticalLayout: () => applyMainVerticalLayout,
   buildWorkerLaunchSpec: () => buildWorkerLaunchSpec,
   buildWorkerStartCommand: () => buildWorkerStartCommand,
   createSession: () => createSession,
@@ -1589,6 +1612,31 @@ async function tmuxAsync(args) {
     return promisifiedExec(`tmux ${escaped}`);
   }
   return promisifiedExecFile("tmux", args);
+}
+async function applyMainVerticalLayout(teamTarget) {
+  const { execFile: execFile4 } = await import("child_process");
+  const { promisify: promisify3 } = await import("util");
+  const execFileAsync2 = promisify3(execFile4);
+  try {
+    await execFileAsync2("tmux", ["select-layout", "-t", teamTarget, "main-vertical"]);
+  } catch {
+  }
+  try {
+    const widthResult = await tmuxAsync([
+      "display-message",
+      "-p",
+      "-t",
+      teamTarget,
+      "#{window_width}"
+    ]);
+    const width = parseInt(widthResult.stdout.trim(), 10);
+    if (Number.isFinite(width) && width >= 40) {
+      const half = String(Math.floor(width / 2));
+      await execFileAsync2("tmux", ["set-window-option", "-t", teamTarget, "main-pane-width", half]);
+      await execFileAsync2("tmux", ["select-layout", "-t", teamTarget, "main-vertical"]);
+    }
+  } catch {
+  }
 }
 function getDefaultShell() {
   if (process.platform === "win32" && !isUnixLikeOnWindows()) {
@@ -1922,26 +1970,7 @@ async function createTeamSession(teamName, workerCount, cwd, options = {}) {
       workerPaneIds.push(paneId);
     }
   }
-  try {
-    await execFileAsync2("tmux", ["select-layout", "-t", teamTarget, "main-vertical"]);
-  } catch {
-  }
-  try {
-    const widthResult = await tmuxAsync([
-      "display-message",
-      "-p",
-      "-t",
-      teamTarget,
-      "#{window_width}"
-    ]);
-    const width = parseInt(widthResult.stdout.trim(), 10);
-    if (Number.isFinite(width) && width >= 40) {
-      const half = String(Math.floor(width / 2));
-      await execFileAsync2("tmux", ["set-window-option", "-t", teamTarget, "main-pane-width", half]);
-      await execFileAsync2("tmux", ["select-layout", "-t", teamTarget, "main-vertical"]);
-    }
-  } catch {
-  }
+  await applyMainVerticalLayout(teamTarget);
   try {
     await execFileAsync2("tmux", ["set-option", "-t", resolvedSessionName, "mouse", "on"]);
   } catch {
@@ -2293,6 +2322,10 @@ function getPackageDir() {
   try {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname2 = dirname4(__filename);
+    const currentDirName = basename3(__dirname2);
+    if (currentDirName === "bridge") {
+      return join6(__dirname2, "..");
+    }
     return join6(__dirname2, "..", "..");
   } catch {
   }
@@ -2338,6 +2371,21 @@ var init_utils = __esm({
   }
 });
 
+// src/utils/skininthegamebros-user.ts
+var init_skininthegamebros_user = __esm({
+  "src/utils/skininthegamebros-user.ts"() {
+    "use strict";
+  }
+});
+
+// src/agents/skininthegamebros-guidance.ts
+var init_skininthegamebros_guidance = __esm({
+  "src/agents/skininthegamebros-guidance.ts"() {
+    "use strict";
+    init_skininthegamebros_user();
+  }
+});
+
 // src/agents/prompt-helpers.ts
 import { readdirSync } from "fs";
 import { join as join7, dirname as dirname5, basename as basename4 } from "path";
@@ -2356,6 +2404,10 @@ function getPackageDir2() {
   try {
     const __filename = fileURLToPath2(import.meta.url);
     const __dirname2 = dirname5(__filename);
+    const currentDirName = basename4(__dirname2);
+    if (currentDirName === "bridge") {
+      return join7(__dirname2, "..");
+    }
     return join7(__dirname2, "..", "..");
   } catch {
   }
@@ -2401,6 +2453,7 @@ var init_prompt_helpers = __esm({
   "src/agents/prompt-helpers.ts"() {
     "use strict";
     init_utils();
+    init_skininthegamebros_guidance();
     _cachedRoles = null;
     VALID_AGENT_ROLES = getValidAgentRoles();
   }
@@ -2452,6 +2505,12 @@ var init_config_dir = __esm({
 import { join as join8 } from "path";
 import { existsSync as existsSync6, readFileSync as readFileSync2, readdirSync as readdirSync2, statSync, unlinkSync, rmSync } from "fs";
 import { homedir } from "os";
+function getConfigDir2() {
+  if (process.platform === "win32") {
+    return process.env.APPDATA || join8(homedir(), "AppData", "Roaming");
+  }
+  return process.env.XDG_CONFIG_HOME || join8(homedir(), ".config");
+}
 function getStateDir() {
   if (process.platform === "win32") {
     return process.env.LOCALAPPDATA || join8(homedir(), "AppData", "Local");
@@ -2493,6 +2552,55 @@ var init_paths = __esm({
 });
 
 // src/utils/jsonc.ts
+function parseJsonc(content) {
+  const cleaned = stripJsoncComments(content);
+  return JSON.parse(cleaned);
+}
+function stripJsoncComments(content) {
+  let result = "";
+  let i = 0;
+  while (i < content.length) {
+    if (content[i] === "/" && content[i + 1] === "/") {
+      while (i < content.length && content[i] !== "\n") {
+        i++;
+      }
+      continue;
+    }
+    if (content[i] === "/" && content[i + 1] === "*") {
+      i += 2;
+      while (i < content.length && !(content[i] === "*" && content[i + 1] === "/")) {
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+    if (content[i] === '"') {
+      result += content[i];
+      i++;
+      while (i < content.length && content[i] !== '"') {
+        if (content[i] === "\\") {
+          result += content[i];
+          i++;
+          if (i < content.length) {
+            result += content[i];
+            i++;
+          }
+          continue;
+        }
+        result += content[i];
+        i++;
+      }
+      if (i < content.length) {
+        result += content[i];
+        i++;
+      }
+      continue;
+    }
+    result += content[i];
+    i++;
+  }
+  return result;
+}
 var init_jsonc = __esm({
   "src/utils/jsonc.ts"() {
     "use strict";
@@ -2736,6 +2844,9 @@ function buildDefaultConfig() {
       directory: ".omc/plans",
       filenameTemplate: "{{name}}.md"
     },
+    teleport: {
+      symlinkNodeModules: true
+    },
     startupCodebaseMap: {
       enabled: true,
       maxFiles: 200,
@@ -2746,6 +2857,17 @@ function buildDefaultConfig() {
       smallWordLimit: 50,
       largeWordLimit: 200,
       suppressHeavyModesForSmallTasks: true
+    },
+    promptPrerequisites: {
+      enabled: true,
+      sectionNames: {
+        memory: ["M\xC9MOIRE", "MEMOIRE", "MEMORY"],
+        skills: ["SKILLS"],
+        verifyFirst: ["VERIFY-FIRST", "VERIFY FIRST", "VERIFY_FIRST"],
+        context: ["CONTEXT"]
+      },
+      blockingTools: ["Edit", "MultiEdit", "Write", "Agent", "Task"],
+      executionKeywords: ["ralph", "ultrawork", "autopilot"]
     }
   };
 }
@@ -3282,6 +3404,7 @@ var init_definitions = __esm({
     "use strict";
     init_utils();
     init_loader();
+    init_skininthegamebros_guidance();
     init_architect();
     init_designer();
     init_writer();
@@ -3386,6 +3509,86 @@ var init_delegation_enforcer = __esm({
   }
 });
 
+// src/lib/security-config.ts
+import { existsSync as existsSync8, readFileSync as readFileSync4 } from "fs";
+import { join as join10 } from "path";
+function loadSecurityFromConfigFiles() {
+  const paths = [
+    join10(process.cwd(), ".claude", "omc.jsonc"),
+    join10(getConfigDir2(), "claude-omc", "config.jsonc")
+  ];
+  for (const configPath of paths) {
+    if (!existsSync8(configPath)) continue;
+    try {
+      const content = readFileSync4(configPath, "utf-8");
+      const parsed = parseJsonc(content);
+      if (parsed?.security && typeof parsed.security === "object") {
+        return parsed.security;
+      }
+    } catch {
+    }
+  }
+  return {};
+}
+function getSecurityConfig() {
+  if (cachedConfig) return cachedConfig;
+  const isStrict = process.env.OMC_SECURITY === "strict";
+  const base = isStrict ? { ...STRICT_OVERRIDES } : { ...DEFAULTS };
+  const fileOverrides = loadSecurityFromConfigFiles();
+  if (isStrict) {
+    cachedConfig = {
+      restrictToolPaths: base.restrictToolPaths || (fileOverrides.restrictToolPaths ?? false),
+      pythonSandbox: base.pythonSandbox || (fileOverrides.pythonSandbox ?? false),
+      disableProjectSkills: base.disableProjectSkills || (fileOverrides.disableProjectSkills ?? false),
+      disableAutoUpdate: base.disableAutoUpdate || (fileOverrides.disableAutoUpdate ?? false),
+      disableRemoteMcp: base.disableRemoteMcp || (fileOverrides.disableRemoteMcp ?? false),
+      disableExternalLLM: base.disableExternalLLM || (fileOverrides.disableExternalLLM ?? false),
+      hardMaxIterations: Math.min(base.hardMaxIterations, fileOverrides.hardMaxIterations ?? base.hardMaxIterations)
+    };
+  } else {
+    cachedConfig = {
+      restrictToolPaths: fileOverrides.restrictToolPaths ?? base.restrictToolPaths,
+      pythonSandbox: fileOverrides.pythonSandbox ?? base.pythonSandbox,
+      disableProjectSkills: fileOverrides.disableProjectSkills ?? base.disableProjectSkills,
+      disableAutoUpdate: fileOverrides.disableAutoUpdate ?? base.disableAutoUpdate,
+      disableRemoteMcp: fileOverrides.disableRemoteMcp ?? base.disableRemoteMcp,
+      disableExternalLLM: fileOverrides.disableExternalLLM ?? base.disableExternalLLM,
+      hardMaxIterations: fileOverrides.hardMaxIterations ?? base.hardMaxIterations
+    };
+  }
+  return cachedConfig;
+}
+function isExternalLLMDisabled() {
+  return getSecurityConfig().disableExternalLLM;
+}
+var DEFAULTS, STRICT_OVERRIDES, cachedConfig;
+var init_security_config = __esm({
+  "src/lib/security-config.ts"() {
+    "use strict";
+    init_jsonc();
+    init_paths();
+    DEFAULTS = {
+      restrictToolPaths: false,
+      pythonSandbox: false,
+      disableProjectSkills: false,
+      disableAutoUpdate: false,
+      hardMaxIterations: 500,
+      disableRemoteMcp: false,
+      disableExternalLLM: false
+    };
+    STRICT_OVERRIDES = {
+      restrictToolPaths: true,
+      pythonSandbox: true,
+      disableProjectSkills: true,
+      disableAutoUpdate: true,
+      hardMaxIterations: 200,
+      disableRemoteMcp: true,
+      disableExternalLLM: true
+    };
+    cachedConfig = null;
+  }
+});
+
 // src/team/model-contract.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import { isAbsolute as isAbsolute4, normalize, win32 as win32Path } from "path";
@@ -3448,6 +3651,11 @@ function getContract(agentType) {
   const contract = CONTRACTS[agentType];
   if (!contract) {
     throw new Error(`Unknown agent type: ${agentType}. Supported: ${Object.keys(CONTRACTS).join(", ")}`);
+  }
+  if (agentType !== "claude" && isExternalLLMDisabled()) {
+    throw new Error(
+      `External LLM provider "${agentType}" is blocked by security policy (disableExternalLLM). Only Claude workers are allowed in the current security configuration.`
+    );
   }
   return contract;
 }
@@ -3542,6 +3750,7 @@ var init_model_contract = __esm({
     init_team_name();
     init_delegation_enforcer();
     init_models();
+    init_security_config();
     resolvedPathCache = /* @__PURE__ */ new Map();
     UNTRUSTED_PATH_PATTERNS = [
       /^\/tmp(\/|$)/,
@@ -3635,9 +3844,9 @@ var init_model_contract = __esm({
 
 // src/team/worker-bootstrap.ts
 import { mkdir as mkdir3, writeFile as writeFile3, appendFile as appendFile2 } from "fs/promises";
-import { join as join10, dirname as dirname7 } from "path";
+import { join as join11, dirname as dirname7 } from "path";
 function buildInstructionPath(...parts) {
-  return join10(...parts).replaceAll("\\", "/");
+  return join11(...parts).replaceAll("\\", "/");
 }
 function generateTriggerMessage(teamName, workerName, teamStateRoot3 = ".omc/state") {
   const inboxPath = buildInstructionPath(teamStateRoot3, "team", teamName, "workers", workerName, "inbox.md");
@@ -3800,22 +4009,22 @@ ${bootstrapInstructions}
 ` : ""}`;
 }
 async function composeInitialInbox(teamName, workerName, content, cwd) {
-  const inboxPath = join10(cwd, `.omc/state/team/${teamName}/workers/${workerName}/inbox.md`);
+  const inboxPath = join11(cwd, `.omc/state/team/${teamName}/workers/${workerName}/inbox.md`);
   await mkdir3(dirname7(inboxPath), { recursive: true });
   await writeFile3(inboxPath, content, "utf-8");
 }
 async function ensureWorkerStateDir(teamName, workerName, cwd) {
-  const workerDir = join10(cwd, `.omc/state/team/${teamName}/workers/${workerName}`);
+  const workerDir = join11(cwd, `.omc/state/team/${teamName}/workers/${workerName}`);
   await mkdir3(workerDir, { recursive: true });
-  const mailboxDir = join10(cwd, `.omc/state/team/${teamName}/mailbox`);
+  const mailboxDir = join11(cwd, `.omc/state/team/${teamName}/mailbox`);
   await mkdir3(mailboxDir, { recursive: true });
-  const tasksDir = join10(cwd, `.omc/state/team/${teamName}/tasks`);
+  const tasksDir = join11(cwd, `.omc/state/team/${teamName}/tasks`);
   await mkdir3(tasksDir, { recursive: true });
 }
 async function writeWorkerOverlay(params) {
   const { teamName, workerName, cwd } = params;
   const overlay = generateWorkerOverlay(params);
-  const overlayPath = join10(cwd, `.omc/state/team/${teamName}/workers/${workerName}/AGENTS.md`);
+  const overlayPath = join11(cwd, `.omc/state/team/${teamName}/workers/${workerName}/AGENTS.md`);
   await mkdir3(dirname7(overlayPath), { recursive: true });
   await writeFile3(overlayPath, overlay, "utf-8");
   return overlayPath;
@@ -3879,7 +4088,7 @@ var init_process_utils = __esm({
 
 // src/platform/index.ts
 import * as path2 from "path";
-import { readFileSync as readFileSync4 } from "fs";
+import { readFileSync as readFileSync5 } from "fs";
 var PLATFORM;
 var init_platform = __esm({
   "src/platform/index.ts"() {
@@ -3905,7 +4114,7 @@ import {
   closeSync as closeSync3,
   unlinkSync as unlinkSync3,
   writeSync as writeSync3,
-  readFileSync as readFileSync5,
+  readFileSync as readFileSync6,
   statSync as statSync2,
   constants as fsConstants
 } from "fs";
@@ -3916,7 +4125,7 @@ function isLockStale(lockPath, staleLockMs) {
     const ageMs = Date.now() - stat2.mtimeMs;
     if (ageMs < staleLockMs) return false;
     try {
-      const raw = readFileSync5(lockPath, "utf-8");
+      const raw = readFileSync6(lockPath, "utf-8");
       const payload = JSON.parse(raw);
       if (payload.pid && isProcessAlive(payload.pid)) return false;
     } catch {
@@ -4058,23 +4267,23 @@ var init_file_lock = __esm({
 });
 
 // src/team/git-worktree.ts
-import { existsSync as existsSync9, readFileSync as readFileSync6 } from "node:fs";
-import { join as join12 } from "node:path";
+import { existsSync as existsSync10, readFileSync as readFileSync7 } from "node:fs";
+import { join as join13 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 function getWorktreePath(repoRoot, teamName, workerName) {
-  return join12(repoRoot, ".omc", "worktrees", sanitizeName(teamName), sanitizeName(workerName));
+  return join13(repoRoot, ".omc", "worktrees", sanitizeName(teamName), sanitizeName(workerName));
 }
 function getBranchName(teamName, workerName) {
   return `omc-team/${sanitizeName(teamName)}/${sanitizeName(workerName)}`;
 }
 function getMetadataPath(repoRoot, teamName) {
-  return join12(repoRoot, ".omc", "state", "team-bridge", sanitizeName(teamName), "worktrees.json");
+  return join13(repoRoot, ".omc", "state", "team-bridge", sanitizeName(teamName), "worktrees.json");
 }
 function readMetadata(repoRoot, teamName) {
   const metaPath = getMetadataPath(repoRoot, teamName);
-  if (!existsSync9(metaPath)) return [];
+  if (!existsSync10(metaPath)) return [];
   try {
-    return JSON.parse(readFileSync6(metaPath, "utf-8"));
+    return JSON.parse(readFileSync7(metaPath, "utf-8"));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[omc] warning: worktrees.json parse error: ${msg}
@@ -4085,7 +4294,7 @@ function readMetadata(repoRoot, teamName) {
 function writeMetadata(repoRoot, teamName, entries) {
   const metaPath = getMetadataPath(repoRoot, teamName);
   validateResolvedPath(metaPath, repoRoot);
-  const dir = join12(repoRoot, ".omc", "state", "team-bridge", sanitizeName(teamName));
+  const dir = join13(repoRoot, ".omc", "state", "team-bridge", sanitizeName(teamName));
   ensureDirWithMode(dir);
   atomicWriteJson(metaPath, entries);
 }
@@ -4104,9 +4313,12 @@ function removeWorkerWorktree(teamName, workerName, repoRoot) {
     execFileSync3("git", ["branch", "-D", branch], { cwd: repoRoot, stdio: "pipe" });
   } catch {
   }
-  const existing = readMetadata(repoRoot, teamName);
-  const updated = existing.filter((e) => e.workerName !== workerName);
-  writeMetadata(repoRoot, teamName, updated);
+  const metaLockPath = getMetadataPath(repoRoot, teamName) + ".lock";
+  withFileLockSync(metaLockPath, () => {
+    const existing = readMetadata(repoRoot, teamName);
+    const updated = existing.filter((e) => e.workerName !== workerName);
+    writeMetadata(repoRoot, teamName, updated);
+  });
 }
 function cleanupTeamWorktrees(teamName, repoRoot) {
   const entries = readMetadata(repoRoot, teamName);
@@ -4189,12 +4401,12 @@ var init_allocation_policy = __esm({
 });
 
 // src/team/monitor.ts
-import { existsSync as existsSync12 } from "fs";
+import { existsSync as existsSync13 } from "fs";
 import { readFile as readFile7, mkdir as mkdir5 } from "fs/promises";
 import { dirname as dirname10 } from "path";
 async function readJsonSafe3(filePath) {
   try {
-    if (!existsSync12(filePath)) return null;
+    if (!existsSync13(filePath)) return null;
     const raw = await readFile7(filePath, "utf-8");
     return JSON.parse(raw);
   } catch {
@@ -4263,7 +4475,7 @@ async function readWorkerHeartbeat(teamName, workerName, cwd) {
 }
 async function readMonitorSnapshot(teamName, cwd) {
   const p = absPath(cwd, TeamPaths.monitorSnapshot(teamName));
-  if (!existsSync12(p)) return null;
+  if (!existsSync13(p)) return null;
   try {
     const raw = await readFile7(p, "utf-8");
     const parsed = JSON.parse(raw);
@@ -4314,7 +4526,7 @@ async function readShutdownAck(teamName, workerName, cwd, requestedAfter) {
 }
 async function listTasksFromFiles(teamName, cwd) {
   const tasksDir = absPath(cwd, TeamPaths.tasks(teamName));
-  if (!existsSync12(tasksDir)) return [];
+  if (!existsSync13(tasksDir)) return [];
   const { readdir: readdir3 } = await import("fs/promises");
   const entries = await readdir3(tasksDir);
   const tasks = [];
@@ -4376,7 +4588,7 @@ var init_monitor = __esm({
 import { randomUUID as randomUUID5 } from "crypto";
 import { dirname as dirname11 } from "path";
 import { mkdir as mkdir6, readFile as readFile8, appendFile as appendFile3 } from "fs/promises";
-import { existsSync as existsSync13 } from "fs";
+import { existsSync as existsSync14 } from "fs";
 async function appendTeamEvent(teamName, event, cwd) {
   const full = {
     event_id: randomUUID5(),
@@ -4499,8 +4711,8 @@ __export(runtime_v2_exports, {
   writeWatchdogFailedMarker: () => writeWatchdogFailedMarker
 });
 import { execFile as execFile3 } from "child_process";
-import { join as join15, resolve as resolve3 } from "path";
-import { existsSync as existsSync14 } from "fs";
+import { join as join16, resolve as resolve3 } from "path";
+import { existsSync as existsSync15 } from "fs";
 import { mkdir as mkdir7, readdir as readdir2, readFile as readFile9, writeFile as writeFile5 } from "fs/promises";
 import { performance } from "perf_hooks";
 function isRuntimeV2Enabled(env = process.env) {
@@ -4698,15 +4910,7 @@ async function spawnV2Worker(opts) {
     cwd: opts.cwd
   };
   await spawnWorkerInPane(opts.sessionName, paneId, paneConfig);
-  try {
-    await execFileAsync2("tmux", [
-      "select-layout",
-      "-t",
-      opts.sessionName,
-      "main-vertical"
-    ]);
-  } catch {
-  }
+  await applyMainVerticalLayout(opts.sessionName);
   if (!usePromptMode) {
     const paneReady = await waitForPaneReady(paneId);
     if (!paneReady) {
@@ -4814,11 +5018,11 @@ async function startTeamV2(config) {
   }
   await mkdir7(absPath(leaderCwd, TeamPaths.tasks(sanitized)), { recursive: true });
   await mkdir7(absPath(leaderCwd, TeamPaths.workers(sanitized)), { recursive: true });
-  await mkdir7(join15(leaderCwd, ".omc", "state", "team", sanitized, "mailbox"), { recursive: true });
+  await mkdir7(join16(leaderCwd, ".omc", "state", "team", sanitized, "mailbox"), { recursive: true });
   for (let i = 0; i < config.tasks.length; i++) {
     const taskId = String(i + 1);
     const taskFilePath = absPath(leaderCwd, TeamPaths.taskFile(sanitized, taskId));
-    await mkdir7(join15(taskFilePath, ".."), { recursive: true });
+    await mkdir7(join16(taskFilePath, ".."), { recursive: true });
     await writeFile5(taskFilePath, JSON.stringify({
       id: taskId,
       subject: config.tasks[i].subject,
@@ -5009,7 +5213,7 @@ async function writeWatchdogFailedMarker(teamName, cwd, reason) {
     writtenBy: "runtime-v2"
   };
   const root = absPath(cwd, TeamPaths.root(sanitizeTeamName(teamName)));
-  const markerPath = join15(root, "watchdog-failed.json");
+  const markerPath = join16(root, "watchdog-failed.json");
   await mkdir7(root, { recursive: true });
   await writeFile6(markerPath, JSON.stringify(marker, null, 2), "utf-8");
 }
@@ -5036,10 +5240,10 @@ async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd) {
     await writeFile6(sidecarPath, JSON.stringify(sidecar, null, 2), "utf-8");
     const taskPath2 = absPath(cwd, TeamPaths.taskFile(sanitized, task.id));
     try {
-      const { readFileSync: readFileSync10, writeFileSync: writeFileSync3 } = await import("fs");
+      const { readFileSync: readFileSync11, writeFileSync: writeFileSync3 } = await import("fs");
       const { withFileLockSync: withFileLockSync2 } = await Promise.resolve().then(() => (init_file_lock(), file_lock_exports));
       withFileLockSync2(taskPath2 + ".lock", () => {
-        const raw = readFileSync10(taskPath2, "utf-8");
+        const raw = readFileSync11(taskPath2, "utf-8");
         const taskData = JSON.parse(raw);
         if (taskData.status === "in_progress") {
           taskData.status = "pending";
@@ -5375,8 +5579,8 @@ async function resumeTeamV2(teamName, cwd) {
   }
 }
 async function findActiveTeamsV2(cwd) {
-  const root = join15(cwd, ".omc", "state", "team");
-  if (!existsSync14(root)) return [];
+  const root = join16(cwd, ".omc", "state", "team");
+  if (!existsSync15(root)) return [];
   const entries = await readdir2(root, { withFileTypes: true });
   const active = [];
   for (const e of entries) {
@@ -5437,10 +5641,11 @@ var init_runtime_v2 = __esm({
 });
 
 // src/cli/team.ts
+import { randomUUID as randomUUID6 } from "crypto";
 import { spawn } from "child_process";
-import { existsSync as existsSync16, mkdirSync as mkdirSync3, readFileSync as readFileSync9, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync3, readFileSync as readFileSync10, writeFileSync as writeFileSync2 } from "fs";
 import { readFile as readFile10, rm as rm4 } from "fs/promises";
-import { dirname as dirname13, join as join17 } from "path";
+import { dirname as dirname13, join as join18 } from "path";
 import { fileURLToPath as fileURLToPath3 } from "url";
 
 // src/team/api-interop.ts
@@ -5450,8 +5655,8 @@ init_mcp_comm();
 init_tmux_session();
 init_dispatch_queue();
 init_worker_bootstrap();
-import { existsSync as existsSync15, readFileSync as readFileSync8 } from "node:fs";
-import { dirname as dirname12, join as join16, resolve as resolvePath } from "node:path";
+import { existsSync as existsSync16, readFileSync as readFileSync9 } from "node:fs";
+import { dirname as dirname12, join as join17, resolve as resolvePath } from "node:path";
 
 // src/team/runtime.ts
 init_model_contract();
@@ -5460,8 +5665,8 @@ init_tmux_session();
 init_worker_bootstrap();
 init_git_worktree();
 import { mkdir as mkdir4, writeFile as writeFile4, readFile as readFile6, rm as rm3, rename as rename2 } from "fs/promises";
-import { join as join14 } from "path";
-import { existsSync as existsSync11 } from "fs";
+import { join as join15 } from "path";
+import { existsSync as existsSync12 } from "fs";
 
 // src/team/task-file-ops.ts
 init_paths();
@@ -5469,16 +5674,16 @@ init_tmux_session();
 init_fs_utils();
 init_platform();
 init_state_paths();
-import { readFileSync as readFileSync7, readdirSync as readdirSync3, existsSync as existsSync10, openSync as openSync4, closeSync as closeSync4, unlinkSync as unlinkSync4, writeSync as writeSync4, statSync as statSync3, constants as fsConstants2 } from "fs";
-import { join as join13 } from "path";
+import { readFileSync as readFileSync8, readdirSync as readdirSync3, existsSync as existsSync11, openSync as openSync4, closeSync as closeSync4, unlinkSync as unlinkSync4, writeSync as writeSync4, statSync as statSync3, constants as fsConstants2 } from "fs";
+import { join as join14 } from "path";
 
 // src/team/runtime.ts
 function stateRoot(cwd, teamName) {
   validateTeamName(teamName);
-  return join14(cwd, `.omc/state/team/${teamName}`);
+  return join15(cwd, `.omc/state/team/${teamName}`);
 }
 async function writeJson(filePath, data) {
-  await mkdir4(join14(filePath, ".."), { recursive: true });
+  await mkdir4(join15(filePath, ".."), { recursive: true });
   await writeFile4(filePath, JSON.stringify(data, null, 2), "utf-8");
 }
 async function readJsonSafe2(filePath) {
@@ -5508,7 +5713,7 @@ async function readJsonSafe2(filePath) {
   return null;
 }
 function taskPath(root, taskId) {
-  return join14(root, "tasks", `${taskId}.json`);
+  return join15(root, "tasks", `${taskId}.json`);
 }
 async function readTask(root, taskId) {
   return readJsonSafe2(taskPath(root, taskId));
@@ -5521,9 +5726,9 @@ async function monitorTeam(teamName, cwd, workerPaneIds) {
   const taskCounts = { pending: 0, inProgress: 0, completed: 0, failed: 0 };
   try {
     const { readdir: readdir3 } = await import("fs/promises");
-    const taskFiles = await readdir3(join14(root, "tasks"));
+    const taskFiles = await readdir3(join15(root, "tasks"));
     for (const f of taskFiles.filter((f2) => f2.endsWith(".json"))) {
-      const task = await readJsonSafe2(join14(root, "tasks", f));
+      const task = await readJsonSafe2(join15(root, "tasks", f));
       if (task?.status === "pending") taskCounts.pending++;
       else if (task?.status === "in_progress") taskCounts.inProgress++;
       else if (task?.status === "completed") taskCounts.completed++;
@@ -5539,7 +5744,7 @@ async function monitorTeam(teamName, cwd, workerPaneIds) {
     const wName = `worker-${i + 1}`;
     const paneId = workerPaneIds[i];
     const alive = await isWorkerAlive(paneId);
-    const heartbeatPath = join14(root, "workers", wName, "heartbeat.json");
+    const heartbeatPath = join15(root, "workers", wName, "heartbeat.json");
     const heartbeat = await readJsonSafe2(heartbeatPath);
     let stalled = false;
     if (heartbeat?.updatedAt) {
@@ -5581,11 +5786,11 @@ async function monitorTeam(teamName, cwd, workerPaneIds) {
 }
 async function shutdownTeam(teamName, sessionName2, cwd, timeoutMs = 3e4, workerPaneIds, leaderPaneId, ownsWindow) {
   const root = stateRoot(cwd, teamName);
-  await writeJson(join14(root, "shutdown.json"), {
+  await writeJson(join15(root, "shutdown.json"), {
     requestedAt: (/* @__PURE__ */ new Date()).toISOString(),
     teamName
   });
-  const configData = await readJsonSafe2(join14(root, "config.json"));
+  const configData = await readJsonSafe2(join15(root, "config.json"));
   const CLI_AGENT_TYPES = /* @__PURE__ */ new Set(["claude", "codex", "gemini"]);
   const agentTypes = configData?.agentTypes ?? [];
   const isCliWorkerTeam = agentTypes.length > 0 && agentTypes.every((t) => CLI_AGENT_TYPES.has(t));
@@ -5595,8 +5800,8 @@ async function shutdownTeam(teamName, sessionName2, cwd, timeoutMs = 3e4, worker
     const expectedAcks = Array.from({ length: workerCount }, (_, i) => `worker-${i + 1}`);
     while (Date.now() < deadline && expectedAcks.length > 0) {
       for (const wName of [...expectedAcks]) {
-        const ackPath = join14(root, "workers", wName, "shutdown-ack.json");
-        if (existsSync11(ackPath)) {
+        const ackPath = join15(root, "workers", wName, "shutdown-ack.json");
+        if (existsSync12(ackPath)) {
           expectedAcks.splice(expectedAcks.indexOf(wName), 1);
         }
       }
@@ -5619,7 +5824,7 @@ async function shutdownTeam(teamName, sessionName2, cwd, timeoutMs = 3e4, worker
 }
 async function resumeTeam(teamName, cwd) {
   const root = stateRoot(cwd, teamName);
-  const configData = await readJsonSafe2(join14(root, "config.json"));
+  const configData = await readJsonSafe2(join15(root, "config.json"));
   if (!configData) return null;
   const { execFile: execFile4 } = await import("child_process");
   const { promisify: promisify3 } = await import("util");
@@ -5728,8 +5933,8 @@ function parseValidatedTaskIdArray(value, fieldName) {
 }
 function teamStateExists(teamName, candidateCwd) {
   if (!TEAM_NAME_SAFE_PATTERN.test(teamName)) return false;
-  const teamRoot = join16(candidateCwd, ".omc", "state", "team", teamName);
-  return existsSync15(join16(teamRoot, "config.json")) || existsSync15(join16(teamRoot, "tasks")) || existsSync15(teamRoot);
+  const teamRoot = join17(candidateCwd, ".omc", "state", "team", teamName);
+  return existsSync16(join17(teamRoot, "config.json")) || existsSync16(join17(teamRoot, "tasks")) || existsSync16(teamRoot);
 }
 function parseTeamWorkerEnv(raw) {
   if (typeof raw !== "string" || raw.trim() === "") return null;
@@ -5770,9 +5975,9 @@ async function executeTeamCleanupViaRuntime(teamName, cwd) {
   await teamCleanup(teamName, cwd);
 }
 function readTeamStateRootFromFile(path4) {
-  if (!existsSync15(path4)) return null;
+  if (!existsSync16(path4)) return null;
   try {
-    const parsed = JSON.parse(readFileSync8(path4, "utf8"));
+    const parsed = JSON.parse(readFileSync9(path4, "utf8"));
     return typeof parsed.team_state_root === "string" && parsed.team_state_root.trim() !== "" ? parsed.team_state_root.trim() : null;
   } catch {
     return null;
@@ -5800,16 +6005,16 @@ function stateRootToWorkingDirectory(stateRoot2) {
   return dirname12(dirname12(absolute));
 }
 function resolveTeamWorkingDirectoryFromMetadata(teamName, candidateCwd, workerContext) {
-  const teamRoot = join16(candidateCwd, ".omc", "state", "team", teamName);
-  if (!existsSync15(teamRoot)) return null;
+  const teamRoot = join17(candidateCwd, ".omc", "state", "team", teamName);
+  if (!existsSync16(teamRoot)) return null;
   if (workerContext?.teamName === teamName) {
-    const workerRoot = readTeamStateRootFromFile(join16(teamRoot, "workers", workerContext.workerName, "identity.json"));
+    const workerRoot = readTeamStateRootFromFile(join17(teamRoot, "workers", workerContext.workerName, "identity.json"));
     if (workerRoot) return stateRootToWorkingDirectory(workerRoot);
   }
-  const fromConfig = readTeamStateRootFromFile(join16(teamRoot, "config.json"));
+  const fromConfig = readTeamStateRootFromFile(join17(teamRoot, "config.json"));
   if (fromConfig) return stateRootToWorkingDirectory(fromConfig);
   for (const manifestName of ["manifest.json", "manifest.v2.json"]) {
-    const fromManifest = readTeamStateRootFromFile(join16(teamRoot, manifestName));
+    const fromManifest = readTeamStateRootFromFile(join17(teamRoot, manifestName));
     if (fromManifest) return stateRootToWorkingDirectory(fromManifest);
   }
   return null;
@@ -6390,7 +6595,7 @@ init_team_name();
 init_monitor();
 init_platform();
 init_paths();
-var JOB_ID_PATTERN = /^omc-[a-z0-9]{1,12}$/;
+var JOB_ID_PATTERN = /^omc-[a-z0-9]{1,16}$/;
 var VALID_CLI_AGENT_TYPES = /* @__PURE__ */ new Set(["claude", "codex", "gemini"]);
 var SUBCOMMANDS = /* @__PURE__ */ new Set(["start", "status", "wait", "cleanup", "resume", "shutdown", "api", "help", "--help", "-h"]);
 var SUPPORTED_API_OPERATIONS = /* @__PURE__ */ new Set([
@@ -6458,24 +6663,24 @@ function resolveRuntimeCliPath(env = process.env) {
     return env.OMC_RUNTIME_CLI_PATH;
   }
   const moduleDir = dirname13(fileURLToPath3(import.meta.url));
-  return join17(moduleDir, "../../bridge/runtime-cli.cjs");
+  return join18(moduleDir, "../../bridge/runtime-cli.cjs");
 }
 function ensureJobsDir(jobsDir) {
-  if (!existsSync16(jobsDir)) {
+  if (!existsSync17(jobsDir)) {
     mkdirSync3(jobsDir, { recursive: true });
   }
 }
 function jobPath(jobsDir, jobId) {
-  return join17(jobsDir, `${jobId}.json`);
+  return join18(jobsDir, `${jobId}.json`);
 }
 function resultArtifactPath(jobsDir, jobId) {
-  return join17(jobsDir, `${jobId}-result.json`);
+  return join18(jobsDir, `${jobId}-result.json`);
 }
 function panesArtifactPath(jobsDir, jobId) {
-  return join17(jobsDir, `${jobId}-panes.json`);
+  return join18(jobsDir, `${jobId}-panes.json`);
 }
 function teamStateRoot2(cwd, teamName) {
-  return join17(cwd, ".omc", "state", "team", teamName);
+  return join18(cwd, ".omc", "state", "team", teamName);
 }
 function validateJobId(jobId) {
   if (!JOB_ID_PATTERN.test(jobId)) {
@@ -6491,7 +6696,7 @@ function parseJsonSafe(content) {
 }
 function readJobFromDisk(jobId, jobsDir) {
   try {
-    const content = readFileSync9(jobPath(jobsDir, jobId), "utf-8");
+    const content = readFileSync10(jobPath(jobsDir, jobId), "utf-8");
     return parseJsonSafe(content);
   } catch {
     return null;
@@ -6516,11 +6721,11 @@ function buildStatus(jobId, job) {
   };
 }
 function generateJobId(now = Date.now()) {
-  return `omc-${now.toString(36)}`;
+  return `omc-${now.toString(36)}${randomUUID6().slice(0, 8)}`;
 }
 function convergeWithResultArtifact(jobId, job, jobsDir) {
   try {
-    const artifactRaw = readFileSync9(resultArtifactPath(jobsDir, jobId), "utf-8");
+    const artifactRaw = readFileSync10(resultArtifactPath(jobsDir, jobId), "utf-8");
     const artifactParsed = parseJsonSafe(artifactRaw);
     if (artifactParsed?.status === "completed" || artifactParsed?.status === "failed") {
       return {
@@ -7330,6 +7535,7 @@ export {
   TEAM_USAGE,
   cleanupTeamJob,
   executeTeamApiOperation2 as executeTeamApiOperation,
+  generateJobId,
   getTeamJobStatus,
   main,
   startTeamJob,

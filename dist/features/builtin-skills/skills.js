@@ -16,6 +16,7 @@ import { rewriteOmcCliInvocations } from '../../utils/omc-cli-rendering.js';
 import { parseSkillPipelineMetadata, renderSkillPipelineGuidance } from '../../utils/skill-pipeline.js';
 import { renderSkillResourcesGuidance } from '../../utils/skill-resources.js';
 import { renderSkillRuntimeGuidance } from './runtime-guidance.js';
+import { isSkininthegamebrosUser } from '../../utils/skininthegamebros-user.js';
 function getPackageDir() {
     if (typeof __dirname !== 'undefined' && __dirname) {
         const currentDirName = basename(__dirname);
@@ -56,6 +57,12 @@ const CC_NATIVE_COMMANDS = new Set([
     'clear',
     'compact',
     'memory',
+]);
+const SKININTHEGAMEBROS_ONLY_SKILLS = new Set([
+    'remember',
+    'verify',
+    'debug',
+    'skillify',
 ]);
 function toSafeSkillName(name) {
     const normalized = name.trim();
@@ -128,6 +135,9 @@ function loadSkillsFromDirectory() {
         for (const entry of entries) {
             if (!entry.isDirectory())
                 continue;
+            if (SKININTHEGAMEBROS_ONLY_SKILLS.has(entry.name) && !isSkininthegamebrosUser()) {
+                continue;
+            }
             const skillPath = join(SKILLS_DIR, entry.name, 'SKILL.md');
             if (existsSync(skillPath)) {
                 const skillEntries = loadSkillFromFile(skillPath, entry.name);

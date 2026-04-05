@@ -12,9 +12,10 @@
 import { existsSync, readFileSync, unlinkSync, statSync, openSync, readSync, closeSync, mkdirSync } from 'fs';
 import { atomicWriteJsonSync } from '../../lib/atomic-write.js';
 import { join } from 'path';
+import { getHardMaxIterations } from '../../lib/security-config.js';
 import { getClaudeConfigDir, getGlobalOmcConfigCandidates } from '../../utils/paths.js';
 import { readUltraworkState, writeUltraworkState, incrementReinforcement, deactivateUltrawork, getUltraworkPersistenceMessage } from '../ultrawork/index.js';
-import { resolveToWorktreeRoot, resolveSessionStatePath, getOmcRoot } from '../../lib/worktree-paths.js';
+import { resolveToWorktreeRoot, resolveSessionStatePath, resolveStatePath, getOmcRoot } from '../../lib/worktree-paths.js';
 import { readModeState } from '../../lib/mode-state-io.js';
 import { readRalphState, writeRalphState, incrementRalphIteration, clearRalphState, getPrdCompletionStatus, getRalphContext, readVerificationState, startVerification, recordArchitectFeedback, getArchitectVerificationPrompt, getArchitectRejectionContinuationPrompt, detectArchitectApproval, detectArchitectRejection, clearVerificationState, } from '../ralph/index.js';
 import { checkIncompleteTodos, getNextPendingTodo, isUserAbort, isContextLimitStop, isRateLimitStop, isExplicitCancelCommand, isAuthenticationError } from '../todo-continuation/index.js';
@@ -28,6 +29,9 @@ const MAX_TODO_CONTINUATION_ATTEMPTS = 5;
 const CANCEL_SIGNAL_TTL_MS = 30_000;
 /** Track todo-continuation attempts per session to prevent infinite loops */
 const todoContinuationAttempts = new Map();
+export function shouldWriteStateBack(statePath) {
+    return Boolean(statePath && existsSync(statePath));
+}
 /**
  * Check whether this session is in an explicit cancel window.
  * Used to prevent stop-hook re-enforcement races during /cancel.
@@ -346,6 +350,9 @@ function checkArchitectRejectionInTranscript(sessionId) {
 async function checkRalphLoop(sessionId, directory, cancelInProgress) {
     const workingDir = resolveToWorktreeRoot(directory);
     const state = readRalphState(workingDir, sessionId);
+    const ralphStatePath = sessionId
+        ? resolveSessionStatePath('ralph', sessionId, workingDir)
+        : resolveStatePath('ralph', workingDir);
     if (!state || !state.active) {
         return null;
     }
@@ -496,10 +503,35 @@ async function checkRalphLoop(sessionId, directory, cancelInProgress) {
     }
     // Check max iterations (cancel already checked at function entry via cached flag)
     if (state.iteration >= state.max_iterations) {
-        // Do not silently stop Ralph with unfinished work.
+        const hardMax = getHardMaxIterations();
+        if (hardMax > 0 && state.max_iterations >= hardMax) {
+            // Hard limit reached — auto-disable to prevent unbounded execution
+            state.active = false;
+            if (!shouldWriteStateBack(ralphStatePath)) {
+                return {
+                    shouldBlock: false,
+                    message: '',
+                    mode: 'none'
+                };
+            }
+            writeRalphState(workingDir, state, sessionId);
+            return {
+                shouldBlock: true,
+                message: `[RALPH - HARD LIMIT] Reached hard max iterations (${hardMax}). Mode auto-disabled. Restart with /oh-my-claudecode:ralph if needed.`,
+                mode: 'ralph',
+                metadata: { iteration: state.iteration, maxIterations: state.max_iterations }
+            };
+        }
         // Extend the limit and continue enforcement so user-visible cancellation
         // remains the only explicit termination path.
         state.max_iterations += 10;
+        if (!shouldWriteStateBack(ralphStatePath)) {
+            return {
+                shouldBlock: false,
+                message: '',
+                mode: 'none'
+            };
+        }
         writeRalphState(workingDir, state, sessionId);
     }
     // Read tool error before generating message

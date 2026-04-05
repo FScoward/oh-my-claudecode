@@ -4,6 +4,7 @@ import { createBuiltinSkills, getBuiltinSkill, listBuiltinSkillNames, clearSkill
 describe('Builtin Skills', () => {
   const originalPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   const originalPath = process.env.PATH;
+  const originalUserType = process.env.USER_TYPE;
 
   // Clear cache before each test to ensure fresh loads
   beforeEach(() => {
@@ -16,6 +17,11 @@ describe('Builtin Skills', () => {
       delete process.env.PATH;
     } else {
       process.env.PATH = originalPath;
+    }
+    if (originalUserType === undefined) {
+      delete process.env.USER_TYPE;
+    } else {
+      process.env.USER_TYPE = originalUserType;
     }
     clearSkillsCache();
   });
@@ -31,14 +37,19 @@ describe('Builtin Skills', () => {
     } else {
       process.env.PATH = originalPath;
     }
+    if (originalUserType === undefined) {
+      delete process.env.USER_TYPE;
+    } else {
+      process.env.USER_TYPE = originalUserType;
+    }
     clearSkillsCache();
   });
 
   describe('createBuiltinSkills()', () => {
-    it('should return correct number of skills (31 canonical + 1 alias)', () => {
+    it('should return correct number of skills (32 canonical + 1 alias)', () => {
       const skills = createBuiltinSkills();
-      // 32 entries: 31 canonical skills + 1 deprecated alias (psm)
-      expect(skills).toHaveLength(32);
+      // 33 entries: 32 canonical skills + 1 deprecated alias (psm)
+      expect(skills).toHaveLength(33);
     });
 
     it('should return an array of BuiltinSkill objects', () => {
@@ -112,6 +123,7 @@ describe('Builtin Skills', () => {
         'ralplan',
         'release',
         'sciomc',
+        'self-improve',
         'setup',
         'skill',
         'team',
@@ -329,7 +341,7 @@ describe('Builtin Skills', () => {
     it('should return canonical skill names by default', () => {
       const names = listBuiltinSkillNames();
 
-      expect(names).toHaveLength(31);
+      expect(names).toHaveLength(32);
       expect(names).toContain('ai-slop-cleaner');
       expect(names).toContain('ask');
       expect(names).toContain('autopilot');
@@ -363,7 +375,7 @@ describe('Builtin Skills', () => {
       const names = listBuiltinSkillNames({ includeAliases: true });
 
       // swarm alias removed in #1131, psm still exists
-      expect(names).toHaveLength(32);
+      expect(names).toHaveLength(33);
       expect(names).toContain('ai-slop-cleaner');
       expect(names).toContain('trace');
       expect(names).toContain('visual-verdict');
@@ -391,6 +403,29 @@ describe('Builtin Skills', () => {
 
     it('should not return a skill for "clear" via getBuiltinSkill', () => {
       expect(getBuiltinSkill('clear')).toBeUndefined();
+    });
+  });
+
+  describe('skininthegamebros-only builtin skills', () => {
+    it('keeps skininthegamebros-only skills hidden by default', () => {
+      const names = listBuiltinSkillNames({ includeAliases: true });
+      expect(names).not.toContain('remember');
+      expect(names).not.toContain('verify');
+      expect(names).not.toContain('debug');
+      expect(names).not.toContain('skillify');
+    });
+
+    it('surfaces skininthegamebros-only skills when USER_TYPE=ant', () => {
+      process.env.USER_TYPE = 'ant';
+      clearSkillsCache();
+
+      const names = listBuiltinSkillNames({ includeAliases: true });
+      expect(names).toContain('remember');
+      expect(names).toContain('verify');
+      expect(names).toContain('debug');
+      expect(names).toContain('skillify');
+      expect(names).not.toContain('stuck');
+      expect(names).not.toContain('lorem-ipsum');
     });
   });
 

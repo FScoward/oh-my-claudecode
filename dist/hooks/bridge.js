@@ -26,6 +26,7 @@ import { normalizeHookInput } from "./bridge-normalize.js";
 import { addBackgroundTask, completeBackgroundTask, completeMostRecentMatchingBackgroundTask, getRunningTaskCount, remapBackgroundTaskId, remapMostRecentMatchingBackgroundTaskId, } from "../hud/background-tasks.js";
 import { readHudState, writeHudState } from "../hud/state.js";
 import { compactOmcStartupGuidance, loadConfig } from "../config/loader.js";
+import { activatePromptPrerequisiteState, buildPromptPrerequisiteDenyReason, buildPromptPrerequisiteReminder, clearPromptPrerequisiteState, getPromptPrerequisiteConfig, isPromptPrerequisiteBlockingTool, parsePromptPrerequisiteSections, readPromptPrerequisiteState, recordPromptPrerequisiteProgress, shouldEnforcePromptPrerequisites, } from "./prompt-prerequisites/index.js";
 import { resolveAutopilotPlanPath, resolveOpenQuestionsPlanPath, } from "../config/plan-output.js";
 import { writeSkillActiveState } from "./skill-state/index.js";
 import { ULTRAWORK_MESSAGE, ULTRATHINK_MESSAGE, SEARCH_MESSAGE, ANALYZE_MESSAGE, TDD_MESSAGE, CODE_REVIEW_MESSAGE, SECURITY_REVIEW_MESSAGE, RALPH_MESSAGE, PROMPT_TRANSLATION_MESSAGE, } from "../installer/hooks.js";
@@ -38,7 +39,7 @@ import { getBackgroundBashPermissionFallback, getBackgroundTaskPermissionFallbac
 import { wrapUntrustedFileContent } from "../agents/prompt-helpers.js";
 const PKILL_F_FLAG_PATTERN = /\bpkill\b.*\s-f\b/;
 const PKILL_FULL_FLAG_PATTERN = /\bpkill\b.*--full\b/;
-const WORKER_BLOCKED_TMUX_PATTERN = /\btmux\s+(split-window|new-session|new-window|join-pane)\b/i;
+const WORKER_BLOCKED_TMUX_PATTERN = /\btmux\s+(split-window|new-session|new-window|join-pane|send-keys)\b/i;
 const WORKER_BLOCKED_TEAM_CLI_PATTERN = /\bom[cx]\s+team\b(?!\s+api\b)/i;
 const WORKER_BLOCKED_SKILL_PATTERN = /\$(team|ultrawork|autopilot|ralph)\b/i;
 const TEAM_TERMINAL_VALUES = new Set([
@@ -446,6 +447,7 @@ async function processKeywordDetector(input) {
     // Load config for task-size detection settings
     const config = loadConfig();
     const taskSizeConfig = config.taskSizeDetection ?? {};
+    const promptPrerequisiteConfig = getPromptPrerequisiteConfig(config);
     // Get all keywords with optional task-size filtering (issue #790)
     const sizeCheckResult = getAllKeywordsWithSizeCheck(cleanedText, {
         enabled: taskSizeConfig.enabled !== false,
@@ -487,6 +489,17 @@ async function processKeywordDetector(input) {
                 `Prefix with \`quick:\`, \`simple:\`, or \`tiny:\` to always use lightweight mode. ` +
                 `Use explicit mode keywords (e.g. \`ralph\`) only when you need full orchestration.`);
         }
+    }
+    const promptPrerequisiteParse = parsePromptPrerequisiteSections(promptText, promptPrerequisiteConfig);
+    const executionKeywords = fullKeywords.filter((keywordType) => promptPrerequisiteConfig.executionKeywords.includes(keywordType));
+    if (shouldEnforcePromptPrerequisites(executionKeywords, promptPrerequisiteParse, promptPrerequisiteConfig)) {
+        const state = activatePromptPrerequisiteState(directory, sessionId, executionKeywords, promptPrerequisiteParse);
+        if (state) {
+            messages.push(buildPromptPrerequisiteReminder(state));
+        }
+    }
+    else if (executionKeywords.length > 0) {
+        clearPromptPrerequisiteState(directory, sessionId);
     }
     const sanitizedText = sanitizeForKeywordDetection(cleanedText);
     if (NON_LATIN_SCRIPT_PATTERN.test(sanitizedText)) {
@@ -1000,6 +1013,7 @@ export const _openclaw = {
 function processPreToolUse(input) {
     const directory = resolveToWorktreeRoot(input.directory);
     const teamWorkerIdentity = teamWorkerIdentityFromEnv();
+    const promptPrerequisiteConfig = getPromptPrerequisiteConfig(loadConfig());
     if (teamWorkerIdentity) {
         if (input.toolName === "Task") {
             return {
@@ -1047,6 +1061,22 @@ function processPreToolUse(input) {
         ? [enforcementResult.message]
         : [];
     let modifiedToolInput;
+    const promptPrerequisiteProgress = recordPromptPrerequisiteProgress(directory, input.sessionId, input.toolName, input.toolInput);
+    if (promptPrerequisiteProgress?.isComplete) {
+        preToolMessages.push("[PROMPT PREREQUISITES COMPLETE] Required context tools/files were read. Editing and agent delegation are unblocked.");
+    }
+    const promptPrerequisiteState = readPromptPrerequisiteState(directory, input.sessionId);
+    if (promptPrerequisiteState?.active
+        && isPromptPrerequisiteBlockingTool(input.toolName, promptPrerequisiteConfig)) {
+        return {
+            continue: true,
+            hookSpecificOutput: {
+                hookEventName: "PreToolUse",
+                permissionDecision: "deny",
+                permissionDecisionReason: buildPromptPrerequisiteDenyReason(promptPrerequisiteState, input.toolName),
+            },
+        };
+    }
     // Force-inherit: deny Task/Agent calls that carry a `model` parameter when
     // forceInherit is enabled (Bedrock, Vertex, CC Switch, etc.).
     // Claude Code's hook protocol does not support modifiedInput, so we cannot
@@ -1333,8 +1363,17 @@ async function processPostToolUse(input) {
         }
         // Clear skill-active state on skill completion to prevent false-blocking.
         // Without this, every non-'none' skill falsely blocks stops until TTL expires.
-        const { clearSkillActiveState } = await import("./skill-state/index.js");
-        clearSkillActiveState(directory, input.sessionId);
+        // Guard: only clear if the completing skill owns the active state.
+        // When a parent skill (e.g. omc-setup) invokes a child skill (e.g. mcp-setup),
+        // the child's PostToolUse fires first — we must not delete the parent's state.
+        const { clearSkillActiveState, readSkillActiveState } = await import("./skill-state/index.js");
+        const currentState = readSkillActiveState(directory, input.sessionId);
+        const completingSkill = (getInvokedSkillName(input.toolInput) ?? "")
+            .toLowerCase()
+            .replace(/^oh-my-claudecode:/, "");
+        if (!currentState || !currentState.active || currentState.skill_name === completingSkill) {
+            clearSkillActiveState(directory, input.sessionId);
+        }
     }
     // Run orchestrator post-tool processing (remember tags, verification reminders, etc.)
     const orchestratorResult = processOrchestratorPostTool({

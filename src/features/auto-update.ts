@@ -25,6 +25,7 @@ import {
 import { getConfigDir } from '../utils/config-dir.js';
 import { purgeStalePluginCacheVersions } from '../utils/paths.js';
 import type { NotificationConfig } from '../notifications/types.js';
+import { isAutoUpdateDisabled } from '../lib/security-config.js';
 
 /** GitHub repository information */
 export const REPO_OWNER = 'Yeachan-Heo';
@@ -400,7 +401,8 @@ export function getOMCConfig(): OMCConfig {
  * Check if silent auto-updates are enabled
  */
 export function isSilentAutoUpdateEnabled(): boolean {
-  return false;
+  if (isAutoUpdateDisabled()) return false;
+  return getOMCConfig().silentAutoUpdate;
 }
 
 /**
@@ -648,7 +650,10 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
 export function reconcileUpdateRuntime(options?: { verbose?: boolean; skipGracePeriod?: boolean }): UpdateReconcileResult {
   const errors: string[] = [];
 
+  const runningAsPlugin = isRunningAsPlugin();
   const projectScopedPlugin = isProjectScopedPlugin();
+  const shouldRefreshPluginHooks = runningAsPlugin && !projectScopedPlugin;
+
   if (!projectScopedPlugin) {
     try {
       if (!existsSync(HOOKS_DIR)) {
@@ -665,8 +670,8 @@ export function reconcileUpdateRuntime(options?: { verbose?: boolean; skipGraceP
       force: true,
       verbose: options?.verbose ?? false,
       skipClaudeCheck: true,
-      forceHooks: true,
-      refreshHooksInPlugin: !projectScopedPlugin,
+      forceHooks: shouldRefreshPluginHooks,
+      refreshHooksInPlugin: shouldRefreshPluginHooks,
     });
 
     if (!installResult.success) {

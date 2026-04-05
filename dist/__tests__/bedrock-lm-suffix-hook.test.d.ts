@@ -12,7 +12,13 @@
  *     ANTHROPIC_MODEL='global.anthropic.claude-sonnet-4-6[1m]' \
  *     OMC_ROUTING_FORCE_INHERIT=true \
  *     node scripts/pre-tool-enforcer.mjs
- *   → expect: deny with [1m] suffix guidance and OMC_SUBAGENT_MODEL mention
+ *   → expect: continue (stripped ID is provider-specific — inheritance is safe)
+ *
+ *   echo '{"tool_name":"Agent","toolInput":{},"cwd":"/tmp"}' | \
+ *     ANTHROPIC_MODEL='claude-sonnet-4-6[1m]' \
+ *     OMC_ROUTING_FORCE_INHERIT=true \
+ *     node scripts/pre-tool-enforcer.mjs
+ *   → expect: deny (stripped ID is a bare Anthropic model ID, invalid on Bedrock)
  *
  *   echo '{"tool_name":"Agent","toolInput":{"model":"us.anthropic.claude-sonnet-4-5-20250929-v1:0"},"cwd":"/tmp"}' | \
  *     ANTHROPIC_MODEL='global.anthropic.claude-sonnet-4-6[1m]' \

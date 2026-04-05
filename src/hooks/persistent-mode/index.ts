@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, unlinkSync, statSync, openSync, readSync, closeSync, mkdirSync } from 'fs';
 import { atomicWriteJsonSync } from '../../lib/atomic-write.js';
 import { join } from 'path';
+import { getHardMaxIterations } from '../../lib/security-config.js';
 import { getClaudeConfigDir, getGlobalOmcConfigCandidates } from '../../utils/paths.js';
 import {
   readUltraworkState,
@@ -22,7 +23,7 @@ import {
   getUltraworkPersistenceMessage,
   type UltraworkState
 } from '../ultrawork/index.js';
-import { resolveToWorktreeRoot, resolveSessionStatePath, getOmcRoot } from '../../lib/worktree-paths.js';
+import { resolveToWorktreeRoot, resolveSessionStatePath, resolveStatePath, getOmcRoot } from '../../lib/worktree-paths.js';
 import { readModeState } from '../../lib/mode-state-io.js';
 import {
   readRalphState,
@@ -85,6 +86,10 @@ const CANCEL_SIGNAL_TTL_MS = 30_000;
 
 /** Track todo-continuation attempts per session to prevent infinite loops */
 const todoContinuationAttempts = new Map<string, number>();
+
+export function shouldWriteStateBack(statePath: string | null | undefined): boolean {
+  return Boolean(statePath && existsSync(statePath));
+}
 
 /**
  * Check whether this session is in an explicit cancel window.
@@ -435,6 +440,9 @@ async function checkRalphLoop(
 ): Promise<PersistentModeResult | null> {
   const workingDir = resolveToWorktreeRoot(directory);
   const state = readRalphState(workingDir, sessionId);
+  const ralphStatePath = sessionId
+    ? resolveSessionStatePath('ralph', sessionId, workingDir)
+    : resolveStatePath('ralph', workingDir);
 
   if (!state || !state.active) {
     return null;
@@ -606,10 +614,35 @@ async function checkRalphLoop(
 
   // Check max iterations (cancel already checked at function entry via cached flag)
   if (state.iteration >= state.max_iterations) {
-    // Do not silently stop Ralph with unfinished work.
+    const hardMax = getHardMaxIterations();
+    if (hardMax > 0 && state.max_iterations >= hardMax) {
+      // Hard limit reached — auto-disable to prevent unbounded execution
+      state.active = false;
+      if (!shouldWriteStateBack(ralphStatePath)) {
+        return {
+          shouldBlock: false,
+          message: '',
+          mode: 'none'
+        };
+      }
+      writeRalphState(workingDir, state, sessionId);
+      return {
+        shouldBlock: true,
+        message: `[RALPH - HARD LIMIT] Reached hard max iterations (${hardMax}). Mode auto-disabled. Restart with /oh-my-claudecode:ralph if needed.`,
+        mode: 'ralph',
+        metadata: { iteration: state.iteration, maxIterations: state.max_iterations }
+      };
+    }
     // Extend the limit and continue enforcement so user-visible cancellation
     // remains the only explicit termination path.
     state.max_iterations += 10;
+    if (!shouldWriteStateBack(ralphStatePath)) {
+      return {
+        shouldBlock: false,
+        message: '',
+        mode: 'none'
+      };
+    }
     writeRalphState(workingDir, state, sessionId);
   }
 

@@ -40,8 +40,8 @@ describe('keyword-detector packaged artifacts', () => {
         for (const [prompt, expected] of [
             ['tdd implement password validation', '[TDD MODE ACTIVATED]'],
             ['deep-analyze the test failure', 'ANALYSIS MODE'],
-            ['deep interview me about requirements', 'oh-my-claudecode:deep-interview'],
-            ['deslop this module with duplicate dead code', 'oh-my-claudecode:ai-slop-cleaner'],
+            ['deep interview me about requirements', '[MAGIC KEYWORD: DEEP-INTERVIEW]'],
+            ['deslop this module with duplicate dead code', '[MAGIC KEYWORD: AI-SLOP-CLEANER]'],
         ]) {
             const templateResult = JSON.stringify(runKeywordHook(templatePath, prompt));
             const pluginResult = JSON.stringify(runKeywordHook(pluginPath, prompt));
@@ -58,8 +58,8 @@ describe('keyword-detector packaged artifacts', () => {
         const pluginPositive = JSON.stringify(runKeywordHook(pluginPath, positivePrompt));
         const templateNegative = runKeywordHook(templatePath, negativePrompt);
         const pluginNegative = runKeywordHook(pluginPath, negativePrompt);
-        expect(templatePositive).toContain('oh-my-claudecode:ai-slop-cleaner');
-        expect(pluginPositive).toContain('oh-my-claudecode:ai-slop-cleaner');
+        expect(templatePositive).toContain('[MAGIC KEYWORD: AI-SLOP-CLEANER]');
+        expect(pluginPositive).toContain('[MAGIC KEYWORD: AI-SLOP-CLEANER]');
         expect(templateNegative).toEqual({ continue: true, suppressOutput: true });
         expect(pluginNegative).toEqual({ continue: true, suppressOutput: true });
     });
@@ -78,7 +78,7 @@ describe('keyword-detector packaged artifacts', () => {
         const fakeHome = mkdtempSync(join(tmpdir(), 'keyword-hook-home-'));
         try {
             for (const [scriptPath, statePath] of [
-                [templatePath, join(tempDir, '.omc', 'state', 'ralph-state.json')],
+                [templatePath, join(tempDir, '.omc', 'state', 'sessions', 'hook-session', 'ralph-state.json')],
                 [pluginPath, join(tempDir, '.omc', 'state', 'sessions', 'hook-session', 'ralph-state.json')],
             ]) {
                 execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });

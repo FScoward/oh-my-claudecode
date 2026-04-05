@@ -8,6 +8,7 @@ import { readdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { loadAgentPrompt } from './utils.js';
+import { appendSkininthegamebrosGuidance } from './skininthegamebros-guidance.js';
 /**
  * Get the package root directory.
  * Handles both ESM (import.meta.url) and CJS bundle (__dirname) contexts.
@@ -32,6 +33,10 @@ function getPackageDir() {
     try {
         const __filename = fileURLToPath(import.meta.url);
         const __dirname = dirname(__filename);
+        const currentDirName = basename(__dirname);
+        if (currentDirName === 'bridge') {
+            return join(__dirname, '..');
+        }
         // From src/agents/ or dist/agents/ go up to package root
         return join(__dirname, '..', '..');
     }
@@ -116,7 +121,7 @@ export function resolveSystemPrompt(systemPrompt, agentRole) {
             console.warn(`[prompt-injection] Agent role "${role}" prompt not found, skipping injection`);
             return undefined;
         }
-        return prompt;
+        return appendSkininthegamebrosGuidance(prompt, 'agent');
     }
     return undefined;
 }

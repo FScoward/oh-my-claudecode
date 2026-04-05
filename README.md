@@ -19,6 +19,29 @@ _Don't learn Claude Code. Just use OMC._
 
 ---
 
+## Core Maintainers
+
+| Role | Name | GitHub |
+| --- | --- | --- |
+| Creator & Lead | Yeachan Heo | [@Yeachan-Heo](https://github.com/Yeachan-Heo) |
+| Maintainer | HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
+
+## Ambassadors
+
+| Name | GitHub |
+| --- | --- |
+| Sigrid Jin | [@sigridjineth](https://github.com/sigridjineth) |
+
+## Top Collaborators
+
+| Name | GitHub |
+| --- | --- |
+| riftzen-bit | [@riftzen-bit](https://github.com/riftzen-bit) |
+| Seunggwan Song | [@nathan-song](https://github.com/nathan-song) |
+| JunghwanNA | [@shaun0927](https://github.com/shaun0927) |
+| Junho Yeo | [@junhoyeo](https://github.com/junhoyeo) |
+| Alex Urevick-Ackelsberg | [@AlexUrevick](https://github.com/AlexUrevick) |
+
 ## Quick Start
 
 **Step 1: Install**
@@ -186,7 +209,7 @@ Multiple strategies for different use cases — from Team-backed orchestration t
 
 ### Intelligent Orchestration
 
-- **32 specialized agents** for architecture, research, design, testing, data science
+- **19 specialized agents** (with tier variants) for architecture, research, design, testing, data science
 - **Smart model routing** - Haiku for simple tasks, Opus for complex reasoning
 - **Automatic delegation** - Right agent for the job, every time
 
@@ -387,6 +410,7 @@ See `scripts/openclaw-gateway-demo.mjs` for a reference gateway that relays Open
 - **[Migration Guide](docs/MIGRATION.md)** - Upgrade from v2.x
 - **[Architecture](docs/ARCHITECTURE.md)** - How it works under the hood
 - **[Performance Monitoring](docs/PERFORMANCE-MONITORING.md)** - Agent tracking, debugging, and optimization
+- **[Security Guide](SECURITY.md)** - Enterprise deployment and hardening
 
 ---
 

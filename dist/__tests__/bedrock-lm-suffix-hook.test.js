@@ -12,7 +12,13 @@
  *     ANTHROPIC_MODEL='global.anthropic.claude-sonnet-4-6[1m]' \
  *     OMC_ROUTING_FORCE_INHERIT=true \
  *     node scripts/pre-tool-enforcer.mjs
- *   → expect: deny with [1m] suffix guidance and OMC_SUBAGENT_MODEL mention
+ *   → expect: continue (stripped ID is provider-specific — inheritance is safe)
+ *
+ *   echo '{"tool_name":"Agent","toolInput":{},"cwd":"/tmp"}' | \
+ *     ANTHROPIC_MODEL='claude-sonnet-4-6[1m]' \
+ *     OMC_ROUTING_FORCE_INHERIT=true \
+ *     node scripts/pre-tool-enforcer.mjs
+ *   → expect: deny (stripped ID is a bare Anthropic model ID, invalid on Bedrock)
  *
  *   echo '{"tool_name":"Agent","toolInput":{"model":"us.anthropic.claude-sonnet-4-5-20250929-v1:0"},"cwd":"/tmp"}' | \
  *     ANTHROPIC_MODEL='global.anthropic.claude-sonnet-4-6[1m]' \
@@ -183,28 +189,58 @@ describe('hook integration — force-inherit + [1m] scenarios', () => {
         const result = runHook({ model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0' }, { ANTHROPIC_MODEL: 'global.anthropic.claude-sonnet-4-6[1m]' });
         expect(result.denied).toBe(false);
     });
-    it('denies no-model call when session model has [1m] suffix and guides to OMC_SUBAGENT_MODEL', () => {
+    it('denies no-model call when session model has [1m] suffix and guides to tier alias', () => {
         const result = runHook({}, { ANTHROPIC_MODEL: 'global.anthropic.claude-sonnet-4-6[1m]' });
         expect(result.denied).toBe(true);
-        expect(result.reason).toMatch(/OMC_SUBAGENT_MODEL/);
+        // Guidance must recommend a tier alias (sonnet/haiku/opus), not a raw Bedrock ID.
+        // Agent tool schema only accepts tier aliases for the model param.
+        expect(result.reason).toMatch(/model="sonnet"/);
         expect(result.reason).toMatch(/global\.anthropic\.claude-sonnet-4-6\[1m\]/);
     });
-    it('includes configured OMC_SUBAGENT_MODEL value in guidance when set', () => {
+    it('derives tier alias from OMC_SUBAGENT_MODEL when set', () => {
         const result = runHook({}, {
             ANTHROPIC_MODEL: 'global.anthropic.claude-sonnet-4-6[1m]',
             OMC_SUBAGENT_MODEL: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
         });
         expect(result.denied).toBe(true);
-        expect(result.reason).toMatch(/us\.anthropic\.claude-sonnet-4-5-20250929-v1:0/);
+        // normalizeToCcAlias('us.anthropic.claude-sonnet-4-5-...') → 'sonnet'
+        expect(result.reason).toMatch(/model="sonnet"/);
     });
-    it('denies no-model call when only ANTHROPIC_MODEL has [1m] and CLAUDE_MODEL is clean', () => {
-        // Verifies the dual-check: CLAUDE_MODEL || ANTHROPIC_MODEL alone would miss this case.
+    it('denies no-model call when only ANTHROPIC_MODEL has [1m] suffix (any [1m] triggers deny)', () => {
+        // Our policy: any [1m] suffix in session model vars triggers deny and tier-alias guidance.
+        // Even if stripped ID would be provider-specific, we always guide to tier alias for safety.
         const result = runHook({}, {
             CLAUDE_MODEL: 'global.anthropic.claude-sonnet-4-6-v1:0',
             ANTHROPIC_MODEL: 'global.anthropic.claude-sonnet-4-6[1m]',
         });
         expect(result.denied).toBe(true);
-        expect(result.reason).toMatch(/OMC_SUBAGENT_MODEL/);
+        expect(result.reason).toMatch(/model="sonnet"/);
+    });
+    it('denies no-model call when session model is a bare Anthropic ID with [1m] suffix', () => {
+        // claude-sonnet-4-6[1m] → session has [1m] → deny with tier alias guidance
+        const result = runHook({}, { ANTHROPIC_MODEL: 'claude-sonnet-4-6[1m]' });
+        expect(result.denied).toBe(true);
+        expect(result.reason).toMatch(/model="sonnet"/);
+        expect(result.reason).toMatch(/claude-sonnet-4-6\[1m\]/);
+    });
+    it('derives tier alias from OMC_SUBAGENT_MODEL for guidance in [1m] deny', () => {
+        // normalizeToCcAlias('us.anthropic.claude-sonnet-4-5-20250929-v1:0') → 'sonnet'
+        const result = runHook({}, {
+            ANTHROPIC_MODEL: 'claude-sonnet-4-6[1m]',
+            OMC_SUBAGENT_MODEL: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        });
+        expect(result.denied).toBe(true);
+        expect(result.reason).toMatch(/model="sonnet"/);
+    });
+    it('denies no-model call when CLAUDE_MODEL is provider-specific[1m] but ANTHROPIC_MODEL is bare[1m]', () => {
+        // Mixed case: CLAUDE_MODEL strips safely, but ANTHROPIC_MODEL strips to a bare Anthropic ID.
+        // The runtime (resolveClaudeWorkerModel) may pick ANTHROPIC_MODEL, so both must be safe.
+        const result = runHook({}, {
+            CLAUDE_MODEL: 'global.anthropic.claude-sonnet-4-6[1m]',
+            ANTHROPIC_MODEL: 'claude-sonnet-4-6[1m]',
+        });
+        expect(result.denied).toBe(true);
+        expect(result.reason).toMatch(/model="sonnet"/);
     });
 });
 //# sourceMappingURL=bedrock-lm-suffix-hook.test.js.map

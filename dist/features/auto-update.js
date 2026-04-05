@@ -15,6 +15,7 @@ import { execSync, execFileSync } from 'child_process';
 import { install as installOmc, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin, getInstalledOmcPluginRoots, getRuntimePackageRoot, } from '../installer/index.js';
 import { getConfigDir } from '../utils/config-dir.js';
 import { purgeStalePluginCacheVersions } from '../utils/paths.js';
+import { isAutoUpdateDisabled } from '../lib/security-config.js';
 /** GitHub repository information */
 export const REPO_OWNER = 'Yeachan-Heo';
 export const REPO_NAME = 'oh-my-claudecode';
@@ -256,7 +257,9 @@ export function getOMCConfig() {
  * Check if silent auto-updates are enabled
  */
 export function isSilentAutoUpdateEnabled() {
-    return false;
+    if (isAutoUpdateDisabled())
+        return false;
+    return getOMCConfig().silentAutoUpdate;
 }
 /**
  * Check if auto-upgrade prompt is enabled at session start
@@ -427,7 +430,9 @@ export async function checkForUpdates() {
  */
 export function reconcileUpdateRuntime(options) {
     const errors = [];
+    const runningAsPlugin = isRunningAsPlugin();
     const projectScopedPlugin = isProjectScopedPlugin();
+    const shouldRefreshPluginHooks = runningAsPlugin && !projectScopedPlugin;
     if (!projectScopedPlugin) {
         try {
             if (!existsSync(HOOKS_DIR)) {
@@ -444,8 +449,8 @@ export function reconcileUpdateRuntime(options) {
             force: true,
             verbose: options?.verbose ?? false,
             skipClaudeCheck: true,
-            forceHooks: true,
-            refreshHooksInPlugin: !projectScopedPlugin,
+            forceHooks: shouldRefreshPluginHooks,
+            refreshHooksInPlugin: shouldRefreshPluginHooks,
         });
         if (!installResult.success) {
             errors.push(...installResult.errors);
