@@ -92,7 +92,7 @@ describe('HUD CLI diagnostic (no stdin, no watch mode)', () => {
       resolveTranscriptPath: vi.fn((tp?: string) => tp),
       getOmcRoot: vi.fn(() => '/tmp/.omc'),
     }));
-    vi.doMock('../../utils/paths.js', () => ({
+    vi.doMock('../../utils/config-dir.js', () => ({
       getClaudeConfigDir: vi.fn(() => overrides.configDir ?? tempConfigDir),
     }));
 

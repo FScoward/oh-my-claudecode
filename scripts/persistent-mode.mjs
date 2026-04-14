@@ -24,6 +24,8 @@ import {
 import { join, dirname, resolve, normalize } from "path";
 import { homedir } from "os";
 import { fileURLToPath, pathToFileURL } from "url";
+import { getClaudeConfigDir } from "./lib/config-dir.mjs";
+import { resolveOmcStateRoot } from "./lib/state-root.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -208,16 +210,18 @@ const TEAM_ACTIVE_PHASES = new Set([
 /**
  * Check if a state is stale based on its timestamps.
  * A state is considered stale if it hasn't been updated recently.
- * We check both `last_checked_at` and `started_at` - using whichever is more recent.
+ * We check `last_checked_at`, `updated_at`, and `started_at` - using whichever is more recent.
  */
 function isStaleState(state) {
   if (!state) return true;
 
-  const lastChecked = state.last_checked_at
-    ? new Date(state.last_checked_at).getTime()
-    : 0;
-  const startedAt = state.started_at ? new Date(state.started_at).getTime() : 0;
-  const mostRecent = Math.max(lastChecked, startedAt);
+  const timestamps = [state.last_checked_at, state.updated_at, state.started_at].filter(
+    (value) => typeof value === "string" && value.length > 0,
+  );
+  const mostRecent = timestamps.reduce((max, value) => {
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) && parsed > max ? parsed : max;
+  }, 0);
 
   if (mostRecent === 0) return true; // No valid timestamps
 
@@ -242,8 +246,28 @@ function getSafeReinforcementCount(value) {
     : 0;
 }
 
+const AWAITING_CONFIRMATION_TTL_MS = 2 * 60 * 1000;
+
 function isAwaitingConfirmation(state) {
-  return state?.awaiting_confirmation === true;
+  if (!state || state.awaiting_confirmation !== true) {
+    return false;
+  }
+
+  const setAt =
+    state.awaiting_confirmation_set_at ||
+    state.started_at ||
+    null;
+
+  if (!setAt) {
+    return false;
+  }
+
+  const setAtMs = new Date(setAt).getTime();
+  if (!Number.isFinite(setAtMs)) {
+    return false;
+  }
+
+  return Date.now() - setAtMs < AWAITING_CONFIRMATION_TTL_MS;
 }
 
 /**
@@ -398,7 +422,7 @@ function countIncompleteTasks(sessionId) {
   if (!sessionId || typeof sessionId !== "string") return 0;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) return 0;
 
-  const cfgDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  const cfgDir = getClaudeConfigDir();
   const taskDir = join(cfgDir, "tasks", sessionId);
   if (!existsSync(taskDir)) return 0;
 
@@ -432,8 +456,7 @@ function countIncompleteTodos(sessionId, projectDir) {
     /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)
   ) {
     const sessionTodoPath = join(
-      homedir(),
-      ".claude",
+      getClaudeConfigDir(),
       "todos",
       `${sessionId}.json`,
     );
@@ -608,7 +631,8 @@ async function main() {
     const sessionIdRaw = data.sessionId || data.session_id || data.sessionid || "";
     const sessionId = sanitizeSessionId(sessionIdRaw);
     const hasValidSessionId = isValidSessionId(sessionIdRaw);
-    const stateDir = join(directory, ".omc", "state");
+    const omcRoot = await resolveOmcStateRoot(directory);
+    const stateDir = join(omcRoot, "state");
     const globalStateDir = join(homedir(), ".omc", "state");
 
     // CRITICAL: Never block context-limit stops.

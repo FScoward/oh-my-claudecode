@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const { getClaudeConfigDir } = await import(pathToFileURL(join(__dirname, 'lib', 'config-dir.mjs')).href);
 
 // Import timeout-protected stdin reader (prevents hangs on Linux/Windows, see issue #240, #524)
 let readStdin;
@@ -294,7 +295,7 @@ async function main() {
     const updateInfo = currentVersion ? await checkForUpdates(currentVersion) : null;
     if (updateInfo) {
       // Read config to check autoUpgradePrompt preference
-      const configPath = join(homedir(), '.claude', '.omc-config.json');
+      const configPath = join(getClaudeConfigDir(), '.omc-config.json');
       const omcConfig = readJsonFile(configPath) || {};
       const autoUpgradePrompt = omcConfig.autoUpgradePrompt !== false; // default: true
 
@@ -308,7 +309,7 @@ oh-my-claudecode v${updateInfo.latestVersion} is available (current: v${updateIn
 ACTION: Use AskUserQuestion to ask the user if they want to upgrade now. Offer these options:
 - "Upgrade now" (Recommended): Run \`npm install -g oh-my-claude-sisyphus@latest\` via Bash, then run \`omc install --force --skip-claude-check --refresh-hooks\` to reconcile hooks and CLAUDE.md
 - "Skip this time": Continue the session without upgrading
-- "Don't ask again": Tell the user to set "autoUpgradePrompt": false in ~/.claude/.omc-config.json to disable future prompts
+- "Don't ask again": Tell the user to set "autoUpgradePrompt": false in [$CLAUDE_CONFIG_DIR|~/.claude]/.omc-config.json to disable future prompts
 
 Keep the prompt brief. If the user accepts, execute the upgrade commands and report the result.
 
@@ -358,8 +359,10 @@ Continue working in ultrawork mode until all tasks are complete.
 `);
     }
 
-    // Check for incomplete todos (project-local only, not global ~/.claude/todos/)
-    // NOTE: We intentionally do NOT scan the global ~/.claude/todos/ directory.
+    // Check for incomplete todos (project-local only, not global
+    // [$CLAUDE_CONFIG_DIR|~/.claude]/todos/)
+    // NOTE: We intentionally do NOT scan the global
+    // [$CLAUDE_CONFIG_DIR|~/.claude]/todos/ directory.
     // That directory accumulates todo files from ALL past sessions across all
     // projects, causing phantom task counts in fresh sessions (see issue #354).
     const localTodoPaths = [

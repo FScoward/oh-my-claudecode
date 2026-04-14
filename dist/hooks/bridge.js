@@ -16,9 +16,10 @@ import { pathToFileURL } from "url";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from "fs";
 import { dirname, join } from "path";
 import { resolveToWorktreeRoot, getOmcRoot } from "../lib/worktree-paths.js";
-import { writeModeState } from "../lib/mode-state-io.js";
+import { readModeState, writeModeState } from "../lib/mode-state-io.js";
 import { formatOmcCliInvocation } from "../utils/omc-cli-rendering.js";
 import { createSwallowedErrorLogger } from "../lib/swallowed-error.js";
+import { readCanonicalTeamStateCandidate } from "./team-canonical-state.js";
 // Hot-path imports: needed on every/most hook invocations (keyword-detector, pre/post-tool-use)
 import { removeCodeBlocks, getAllKeywordsWithSizeCheck, applyRalplanGate, sanitizeForKeywordDetection, NON_LATIN_SCRIPT_PATTERN, } from "./keyword-detector/index.js";
 import { processOrchestratorPreTool, processOrchestratorPostTool, } from "./omc-orchestrator/index.js";
@@ -28,6 +29,7 @@ import { readHudState, writeHudState } from "../hud/state.js";
 import { compactOmcStartupGuidance, loadConfig } from "../config/loader.js";
 import { activatePromptPrerequisiteState, buildPromptPrerequisiteDenyReason, buildPromptPrerequisiteReminder, clearPromptPrerequisiteState, getPromptPrerequisiteConfig, isPromptPrerequisiteBlockingTool, parsePromptPrerequisiteSections, readPromptPrerequisiteState, recordPromptPrerequisiteProgress, shouldEnforcePromptPrerequisites, } from "./prompt-prerequisites/index.js";
 import { resolveAutopilotPlanPath, resolveOpenQuestionsPlanPath, } from "../config/plan-output.js";
+import { formatAutopilotRuntimeInsight } from "./autopilot/runtime-insight.js";
 import { writeSkillActiveState } from "./skill-state/index.js";
 import { ULTRAWORK_MESSAGE, ULTRATHINK_MESSAGE, SEARCH_MESSAGE, ANALYZE_MESSAGE, TDD_MESSAGE, CODE_REVIEW_MESSAGE, SECURITY_REVIEW_MESSAGE, RALPH_MESSAGE, PROMPT_TRANSLATION_MESSAGE, } from "../installer/hooks.js";
 // Agent dashboard is used in pre/post-tool-use hot path
@@ -39,7 +41,7 @@ import { getBackgroundBashPermissionFallback, getBackgroundTaskPermissionFallbac
 import { wrapUntrustedFileContent } from "../agents/prompt-helpers.js";
 const PKILL_F_FLAG_PATTERN = /\bpkill\b.*\s-f\b/;
 const PKILL_FULL_FLAG_PATTERN = /\bpkill\b.*--full\b/;
-const WORKER_BLOCKED_TMUX_PATTERN = /\btmux\s+(split-window|new-session|new-window|join-pane|send-keys)\b/i;
+const WORKER_BLOCKED_TMUX_PATTERN = /\btmux\s+/i;
 const WORKER_BLOCKED_TEAM_CLI_PATTERN = /\bom[cx]\s+team\b(?!\s+api\b)/i;
 const WORKER_BLOCKED_SKILL_PATTERN = /\$(team|ultrawork|autopilot|ralph)\b/i;
 const TEAM_TERMINAL_VALUES = new Set([
@@ -138,9 +140,11 @@ function updateModeAwaitingConfirmation(directory, modeName, sessionId, awaiting
             }
             if (awaitingConfirmation) {
                 state.awaiting_confirmation = true;
+                state.awaiting_confirmation_set_at = new Date().toISOString();
             }
             else if (state.awaiting_confirmation === true) {
                 delete state.awaiting_confirmation;
+                delete state.awaiting_confirmation_set_at;
             }
             else {
                 continue;
@@ -201,6 +205,34 @@ function activateRalplanState(directory, sessionId) {
         started_at: new Date().toISOString(),
     }, directory, sessionId);
 }
+function deactivateRalplanState(directory, sessionId) {
+    const state = readModeState("ralplan", directory, sessionId);
+    if (!state) {
+        return;
+    }
+    const currentPhase = typeof state.current_phase === "string" ? state.current_phase : undefined;
+    const terminalPhases = new Set([
+        "complete",
+        "completed",
+        "failed",
+        "cancelled",
+        "done",
+    ]);
+    const completedAt = typeof state.completed_at === "string"
+        ? state.completed_at
+        : new Date().toISOString();
+    writeModeState("ralplan", {
+        ...state,
+        active: false,
+        current_phase: currentPhase && terminalPhases.has(currentPhase.toLowerCase())
+            ? currentPhase
+            : "complete",
+        completed_at: completedAt,
+        deactivated_reason: typeof state.deactivated_reason === "string"
+            ? state.deactivated_reason
+            : "skill_completed",
+    }, directory, sessionId);
+}
 function readTeamStagedState(directory, sessionId) {
     const stateDir = join(getOmcRoot(directory), "state");
     const statePaths = sessionId
@@ -209,6 +241,7 @@ function readTeamStagedState(directory, sessionId) {
             join(stateDir, "team-state.json"),
         ]
         : [join(stateDir, "team-state.json")];
+    let coarseState = null;
     for (const statePath of statePaths) {
         if (!existsSync(statePath)) {
             continue;
@@ -222,13 +255,33 @@ function readTeamStagedState(directory, sessionId) {
             if (sessionId && stateSessionId && stateSessionId !== sessionId) {
                 continue;
             }
-            return parsed;
+            coarseState = parsed;
+            if (parsed.active === true && !isTeamStateTerminal(parsed)) {
+                return parsed;
+            }
         }
         catch {
             continue;
         }
     }
-    return null;
+    const canonical = readCanonicalTeamStateCandidate(directory, sessionId);
+    if (canonical) {
+        return {
+            active: canonical.active,
+            session_id: canonical.sessionId,
+            team_name: canonical.teamName,
+            stage: canonical.stage,
+            current_stage: canonical.stage,
+            current_phase: canonical.stage,
+            phase: canonical.stage,
+            status: canonical.stage,
+            task: canonical.task,
+            started_at: canonical.startedAt,
+            last_checked_at: canonical.updatedAt,
+            reinforcement_count: 0,
+        };
+    }
+    return coarseState;
 }
 function getTeamStage(state) {
     return (state.stage ||
@@ -389,6 +442,41 @@ function validateHookInput(input, requiredFields, hookType) {
     }
     return true;
 }
+function hasInjectableText(value) {
+    return typeof value === "string" && value.trim().length > 0;
+}
+/**
+ * Strip empty hook text fields before serializing to Claude Code.
+ *
+ * Some hook handlers use empty strings as internal sentinels. Passing those
+ * through to the shell hook protocol can create empty system-message/context
+ * injections on the next turn, which is especially risky after Task/Agent
+ * completion when Claude is deciding whether to continue.
+ */
+export function sanitizeHookOutputForSerialization(output) {
+    const sanitized = { ...output };
+    if (!hasInjectableText(sanitized.message)) {
+        delete sanitized.message;
+    }
+    if (!hasInjectableText(sanitized.systemMessage)) {
+        delete sanitized.systemMessage;
+    }
+    const hookSpecificOutput = sanitized.hookSpecificOutput;
+    if (hookSpecificOutput && typeof hookSpecificOutput === "object") {
+        const nextHookSpecificOutput = { ...hookSpecificOutput };
+        if (!hasInjectableText(nextHookSpecificOutput.additionalContext)) {
+            delete nextHookSpecificOutput.additionalContext;
+        }
+        sanitized.hookSpecificOutput =
+            Object.keys(nextHookSpecificOutput).length > 0
+                ? nextHookSpecificOutput
+                : undefined;
+        if (!sanitized.hookSpecificOutput) {
+            delete sanitized.hookSpecificOutput;
+        }
+    }
+    return sanitized;
+}
 function isDelegationToolName(toolName) {
     const normalizedToolName = (toolName || "").toLowerCase();
     return normalizedToolName === "task" || normalizedToolName === "agent";
@@ -433,13 +521,13 @@ async function processKeywordDetector(input) {
     const messages = [];
     // Record prompt submission time in HUD state
     try {
-        const hudState = readHudState(directory) || {
+        const hudState = readHudState(directory, input.sessionId) || {
             timestamp: new Date().toISOString(),
             backgroundTasks: [],
         };
         hudState.lastPromptTimestamp = new Date().toISOString();
         hudState.timestamp = new Date().toISOString();
-        writeHudState(hudState, directory);
+        writeHudState(hudState, directory, input.sessionId);
     }
     catch {
         // Silent failure - don't break keyword detection
@@ -524,37 +612,14 @@ async function processKeywordDetector(input) {
         switch (keywordType) {
             case "ralph": {
                 // Lazy-load ralph module
-                const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd, detectCriticModeFlag, stripCriticModeFlag, } = await import("./ralph/index.js");
-                // Handle --no-prd flag
-                const noPrd = detectNoPrd(promptText);
+                const { createRalphLoopHook, detectCriticModeFlag, stripCriticModeFlag, } = await import("./ralph/index.js");
                 const criticMode = detectCriticModeFlag(promptText) ?? undefined;
-                const promptWithoutCriticFlag = stripCriticModeFlag(promptText);
-                const cleanPrompt = noPrd
-                    ? stripNoPrd(promptWithoutCriticFlag)
-                    : promptWithoutCriticFlag;
-                // Auto-generate scaffold PRD if none exists and --no-prd not set
-                const existingPrd = findPrd(directory);
-                if (!noPrd && !existingPrd) {
-                    const { basename } = await import("path");
-                    const { execSync } = await import("child_process");
-                    const projectName = basename(directory);
-                    let branchName = "ralph/task";
-                    try {
-                        branchName = execSync("git rev-parse --abbrev-ref HEAD", {
-                            cwd: directory,
-                            encoding: "utf-8",
-                            timeout: 5000,
-                        }).trim();
-                    }
-                    catch {
-                        // Not a git repo or git not available — use fallback
-                    }
-                    initPrdFn(directory, projectName, branchName, cleanPrompt);
-                    initProgressFn(directory);
-                }
+                const cleanPrompt = stripCriticModeFlag(promptText);
                 // Activate ralph state which also auto-activates ultrawork
                 const hook = createRalphLoopHook(directory);
-                const started = hook.startLoop(sessionId, cleanPrompt, criticMode ? { criticMode } : undefined);
+                const started = hook.startLoop(sessionId, cleanPrompt, {
+                    ...(criticMode ? { criticMode } : {}),
+                });
                 if (started) {
                     markModeAwaitingConfirmation(directory, sessionId, 'ralph', 'ultrawork');
                 }
@@ -644,7 +709,7 @@ async function processPersistentMode(input) {
     const sessionId = input.sessionId ?? rawSessionId;
     const directory = resolveToWorktreeRoot(input.directory);
     // Lazy-load persistent-mode and todo-continuation modules
-    const { checkPersistentModes, createHookOutput, shouldSendIdleNotification, recordIdleNotificationSent, } = await import("./persistent-mode/index.js");
+    const { checkPersistentModes, createHookOutput, shouldWakeOpenClawOnStop, shouldSendIdleNotification, recordIdleNotificationSent, } = await import("./persistent-mode/index.js");
     const { isExplicitCancelCommand, isAuthenticationError } = await import("./todo-continuation/index.js");
     // Extract stop context for abort detection (supports both camelCase and snake_case)
     const stopContext = {
@@ -684,13 +749,16 @@ async function processPersistentMode(input) {
             const isContextLimit = stopContext.stop_reason === "context_limit" ||
                 stopContext.stopReason === "context_limit";
             if (!isAbort && !isContextLimit) {
-                // Always wake OpenClaw on stop — cooldown only applies to user-facing notifications
-                _openclaw.wake("stop", { sessionId, projectPath: directory });
                 // Per-session cooldown: prevent notification spam when the session idles repeatedly.
                 // Uses session-scoped state so one session does not suppress another.
                 const stateDir = join(getOmcRoot(directory), "state");
-                if (shouldSendIdleNotification(stateDir, sessionId)) {
-                    recordIdleNotificationSent(stateDir, sessionId);
+                const { getIdleNotificationRepoState } = await import("./persistent-mode/idle-repo-state.js");
+                const idleRepoState = getIdleNotificationRepoState(directory);
+                if (shouldWakeOpenClawOnStop(stateDir, sessionId, idleRepoState)) {
+                    _openclaw.wake("stop", { sessionId, projectPath: directory });
+                }
+                if (shouldSendIdleNotification(stateDir, sessionId, idleRepoState)) {
+                    recordIdleNotificationSent(stateDir, sessionId, idleRepoState);
                     const logSessionIdleNotifyFailure = createSwallowedErrorLogger('hooks.bridge session-idle notification failed');
                     import("../notifications/index.js")
                         .then(({ notify }) => notify("session-idle", {
@@ -1061,10 +1129,9 @@ function processPreToolUse(input) {
         ? [enforcementResult.message]
         : [];
     let modifiedToolInput;
-    const promptPrerequisiteProgress = recordPromptPrerequisiteProgress(directory, input.sessionId, input.toolName, input.toolInput);
-    if (promptPrerequisiteProgress?.isComplete) {
-        preToolMessages.push("[PROMPT PREREQUISITES COMPLETE] Required context tools/files were read. Editing and agent delegation are unblocked.");
-    }
+    // Check blocking BEFORE recording progress — otherwise a denied tool
+    // (e.g. Edit) that also matches a prerequisite would have its progress
+    // persisted even though the tool never actually executed.
     const promptPrerequisiteState = readPromptPrerequisiteState(directory, input.sessionId);
     if (promptPrerequisiteState?.active
         && isPromptPrerequisiteBlockingTool(input.toolName, promptPrerequisiteConfig)) {
@@ -1076,6 +1143,10 @@ function processPreToolUse(input) {
                 permissionDecisionReason: buildPromptPrerequisiteDenyReason(promptPrerequisiteState, input.toolName),
             },
         };
+    }
+    const promptPrerequisiteProgress = recordPromptPrerequisiteProgress(directory, input.sessionId, input.toolName, input.toolInput);
+    if (promptPrerequisiteProgress?.isComplete) {
+        preToolMessages.push("[PROMPT PREREQUISITES COMPLETE] Required context tools/files were read. Editing and agent delegation are unblocked.");
     }
     // Force-inherit: deny Task/Agent calls that carry a `model` parameter when
     // forceInherit is enabled (Bedrock, Vertex, CC Switch, etc.).
@@ -1226,7 +1297,7 @@ function processPreToolUse(input) {
         if (toolInput?.run_in_background) {
             const config = loadConfig();
             const maxBgTasks = config.permissions?.maxBackgroundTasks ?? 5;
-            const runningCount = getRunningTaskCount(directory);
+            const runningCount = getRunningTaskCount(directory, input.sessionId);
             if (runningCount >= maxBgTasks) {
                 return {
                     continue: false,
@@ -1243,7 +1314,7 @@ function processPreToolUse(input) {
         if (toolInput?.description) {
             const taskId = getHookToolUseId(input)
                 ?? `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            addBackgroundTask(taskId, toolInput.description, toolInput.subagent_type, directory);
+            addBackgroundTask(taskId, toolInput.description, toolInput.subagent_type, directory, input.sessionId);
         }
     }
     // Track file ownership for Edit/Write tools
@@ -1327,39 +1398,16 @@ async function processPostToolUse(input) {
     if (toolName === "skill") {
         const skillName = getInvokedSkillName(input.toolInput);
         if (skillName === "ralph") {
-            const { createRalphLoopHook, findPrdPath: findPrd, initPrd: initPrdFn, initProgress: initProgressFn, detectNoPrdFlag: detectNoPrd, stripNoPrdFlag: stripNoPrd, detectCriticModeFlag, stripCriticModeFlag, } = await import("./ralph/index.js");
+            const { createRalphLoopHook, detectCriticModeFlag, stripCriticModeFlag, } = await import("./ralph/index.js");
             const rawPrompt = typeof input.prompt === "string" && input.prompt.trim().length > 0
                 ? input.prompt
                 : "Ralph loop activated via Skill tool";
-            // Handle --no-prd flag
-            const noPrd = detectNoPrd(rawPrompt);
             const criticMode = detectCriticModeFlag(rawPrompt) ?? undefined;
-            const promptWithoutCriticFlag = stripCriticModeFlag(rawPrompt);
-            const cleanPrompt = noPrd
-                ? stripNoPrd(promptWithoutCriticFlag)
-                : promptWithoutCriticFlag;
-            // Auto-generate scaffold PRD if none exists and --no-prd not set
-            const existingPrd = findPrd(directory);
-            if (!noPrd && !existingPrd) {
-                const { basename } = await import("path");
-                const { execSync } = await import("child_process");
-                const projectName = basename(directory);
-                let branchName = "ralph/task";
-                try {
-                    branchName = execSync("git rev-parse --abbrev-ref HEAD", {
-                        cwd: directory,
-                        encoding: "utf-8",
-                        timeout: 5000,
-                    }).trim();
-                }
-                catch {
-                    // Not a git repo or git not available — use fallback
-                }
-                initPrdFn(directory, projectName, branchName, cleanPrompt);
-                initProgressFn(directory);
-            }
+            const cleanPrompt = stripCriticModeFlag(rawPrompt);
             const hook = createRalphLoopHook(directory);
-            hook.startLoop(input.sessionId, cleanPrompt, criticMode ? { criticMode } : undefined);
+            hook.startLoop(input.sessionId, cleanPrompt, {
+                ...(criticMode ? { criticMode } : {}),
+            });
         }
         // Clear skill-active state on skill completion to prevent false-blocking.
         // Without this, every non-'none' skill falsely blocks stops until TTL expires.
@@ -1373,6 +1421,9 @@ async function processPostToolUse(input) {
             .replace(/^oh-my-claudecode:/, "");
         if (!currentState || !currentState.active || currentState.skill_name === completingSkill) {
             clearSkillActiveState(directory, input.sessionId);
+        }
+        if (isConsensusPlanningSkillInvocation(skillName, input.toolInput)) {
+            deactivateRalplanState(directory, input.sessionId);
         }
     }
     // Run orchestrator post-tool processing (remember tags, verification reminders, etc.)
@@ -1396,19 +1447,19 @@ async function processPostToolUse(input) {
         const agentType = toolInput?.subagent_type;
         if (asyncAgentId) {
             if (toolUseId) {
-                remapBackgroundTaskId(toolUseId, asyncAgentId, directory);
+                remapBackgroundTaskId(toolUseId, asyncAgentId, directory, input.sessionId);
             }
             else if (description) {
-                remapMostRecentMatchingBackgroundTaskId(description, asyncAgentId, directory, agentType);
+                remapMostRecentMatchingBackgroundTaskId(description, asyncAgentId, directory, agentType, input.sessionId);
             }
         }
         else {
             const failed = taskLaunchDidFail(input.toolOutput);
             if (toolUseId) {
-                completeBackgroundTask(toolUseId, directory, failed);
+                completeBackgroundTask(toolUseId, directory, failed, input.sessionId);
             }
             else if (description) {
-                completeMostRecentMatchingBackgroundTask(description, directory, failed, agentType);
+                completeMostRecentMatchingBackgroundTask(description, directory, failed, agentType, input.sessionId);
             }
         }
     }
@@ -1422,7 +1473,7 @@ async function processPostToolUse(input) {
     if (input.toolName === "TaskOutput") {
         const taskOutput = parseTaskOutputLifecycle(input.toolOutput);
         if (taskOutput) {
-            completeBackgroundTask(taskOutput.taskId, directory, taskOutputDidFail(taskOutput.status));
+            completeBackgroundTask(taskOutput.taskId, directory, taskOutputDidFail(taskOutput.status), input.sessionId);
         }
     }
     // Wake OpenClaw gateway for post-tool-use (non-blocking, fires for all tools).
@@ -1465,10 +1516,12 @@ async function processAutopilot(input) {
         openQuestionsPath: resolveOpenQuestionsPlanPath(config),
     };
     const phasePrompt = getPhasePrompt(state.phase, context);
-    if (phasePrompt) {
+    const runtimeInsight = formatAutopilotRuntimeInsight(directory, input.sessionId);
+    if (phasePrompt || runtimeInsight) {
+        const detailParts = [runtimeInsight, phasePrompt].filter(Boolean);
         return {
             continue: true,
-            message: `[AUTOPILOT - Phase: ${state.phase.toUpperCase()}]\n\n${phasePrompt}`,
+            message: `[AUTOPILOT - Phase: ${state.phase.toUpperCase()}]\n\n${detailParts.join("\n\n")}`,
         };
     }
     return { continue: true };
@@ -1710,7 +1763,7 @@ export async function main() {
     // Process hook
     const output = await processHook(hookType, input);
     // Write output to stdout
-    console.log(JSON.stringify(output));
+    console.log(JSON.stringify(sanitizeHookOutputForSerialization(output)));
 }
 // Run if called directly (works in both ESM and bundled CJS)
 // In CJS bundle, check if this is the main module by comparing with process.argv[1]

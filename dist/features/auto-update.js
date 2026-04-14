@@ -13,9 +13,10 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync, execFileSync } from 'child_process';
 import { install as installOmc, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin, getInstalledOmcPluginRoots, getRuntimePackageRoot, } from '../installer/index.js';
-import { getConfigDir } from '../utils/config-dir.js';
+import { getClaudeConfigDir } from '../utils/config-dir.js';
 import { purgeStalePluginCacheVersions } from '../utils/paths.js';
 import { isAutoUpdateDisabled } from '../lib/security-config.js';
+import { OMC_CONFIG_FILE_REL } from '../lib/paths.js';
 /** GitHub repository information */
 export const REPO_OWNER = 'Yeachan-Heo';
 export const REPO_NAME = 'oh-my-claudecode';
@@ -28,7 +29,7 @@ export const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${REPO_OWNER}/$
  * and cache rebuilds reinstall old versions. (See #506)
  */
 function syncMarketplaceClone(verbose = false) {
-    const marketplacePath = join(getConfigDir(), 'plugins', 'marketplaces', 'omc');
+    const marketplacePath = join(getClaudeConfigDir(), 'plugins', 'marketplaces', 'omc');
     if (!existsSync(marketplacePath)) {
         return { ok: true, message: 'Marketplace clone not found; skipping' };
     }
@@ -171,7 +172,7 @@ export function shouldBlockStandaloneUpdateInCurrentSession() {
     return false;
 }
 export function syncPluginCache(verbose = false) {
-    const pluginCacheRoot = join(getConfigDir(), 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    const pluginCacheRoot = join(getClaudeConfigDir(), 'plugins', 'cache', 'omc', 'oh-my-claudecode');
     if (!existsSync(pluginCacheRoot)) {
         return { synced: false, skipped: true, errors: [] };
     }
@@ -218,9 +219,9 @@ export function syncPluginCache(verbose = false) {
     }
 }
 /** Installation paths (respects CLAUDE_CONFIG_DIR env var) */
-export const CLAUDE_CONFIG_DIR = getConfigDir();
+export const CLAUDE_CONFIG_DIR = getClaudeConfigDir();
 export const VERSION_FILE = join(CLAUDE_CONFIG_DIR, '.omc-version.json');
-export const CONFIG_FILE = join(CLAUDE_CONFIG_DIR, '.omc-config.json');
+export const CONFIG_FILE = join(CLAUDE_CONFIG_DIR, OMC_CONFIG_FILE_REL);
 /**
  * Read the OMC configuration
  */
@@ -430,9 +431,16 @@ export async function checkForUpdates() {
  */
 export function reconcileUpdateRuntime(options) {
     const errors = [];
-    const runningAsPlugin = isRunningAsPlugin();
     const projectScopedPlugin = isProjectScopedPlugin();
-    const shouldRefreshPluginHooks = runningAsPlugin && !projectScopedPlugin;
+    // Plugin installs execute hooks from <pluginRoot>/hooks/hooks.json. Re-running
+    // the standalone settings.json hook merge during `omc update` re-injects the
+    // legacy ~/.claude/hooks/* entries and causes duplicate hook execution.
+    //
+    // Reconciliation should still refresh shared installer artifacts (CLAUDE.md,
+    // HUD, MCP registry, statusLine, etc.), but it must leave settings.json hook
+    // ownership alone for plugin installs so the plugin hook manifest remains the
+    // single source of truth.
+    const shouldRefreshPluginHooks = false;
     if (!projectScopedPlugin) {
         try {
             if (!existsSync(HOOKS_DIR)) {

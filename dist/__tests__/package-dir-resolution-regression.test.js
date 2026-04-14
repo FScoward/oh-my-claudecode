@@ -69,7 +69,7 @@ describe('package dir resolution regression (#1322, #1324)', () => {
         const snippet = getSnippetByMarker(source, 'function getPackageDir() {');
         expect(snippet).toContain('fileURLToPath(import.meta.url)');
         expect(snippet).toContain('currentDirName === "bridge"');
-        expect(snippet.indexOf('fileURLToPath(import.meta.url)')).toBeLessThan(snippet.indexOf('return join6(__dirname2, "..", "..")'));
+        expect(snippet.indexOf('fileURLToPath(import.meta.url)')).toBeLessThan(snippet.indexOf('return join7(__dirname2, "..", "..")'));
     });
     it('loadAgentPrompt resolves prompts even when cwd is unrelated', () => {
         const sandboxDir = mkdtempSync(join(tmpdir(), 'omc-agents-path-resolution-'));

@@ -15,6 +15,7 @@ import { join } from 'node:path';
 
 const REPO_ROOT = join(__dirname, '..', '..');
 const SETUP_SCRIPT = join(REPO_ROOT, 'scripts', 'setup-claude-md.sh');
+const CONFIG_DIR_HELPER = join(REPO_ROOT, 'scripts', 'lib', 'config-dir.sh');
 
 const tempRoots: string[] = [];
 
@@ -26,13 +27,14 @@ function createPluginFixture(claudeMdContent: string) {
   const projectRoot = join(root, 'project');
   const homeRoot = join(root, 'home');
 
-  mkdirSync(join(pluginRoot, 'scripts'), { recursive: true });
+  mkdirSync(join(pluginRoot, 'scripts', 'lib'), { recursive: true });
   mkdirSync(join(pluginRoot, 'docs'), { recursive: true });
   mkdirSync(join(pluginRoot, 'skills', 'omc-reference'), { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
   mkdirSync(homeRoot, { recursive: true });
 
   copyFileSync(SETUP_SCRIPT, join(pluginRoot, 'scripts', 'setup-claude-md.sh'));
+  copyFileSync(CONFIG_DIR_HELPER, join(pluginRoot, 'scripts', 'lib', 'config-dir.sh'));
   writeFileSync(join(pluginRoot, 'docs', 'CLAUDE.md'), claudeMdContent);
   writeFileSync(join(pluginRoot, 'skills', 'omc-reference', 'SKILL.md'), `---
 name: omc-reference
@@ -346,6 +348,58 @@ Use the real docs file.
     expect(readFileSync(join(configDir, 'CLAUDE-omc.md'), 'utf-8')).toContain('<!-- OMC:VERSION:9.9.9 -->');
   });
 
+  it('cleans up orphaned companion file when switching from preserve to overwrite mode', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const configDir = join(fixture.homeRoot, 'custom-profile');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE.md'), '# User CLAUDE\nKeep my base config.\n');
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ plugins: ['oh-my-claudecode'] }));
+
+    const env = {
+      ...process.env,
+      HOME: fixture.homeRoot,
+      CLAUDE_CONFIG_DIR: configDir,
+    };
+
+    // Run 1: preserve mode — creates companion + import block
+    const first = spawnSync('bash', [fixture.scriptPath, 'global', 'preserve'], {
+      cwd: fixture.projectRoot,
+      env,
+      encoding: 'utf-8',
+    });
+    expect(first.status).toBe(0);
+    expect(existsSync(join(configDir, 'CLAUDE-omc.md'))).toBe(true);
+    expect(readFileSync(join(configDir, 'CLAUDE.md'), 'utf-8')).toContain('<!-- OMC:IMPORT:START -->');
+
+    // Run 2: overwrite mode (default) — must clean up companion and import block
+    const second = spawnSync('bash', [fixture.scriptPath, 'global', 'overwrite'], {
+      cwd: fixture.projectRoot,
+      env,
+      encoding: 'utf-8',
+    });
+    expect(second.status).toBe(0);
+
+    // Companion file must be removed
+    expect(existsSync(join(configDir, 'CLAUDE-omc.md'))).toBe(false);
+
+    // CLAUDE.md must have OMC markers inline, not an import block
+    const baseClaude = readFileSync(join(configDir, 'CLAUDE.md'), 'utf-8');
+    expect(baseClaude).toContain('<!-- OMC:START -->');
+    expect(baseClaude).toContain('<!-- OMC:END -->');
+    expect(baseClaude).not.toContain('<!-- OMC:IMPORT:START -->');
+    expect(baseClaude).not.toContain('@CLAUDE-omc.md');
+
+    // User content should be preserved
+    expect(baseClaude).toContain('# User CLAUDE');
+  });
+
   it('refuses preserve mode when the companion path is a symlink', () => {
     const fixture = createPluginFixture(`<!-- OMC:START -->
 <!-- OMC:VERSION:9.9.9 -->
@@ -381,6 +435,181 @@ Use the real docs file.
 });
 
 describe('setup-claude-md.sh stale CLAUDE_PLUGIN_ROOT resolution', () => {
+  it('does not prefer a newer cache directory when it is missing required plugin assets', () => {
+    const root = mkdtempSync(join(tmpdir(), 'omc-stale-invalid-newer-cache-'));
+    tempRoots.push(root);
+
+    const cacheBase = join(root, '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    const oldVersion = join(cacheBase, '4.8.2');
+    const newerInvalid = join(cacheBase, '4.9.0');
+    const projectRoot = join(root, 'project');
+    const homeRoot = join(root, 'home');
+
+    mkdirSync(join(oldVersion, 'scripts'), { recursive: true });
+    mkdirSync(join(oldVersion, 'docs'), { recursive: true });
+    copyFileSync(SETUP_SCRIPT, join(oldVersion, 'scripts', 'setup-claude-md.sh'));
+    mkdirSync(join(oldVersion, 'scripts', 'lib'), { recursive: true });
+    copyFileSync(CONFIG_DIR_HELPER, join(oldVersion, 'scripts', 'lib', 'config-dir.sh'));
+    writeFileSync(
+      join(oldVersion, 'docs', 'CLAUDE.md'),
+      `<!-- OMC:START -->\n<!-- OMC:VERSION:4.8.2 -->\n\n# Old Version\n<!-- OMC:END -->\n`,
+    );
+
+    // Newer directory exists but is missing docs/CLAUDE.md
+    mkdirSync(newerInvalid, { recursive: true });
+
+    mkdirSync(join(homeRoot, '.claude', 'plugins'), { recursive: true });
+    writeFileSync(
+      join(homeRoot, '.claude', 'plugins', 'installed_plugins.json'),
+      JSON.stringify({
+        'oh-my-claudecode@omc': [
+          {
+            installPath: oldVersion,
+            version: '4.8.2',
+          },
+        ],
+      }),
+    );
+
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    writeFileSync(join(homeRoot, '.claude', 'settings.json'), JSON.stringify({ plugins: ['oh-my-claudecode'] }));
+
+    const result = spawnSync('bash', [join(oldVersion, 'scripts', 'setup-claude-md.sh'), 'local'], {
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        HOME: homeRoot,
+        CLAUDE_CONFIG_DIR: join(homeRoot, '.claude'),
+      },
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+
+    const installed = readFileSync(join(projectRoot, '.claude', 'CLAUDE.md'), 'utf-8');
+    expect(installed).toContain('<!-- OMC:VERSION:4.8.2 -->');
+    expect(installed).toContain('# Old Version');
+  });
+
+  it('ignores non-semver cache directories when selecting latest fallback version', () => {
+    const root = mkdtempSync(join(tmpdir(), 'omc-stale-ignore-non-semver-'));
+    tempRoots.push(root);
+
+    const cacheBase = join(root, '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    const oldVersion = join(cacheBase, '4.8.2');
+    const newVersion = join(cacheBase, '4.9.0');
+    const suffixedInvalid = join(cacheBase, '4.10.0.tmp');
+    const projectRoot = join(root, 'project');
+    const homeRoot = join(root, 'home');
+
+    mkdirSync(join(oldVersion, 'scripts'), { recursive: true });
+    mkdirSync(join(oldVersion, 'docs'), { recursive: true });
+    copyFileSync(SETUP_SCRIPT, join(oldVersion, 'scripts', 'setup-claude-md.sh'));
+    mkdirSync(join(oldVersion, 'scripts', 'lib'), { recursive: true });
+    copyFileSync(CONFIG_DIR_HELPER, join(oldVersion, 'scripts', 'lib', 'config-dir.sh'));
+    writeFileSync(join(oldVersion, 'docs', 'CLAUDE.md'), `<!-- OMC:START -->\n<!-- OMC:VERSION:4.8.2 -->\n# Old\n<!-- OMC:END -->\n`);
+
+    mkdirSync(join(newVersion, 'docs'), { recursive: true });
+    writeFileSync(join(newVersion, 'docs', 'CLAUDE.md'), `<!-- OMC:START -->\n<!-- OMC:VERSION:4.9.0 -->\n# New\n<!-- OMC:END -->\n`);
+
+    // Should be ignored by strict semver selection.
+    mkdirSync(suffixedInvalid, { recursive: true });
+    writeFileSync(join(suffixedInvalid, 'junk.txt'), 'not a plugin root');
+
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    mkdirSync(projectRoot, { recursive: true });
+    writeFileSync(join(homeRoot, '.claude', 'settings.json'), JSON.stringify({ plugins: ['oh-my-claudecode'] }));
+
+    // No installed_plugins.json => fallback scan path
+    const result = spawnSync('bash', [join(oldVersion, 'scripts', 'setup-claude-md.sh'), 'local'], {
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        HOME: homeRoot,
+        CLAUDE_CONFIG_DIR: join(homeRoot, '.claude'),
+      },
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+
+    const installed = readFileSync(join(projectRoot, '.claude', 'CLAUDE.md'), 'utf-8');
+    expect(installed).toContain('<!-- OMC:VERSION:4.9.0 -->');
+    expect(installed).not.toContain('4.10.0.tmp');
+  });
+
+  it('prefers newer cache version when installed_plugins.json points to an existing but stale older version', () => {
+    const root = mkdtempSync(join(tmpdir(), 'omc-stale-json-old-version-'));
+    tempRoots.push(root);
+
+    const cacheBase = join(root, '.claude', 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+    const oldVersion = join(cacheBase, '4.8.2');
+    const newVersion = join(cacheBase, '4.9.0');
+    const projectRoot = join(root, 'project');
+    const homeRoot = join(root, 'home');
+
+    // Script runs from old version path
+    mkdirSync(join(oldVersion, 'scripts'), { recursive: true });
+    mkdirSync(join(oldVersion, 'docs'), { recursive: true });
+    copyFileSync(SETUP_SCRIPT, join(oldVersion, 'scripts', 'setup-claude-md.sh'));
+    mkdirSync(join(oldVersion, 'scripts', 'lib'), { recursive: true });
+    copyFileSync(CONFIG_DIR_HELPER, join(oldVersion, 'scripts', 'lib', 'config-dir.sh'));
+    writeFileSync(
+      join(oldVersion, 'docs', 'CLAUDE.md'),
+      `<!-- OMC:START -->\n<!-- OMC:VERSION:4.8.2 -->\n\n# Old Version\n<!-- OMC:END -->\n`,
+    );
+
+    // Newer cache version exists
+    mkdirSync(join(newVersion, 'docs'), { recursive: true });
+    writeFileSync(
+      join(newVersion, 'docs', 'CLAUDE.md'),
+      `<!-- OMC:START -->\n<!-- OMC:VERSION:4.9.0 -->\n\n# New Version\n<!-- OMC:END -->\n`,
+    );
+
+    // installed_plugins.json still points at the old but existing path
+    mkdirSync(join(homeRoot, '.claude', 'plugins'), { recursive: true });
+    writeFileSync(
+      join(homeRoot, '.claude', 'plugins', 'installed_plugins.json'),
+      JSON.stringify({
+        'oh-my-claudecode@omc': [
+          {
+            installPath: oldVersion,
+            version: '4.8.2',
+          },
+        ],
+      }),
+    );
+
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    writeFileSync(
+      join(homeRoot, '.claude', 'settings.json'),
+      JSON.stringify({ plugins: ['oh-my-claudecode'] }),
+    );
+
+    const result = spawnSync(
+      'bash',
+      [join(oldVersion, 'scripts', 'setup-claude-md.sh'), 'local'],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          HOME: homeRoot,
+          CLAUDE_CONFIG_DIR: join(homeRoot, '.claude'),
+        },
+        encoding: 'utf-8',
+      },
+    );
+
+    expect(result.status).toBe(0);
+
+    const installed = readFileSync(join(projectRoot, '.claude', 'CLAUDE.md'), 'utf-8');
+    expect(installed).toContain('<!-- OMC:VERSION:4.9.0 -->');
+    expect(installed).toContain('# New Version');
+    expect(installed).not.toContain('<!-- OMC:VERSION:4.8.2 -->');
+  });
+
   it('uses docs/CLAUDE.md from the active version in installed_plugins.json, not the stale script location', () => {
     // Simulate: script lives at old version (4.8.2), but installed_plugins.json points to new version (4.9.0)
     const root = mkdtempSync(join(tmpdir(), 'omc-stale-root-'));
@@ -396,6 +625,8 @@ describe('setup-claude-md.sh stale CLAUDE_PLUGIN_ROOT resolution', () => {
     mkdirSync(join(oldVersion, 'scripts'), { recursive: true });
     mkdirSync(join(oldVersion, 'docs'), { recursive: true });
     copyFileSync(SETUP_SCRIPT, join(oldVersion, 'scripts', 'setup-claude-md.sh'));
+    mkdirSync(join(oldVersion, 'scripts', 'lib'), { recursive: true });
+    copyFileSync(CONFIG_DIR_HELPER, join(oldVersion, 'scripts', 'lib', 'config-dir.sh'));
     writeFileSync(
       join(oldVersion, 'docs', 'CLAUDE.md'),
       `<!-- OMC:START -->\n<!-- OMC:VERSION:4.8.2 -->\n\n# Old Version\n<!-- OMC:END -->\n`,
@@ -467,6 +698,8 @@ describe('setup-claude-md.sh stale CLAUDE_PLUGIN_ROOT resolution', () => {
     mkdirSync(join(oldVersion, 'scripts'), { recursive: true });
     mkdirSync(join(oldVersion, 'docs'), { recursive: true });
     copyFileSync(SETUP_SCRIPT, join(oldVersion, 'scripts', 'setup-claude-md.sh'));
+    mkdirSync(join(oldVersion, 'scripts', 'lib'), { recursive: true });
+    copyFileSync(CONFIG_DIR_HELPER, join(oldVersion, 'scripts', 'lib', 'config-dir.sh'));
     writeFileSync(
       join(oldVersion, 'docs', 'CLAUDE.md'),
       `<!-- OMC:START -->\n<!-- OMC:VERSION:4.8.2 -->\n\n# Old Version\n<!-- OMC:END -->\n`,
@@ -536,6 +769,8 @@ describe('setup-claude-md.sh stale CLAUDE_PLUGIN_ROOT resolution', () => {
     mkdirSync(join(oldVersion, 'scripts'), { recursive: true });
     mkdirSync(join(oldVersion, 'docs'), { recursive: true });
     copyFileSync(SETUP_SCRIPT, join(oldVersion, 'scripts', 'setup-claude-md.sh'));
+    mkdirSync(join(oldVersion, 'scripts', 'lib'), { recursive: true });
+    copyFileSync(CONFIG_DIR_HELPER, join(oldVersion, 'scripts', 'lib', 'config-dir.sh'));
     writeFileSync(
       join(oldVersion, 'docs', 'CLAUDE.md'),
       `<!-- OMC:START -->\n<!-- OMC:VERSION:4.8.2 -->\n\n# Old\n<!-- OMC:END -->\n`,

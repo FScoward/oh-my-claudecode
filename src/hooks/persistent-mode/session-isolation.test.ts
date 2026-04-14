@@ -6,6 +6,22 @@ import { execSync } from "child_process";
 import { checkPersistentModes } from "./index.js";
 import { activateUltrawork, deactivateUltrawork } from "../ultrawork/index.js";
 
+function writePendingTodo(tempDir: string, content: string): void {
+  mkdirSync(join(tempDir, '.claude'), { recursive: true });
+  writeFileSync(
+    join(tempDir, '.claude', 'todos.json'),
+    JSON.stringify({
+      todos: [
+        {
+          content,
+          status: 'pending',
+          priority: 'high',
+        },
+      ],
+    }),
+  );
+}
+
 describe("Persistent Mode Session Isolation (Issue #311)", () => {
   let tempDir: string;
 
@@ -22,6 +38,7 @@ describe("Persistent Mode Session Isolation (Issue #311)", () => {
     it("should block stop when session_id matches active ultrawork", async () => {
       const sessionId = "session-owner";
       activateUltrawork("Fix the bug", sessionId, tempDir);
+      writePendingTodo(tempDir, "Finish the bug fix");
 
       const result = await checkPersistentModes(sessionId, tempDir);
       expect(result.shouldBlock).toBe(true);
@@ -62,6 +79,7 @@ describe("Persistent Mode Session Isolation (Issue #311)", () => {
 
     it("should support session-scoped state files", async () => {
       const sessionId = "session-scoped-test";
+      writePendingTodo(tempDir, "Finish the session-scoped task");
       // Create state in session-scoped directory
       const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
       mkdirSync(sessionDir, { recursive: true });

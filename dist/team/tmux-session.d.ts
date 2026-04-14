@@ -32,7 +32,7 @@ export interface WorkerLaunchSpec {
     shell: string;
     rcFile: string | null;
 }
-/** Try a list of shell paths; return first that exists with its rcFile, or null */
+/** Try a list of shell paths; return first existing path or PATH-discovered binary with its rcFile, or null */
 export declare function resolveShellFromCandidates(paths: string[], rcFile: string): WorkerLaunchSpec | null;
 /** Check if shellPath is a supported shell (zsh/bash) that exists on disk */
 export declare function resolveSupportedShellAffinity(shellPath?: string): WorkerLaunchSpec | null;
@@ -49,7 +49,7 @@ export declare function resolveSupportedShellAffinity(shellPath?: string): Worke
 export declare function buildWorkerLaunchSpec(shellPath?: string): WorkerLaunchSpec;
 export declare function buildWorkerStartCommand(config: WorkerPaneConfig): string;
 /** Validate tmux is available. Throws with install instructions if not. */
-export declare function validateTmux(): void;
+export declare function validateTmux(hasTmuxContext?: boolean): void;
 /** Sanitize name to prevent tmux command injection (alphanum + hyphen only) */
 export declare function sanitizeName(name: string): string;
 /** Build session name: "omc-team-{teamName}-{workerName}" */

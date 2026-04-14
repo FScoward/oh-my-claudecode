@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   applyMainVerticalLayout: vi.fn(),
   execFile: vi.fn(),
   spawnSync: vi.fn(() => ({ status: 0 })),
+  tmuxExecAsync: vi.fn(),
 }));
 
 const modelContractMocks = vi.hoisted(() => ({
@@ -24,10 +25,22 @@ const modelContractMocks = vi.hoisted(() => ({
   getPromptModeArgs: vi.fn((_agentType: string, instruction: string) => [instruction]),
 }));
 
-vi.mock('child_process', () => ({
-  execFile: mocks.execFile,
-  spawnSync: mocks.spawnSync,
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execFile: mocks.execFile,
+    spawnSync: mocks.spawnSync,
+  };
+});
+
+vi.mock('../../cli/tmux-utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../cli/tmux-utils.js')>();
+  return {
+    ...actual,
+    tmuxExecAsync: mocks.tmuxExecAsync,
+  };
+});
 
 vi.mock('../model-contract.js', () => ({
   buildWorkerArgv: modelContractMocks.buildWorkerArgv,
@@ -97,6 +110,12 @@ describe('runtime v2 startup inbox dispatch', () => {
       }
       return { stdout: '', stderr: '' };
     };
+    mocks.tmuxExecAsync.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'split-window') {
+        return { stdout: '%2\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
   });
 
   afterEach(async () => {
@@ -258,7 +277,7 @@ describe('runtime v2 startup inbox dispatch', () => {
     expect(requests[0]?.last_reason).toBe('worker_notify_failed');
   });
 
-  it('requires Claude startup evidence beyond the initial notify and retries once before failing', async () => {
+  it('requires Claude startup evidence without resending the startup inbox', async () => {
     cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-claude-evidence-missing-'));
     const { startTeamV2 } = await import('../runtime-v2.js');
 
@@ -272,14 +291,14 @@ describe('runtime v2 startup inbox dispatch', () => {
 
     expect(runtime.config.workers[0]?.pane_id).toBe('%2');
     expect(runtime.config.workers[0]?.assigned_tasks).toEqual([]);
-    expect(mocks.sendToWorker).toHaveBeenCalledTimes(2);
+    expect(mocks.sendToWorker).toHaveBeenCalledTimes(1);
 
     const requests = await listDispatchRequests('dispatch-team', cwd, { kind: 'inbox' });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.status).toBe('notified');
   });
 
-  it('does not treat ACK-only mailbox replies as Claude startup evidence', async () => {
+  it('does not treat ACK-only mailbox replies as Claude startup evidence or resend the startup inbox', async () => {
     cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-claude-evidence-ack-'));
 
     mocks.sendToWorker.mockImplementation(async () => {
@@ -309,7 +328,7 @@ describe('runtime v2 startup inbox dispatch', () => {
     });
 
     expect(runtime.config.workers[0]?.assigned_tasks).toEqual([]);
-    expect(mocks.sendToWorker).toHaveBeenCalledTimes(2);
+    expect(mocks.sendToWorker).toHaveBeenCalledTimes(1);
   });
 
   it('accepts Claude startup once the worker claims the task', async () => {
@@ -369,7 +388,7 @@ describe('runtime v2 startup inbox dispatch', () => {
     expect(mocks.sendToWorker).toHaveBeenCalledTimes(1);
   });
 
-  it('passes the full lifecycle instruction to codex prompt-mode workers and waits for claim evidence', async () => {
+  it('keeps codex prompt-mode launch args to a short inbox pointer and waits for claim evidence', async () => {
     cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-codex-prompt-'));
 
     modelContractMocks.isPromptModeAgent.mockImplementation((agentType?: string) => agentType === 'codex');
@@ -397,30 +416,43 @@ describe('runtime v2 startup inbox dispatch', () => {
       teamName: 'dispatch-team',
       workerCount: 1,
       agentTypes: ['codex'],
-      tasks: [{ subject: 'Dispatch test', description: 'Verify codex lifecycle prompt mode' }],
+      tasks: [{
+        subject: 'Dispatch test',
+        description: 'Reviewer seed says the worker may be blocked; verify prompt echo stays quiet.',
+      }],
       cwd,
     });
 
     expect(modelContractMocks.getPromptModeArgs).toHaveBeenCalledWith(
       'codex',
-      expect.stringContaining('team api claim-task'),
+      expect.stringContaining('.omc/state/team/dispatch-team/workers/worker-1/inbox.md'),
     );
-    expect(modelContractMocks.getPromptModeArgs).toHaveBeenCalledWith(
-      'codex',
-      expect.stringContaining('transition-task-status'),
-    );
+    const promptModeInstruction = modelContractMocks.getPromptModeArgs.mock.calls[0]?.[1];
+    expect(promptModeInstruction).toContain('Open .omc/state/team/dispatch-team/workers/worker-1/inbox.md');
+    expect(promptModeInstruction).not.toContain('claim-task');
+    expect(promptModeInstruction).not.toContain('transition-task-status');
+    expect(promptModeInstruction).not.toContain('blocked');
+    expect(promptModeInstruction).not.toContain('Reviewer seed');
     expect(mocks.spawnWorkerInPane).toHaveBeenCalledWith(
       'dispatch-session',
       '%2',
       expect.objectContaining({
         launchBinary: '/usr/bin/codex',
         launchArgs: expect.arrayContaining([
-          expect.stringContaining('claim-task'),
-          expect.stringContaining('Task ID: 1'),
-          expect.stringContaining('Subject: Dispatch test'),
+          expect.stringContaining('.omc/state/team/dispatch-team/workers/worker-1/inbox.md'),
         ]),
       }),
     );
+    const launchArgs = mocks.spawnWorkerInPane.mock.calls[0]?.[2]?.launchArgs ?? [];
+    expect(launchArgs.some((arg: string) => arg.includes('claim-task'))).toBe(false);
+    expect(launchArgs.some((arg: string) => arg.includes('transition-task-status'))).toBe(false);
+    expect(launchArgs.some((arg: string) => arg.includes('blocked'))).toBe(false);
+    expect(launchArgs.some((arg: string) => arg.includes('Reviewer seed'))).toBe(false);
+    const inboxPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'workers', 'worker-1', 'inbox.md');
+    const inbox = await readFile(inboxPath, 'utf-8');
+    expect(inbox).toContain('team api claim-task');
+    expect(inbox).toContain('transition-task-status');
+    expect(inbox).toContain('Reviewer seed says the worker may be blocked');
     expect(runtime.config.workers[0]?.assigned_tasks).toEqual(['1']);
     expect(mocks.sendToWorker).not.toHaveBeenCalled();
   });

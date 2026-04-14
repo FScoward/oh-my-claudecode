@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 const CLAUDE_CONFIG_DIR = '/tmp/test-claude';
-const CACHE_PATH = `${CLAUDE_CONFIG_DIR}/plugins/oh-my-claudecode/.usage-cache.json`;
+const CACHE_PATH = `${CLAUDE_CONFIG_DIR}/plugins/oh-my-claudecode/.usage-cache-zai.json`;
 const CACHE_DIR = `${CLAUDE_CONFIG_DIR}/plugins/oh-my-claudecode`;
 function createFsMock(initialFiles) {
     const files = new Map(Object.entries(initialFiles));
@@ -66,7 +66,7 @@ function createFsMock(initialFiles) {
     };
 }
 function setupMocks(fsModule, httpStatus, httpBody) {
-    vi.doMock('../../utils/paths.js', () => ({
+    vi.doMock('../../utils/config-dir.js', () => ({
         getClaudeConfigDir: () => CLAUDE_CONFIG_DIR,
     }));
     vi.doMock('../../utils/ssrf-guard.js', () => ({
@@ -107,7 +107,7 @@ describe('usage API stale data handling', () => {
     });
     afterEach(() => {
         process.env = { ...originalEnv };
-        vi.unmock('../../utils/paths.js');
+        vi.unmock('../../utils/config-dir.js');
         vi.unmock('../../utils/ssrf-guard.js');
         vi.unmock('fs');
         vi.unmock('child_process');

@@ -185,6 +185,15 @@ export interface RateLimits {
   monthlyPercent?: number;
   /** When the monthly limit resets (null if unavailable) */
   monthlyResetsAt?: Date | null;
+
+  /** Extra (metered) usage percentage (0-100), derived from spent/limit or API utilization */
+  extraUsagePercent?: number;
+  /** Extra usage amount spent in USD */
+  extraUsageSpentUsd?: number;
+  /** Extra usage limit in USD */
+  extraUsageLimitUsd?: number;
+  /** When the extra usage period resets (null if unavailable) */
+  extraUsageResetsAt?: Date | null;
 }
 
 /**
@@ -423,6 +432,7 @@ export interface HudElementConfig {
   useHyperlinks?: boolean;   // Wrap cwd/paths in OSC 8 terminal hyperlinks (clickable in supported terminals)
   gitRepo: boolean;          // Show git repository name
   gitBranch: boolean;        // Show git branch
+  gitStatus: boolean;        // Show git working tree status (+staged !modified ?untracked ⇡ahead ⇣behind)
   gitInfoPosition: 'above' | 'below';  // Position of git info relative to main HUD line
   model: boolean;            // Show current model name
   modelFormat: ModelFormat;   // Model name verbosity level
@@ -443,6 +453,7 @@ export interface HudElementConfig {
   thinking: boolean;          // Show extended thinking indicator
   thinkingFormat: ThinkingFormat;  // Thinking indicator format
   apiKeySource: boolean;       // Show API key source (project/global/env)
+  hostname: boolean;           // Show machine hostname (useful for multi-host SSH workflows)
   profile: boolean;            // Show active profile name (from CLAUDE_CONFIG_DIR)
   missionBoard?: boolean;      // Show opt-in mission board above existing HUD detail lines
   promptTime: boolean;        // Show last prompt submission time (HH:MM:SS)
@@ -503,7 +514,7 @@ export interface LayoutConfig {
  * Used as fallback when no layout is configured.
  */
 export const DEFAULT_ELEMENT_ORDER: Required<LayoutConfig> = {
-  line1: ['cwd', 'gitRepo', 'gitBranch', 'model', 'apiKeySource', 'profile'],
+  line1: ['hostname', 'cwd', 'gitRepo', 'gitBranch', 'gitStatus', 'model', 'apiKeySource', 'profile'],
   main: [
     'omcLabel', 'rateLimits', 'customBuckets', 'permission', 'thinking',
     'promptTime', 'session', 'tokens', 'ralph', 'autopilot', 'prd',
@@ -543,6 +554,7 @@ export const DEFAULT_HUD_CONFIG: HudConfig = {
     useHyperlinks: false,
     gitRepo: false,           // Disabled by default for backward compatibility
     gitBranch: false,         // Disabled by default for backward compatibility
+    gitStatus: false,         // Disabled by default for backward compatibility
     gitInfoPosition: 'above',  // Git info above main HUD line (backward compatible)
     model: false,             // Disabled by default for backward compatibility
     modelFormat: 'short',     // Short names by default for backward compatibility
@@ -563,6 +575,7 @@ export const DEFAULT_HUD_CONFIG: HudConfig = {
     thinking: true,
     thinkingFormat: 'text',   // Text format for backward compatibility
     apiKeySource: false, // Disabled by default
+    hostname: false,
     profile: true,  // Show profile name when CLAUDE_CONFIG_DIR is set
     missionBoard: false,  // Opt-in mission board for whole-run progress tracking
     promptTime: true,  // Show last prompt time by default
@@ -584,7 +597,7 @@ export const DEFAULT_HUD_CONFIG: HudConfig = {
     contextCritical: 85,
     ralphWarning: 7,
   },
-  staleTaskThresholdMinutes: 30,
+  staleTaskThresholdMinutes: 10,
   contextLimitWarning: {
     threshold: 80,
     autoCompact: false,
@@ -601,6 +614,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     useHyperlinks: false,
     gitRepo: false,
     gitBranch: false,
+    gitStatus: false,
     gitInfoPosition: 'above',
     model: false,
     modelFormat: 'short',
@@ -621,6 +635,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     thinking: false,
     thinkingFormat: 'text',
     apiKeySource: false,
+    hostname: false,
     profile: true,
     missionBoard: false,
     promptTime: false,
@@ -641,6 +656,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     useHyperlinks: false,
     gitRepo: false,
     gitBranch: true,
+    gitStatus: true,
     gitInfoPosition: 'above',
     model: false,
     modelFormat: 'short',
@@ -661,6 +677,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     thinking: true,
     thinkingFormat: 'text',
     apiKeySource: false,
+    hostname: false,
     profile: true,
     missionBoard: false,
     promptTime: true,
@@ -681,6 +698,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     useHyperlinks: false,
     gitRepo: true,
     gitBranch: true,
+    gitStatus: true,
     gitInfoPosition: 'above',
     model: false,
     modelFormat: 'short',
@@ -701,6 +719,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     thinking: true,
     thinkingFormat: 'text',
     apiKeySource: true,
+    hostname: false,
     profile: true,
     missionBoard: false,
     promptTime: true,
@@ -721,6 +740,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     useHyperlinks: false,
     gitRepo: false,
     gitBranch: true,
+    gitStatus: false,
     gitInfoPosition: 'above',
     model: false,
     modelFormat: 'short',
@@ -741,6 +761,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     thinking: true,
     thinkingFormat: 'text',
     apiKeySource: false,
+    hostname: false,
     profile: true,
     missionBoard: false,
     promptTime: true,
@@ -761,6 +782,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     useHyperlinks: false,
     gitRepo: true,
     gitBranch: true,
+    gitStatus: true,
     gitInfoPosition: 'above',
     model: false,
     modelFormat: 'short',
@@ -781,6 +803,7 @@ export const PRESET_CONFIGS: Record<HudPreset, Partial<HudElementConfig>> = {
     thinking: true,
     thinkingFormat: 'text',
     apiKeySource: true,
+    hostname: false,
     profile: true,
     missionBoard: false,
     promptTime: true,

@@ -6,11 +6,12 @@
  * Cross-platform: Windows, macOS, Linux
  */
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { execSync } from 'child_process';
-import { homedir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { getClaudeConfigDir } from './lib/config-dir.mjs';
+import { evaluateAgentHeavyPreflight } from './lib/pre-tool-enforcer-preflight.mjs';
 import { readStdin } from './lib/stdin.mjs';
 
 // Inlined from src/config/models.ts — avoids a dist/ import so the hook works
@@ -64,7 +65,7 @@ function readAgentDefinitionModel(subagentType) {
   const agentFile = candidateDirs.map(d => join(d, `${agentType}.md`)).find(f => existsSync(f)) ?? null;
   try {
     if (!agentFile) return null;
-    const content = readFileSync(agentFile, 'utf-8');
+    const content = readFileSync(agentFile, 'utf-8').replace(/^\uFEFF/, '');
     // Extract the YAML frontmatter block (content between the opening and closing ---).
     // Searching the whole file would match `model:` lines in the body/prompt text, causing
     // false denies for agents whose prompt happens to contain that word.
@@ -90,8 +91,6 @@ const MODE_STATE_FILES = [
   'team-state.json',
   'omc-teams-state.json',
 ];
-const AGENT_HEAVY_TOOLS = new Set(['Task', 'TaskCreate', 'TaskUpdate']);
-const PREFLIGHT_CONTEXT_THRESHOLD = parseInt(process.env.OMC_AGENT_PREFLIGHT_CONTEXT_THRESHOLD || '72', 10);
 const QUIET_LEVEL = getQuietLevel();
 
 function getQuietLevel() {
@@ -139,7 +138,7 @@ function resolveTranscriptPath(transcriptPath, cwd) {
       const lastSep = transcriptPath.lastIndexOf('/');
       const sessionFile = lastSep !== -1 ? transcriptPath.substring(lastSep + 1) : '';
       if (sessionFile) {
-        const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+        const configDir = getClaudeConfigDir();
         const projectsDir = join(configDir, 'projects');
         if (existsSync(projectsDir)) {
           const encodedMain = mainRepoRoot.replace(/[/\\]/g, '-');
@@ -153,46 +152,6 @@ function resolveTranscriptPath(transcriptPath, cwd) {
   } catch { /* best-effort fallback */ }
 
   return transcriptPath;
-}
-
-function estimateContextPercent(transcriptPath) {
-  if (!transcriptPath) return 0;
-
-  let fd = -1;
-  try {
-    const stat = statSync(transcriptPath);
-    if (stat.size === 0) return 0;
-
-    fd = openSync(transcriptPath, 'r');
-    const readSize = Math.min(4096, stat.size);
-    const buf = Buffer.alloc(readSize);
-    readSync(fd, buf, 0, readSize, stat.size - readSize);
-    closeSync(fd);
-    fd = -1;
-
-    const tail = buf.toString('utf-8');
-    const windowMatch = tail.match(/"context_window"\s{0,5}:\s{0,5}(\d+)/g);
-    const inputMatch = tail.match(/"input_tokens"\s{0,5}:\s{0,5}(\d+)/g);
-
-    if (!windowMatch || !inputMatch) return 0;
-
-    const lastWindow = parseInt(windowMatch[windowMatch.length - 1].match(/(\d+)/)[1], 10);
-    const lastInput = parseInt(inputMatch[inputMatch.length - 1].match(/(\d+)/)[1], 10);
-
-    if (lastWindow === 0) return 0;
-    return Math.round((lastInput / lastWindow) * 100);
-  } catch {
-    return 0;
-  } finally {
-    if (fd !== -1) try { closeSync(fd); } catch { /* ignore */ }
-  }
-}
-
-function buildPreflightRecoveryAdvice(contextPercent) {
-  return `[OMC] Preflight context guard: ${contextPercent}% used ` +
-    `(threshold: ${PREFLIGHT_CONTEXT_THRESHOLD}%). Avoid spawning additional agent-heavy tasks ` +
-    `until context is reduced. Safe recovery: (1) pause new Task fan-out, (2) run /compact now, ` +
-    `(3) if compact fails, open a fresh session and continue from .omc/state + .omc/notepad.md.`;
 }
 
 // Simple JSON field extraction
@@ -247,7 +206,8 @@ function getTodoStatus(directory) {
     }
   }
 
-  // NOTE: We intentionally do NOT scan the global ~/.claude/todos/ directory.
+  // NOTE: We intentionally do NOT scan the global
+  // [$CLAUDE_CONFIG_DIR|~/.claude]/todos/ directory.
   // That directory accumulates todo files from ALL past sessions across all
   // projects, causing phantom task counts in fresh sessions (see issue #354).
 
@@ -309,13 +269,80 @@ function hasActiveMode(directory, sessionId) {
   );
 }
 
+function mapCanonicalTeamPhaseToStage(rawPhase) {
+  const phase = typeof rawPhase === 'string' ? rawPhase.trim().toLowerCase() : '';
+  switch (phase) {
+    case 'initializing':
+    case 'planning':
+      return 'team-plan';
+    case 'executing':
+      return 'team-exec';
+    case 'fixing':
+      return 'team-fix';
+    case 'completed':
+      return 'complete';
+    case 'failed':
+      return 'failed';
+    default:
+      return '';
+  }
+}
+
+function readCanonicalActiveTeamState(directory, sessionId) {
+  if (!sessionId || !SESSION_ID_PATTERN.test(sessionId)) {
+    return null;
+  }
+
+  const teamRoot = join(directory, '.omc', 'state', 'team');
+  if (!existsSync(teamRoot)) {
+    return null;
+  }
+
+  const entries = readdirSync(teamRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+
+  for (const teamName of entries) {
+    const teamDir = join(teamRoot, teamName);
+    const manifest = readJsonFile(join(teamDir, 'manifest.json'));
+    const phaseState = readJsonFile(join(teamDir, 'phase-state.json'));
+    const ownerSessionId = typeof manifest?.leader?.session_id === 'string'
+      ? manifest.leader.session_id.trim()
+      : '';
+    if (!ownerSessionId || ownerSessionId !== sessionId) {
+      continue;
+    }
+
+    const stage = mapCanonicalTeamPhaseToStage(phaseState?.current_phase);
+    if (!stage) {
+      continue;
+    }
+
+    return {
+      active: stage !== 'complete' && stage !== 'failed',
+      session_id: sessionId,
+      team_name: teamName,
+      teamName,
+      phase: stage,
+      current_phase: stage,
+      task: typeof manifest?.task === 'string' ? manifest.task : teamName,
+      started_at: typeof manifest?.created_at === 'string' ? manifest.created_at : undefined,
+      last_checked_at: typeof phaseState?.updated_at === 'string' ? phaseState.updated_at : undefined,
+    };
+  }
+
+  return null;
+}
+
 /**
  * Check if team mode is active for the given directory/session.
- * Reads team-state.json from session-scoped or legacy paths.
- * Returns the team state object if active, null otherwise.
+ * Reads team-state.json from session-scoped or legacy paths and falls back
+ * to canonical team state when the coarse file drifts or disappears.
  */
 function getActiveTeamState(directory, sessionId) {
   const paths = [];
+  let coarseState = null;
 
   // Session-scoped path (preferred)
   if (sessionId && SESSION_ID_PATTERN.test(sessionId)) {
@@ -327,15 +354,24 @@ function getActiveTeamState(directory, sessionId) {
 
   for (const statePath of paths) {
     const state = readJsonFile(statePath);
-    if (state && state.active === true) {
-      // Respect session isolation: skip state tagged to a different session
-      if (sessionId && state.session_id && state.session_id !== sessionId) {
-        continue;
-      }
+    if (!state) {
+      continue;
+    }
+    if (sessionId && state.session_id && state.session_id !== sessionId) {
+      continue;
+    }
+    coarseState = state;
+    if (state.active === true) {
       return state;
     }
   }
-  return null;
+
+  const canonical = readCanonicalActiveTeamState(directory, sessionId);
+  if (canonical && canonical.active === true) {
+    return canonical;
+  }
+
+  return coarseState && coarseState.active === true ? coarseState : null;
 }
 
 // Generate agent spawn message with metadata
@@ -362,7 +398,7 @@ function generateAgentSpawnMessage(toolInput, directory, todoStatus, sessionId) 
       `Task(team_name="${teamName}", name="worker-N", subagent_type="${agentType}"). ` +
       `Do NOT use Task without team_name during an active team session. ` +
       `If TeamCreate is not available in your tools, tell the user to verify ` +
-      `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is set in ~/.claude/settings.json and restart Claude Code.`;
+      'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is set in [$CLAUDE_CONFIG_DIR|~/.claude]/settings.json. Restart Claude Code.';
   }
 
   if (QUIET_LEVEL >= 2) return '';
@@ -455,7 +491,7 @@ function getSkillProtectionLevel(skillName, rawSkillName) {
 // Load OMC config to check forceInherit setting (issues #1135, #1201)
 function loadOmcConfig() {
   const configPaths = [
-    join(homedir(), '.claude', '.omc-config.json'),
+    join(getClaudeConfigDir(), '.omc-config.json'),
     join(process.cwd(), '.omc', 'config.json'),
   ];
   for (const configPath of configPaths) {
@@ -784,16 +820,15 @@ async function main() {
 
     const todoStatus = getTodoStatus(directory);
 
-    if (AGENT_HEAVY_TOOLS.has(toolName)) {
+    if (toolName === 'Task' || toolName === 'TaskCreate' || toolName === 'TaskUpdate') {
       const rawTranscriptPath = data.transcript_path || data.transcriptPath || '';
       const transcriptPath = resolveTranscriptPath(rawTranscriptPath, directory);
-      const contextPercent = estimateContextPercent(transcriptPath);
-
-      if (contextPercent >= PREFLIGHT_CONTEXT_THRESHOLD) {
-        console.log(JSON.stringify({
-          decision: 'block',
-          reason: buildPreflightRecoveryAdvice(contextPercent),
-        }));
+      const preflightBlock = evaluateAgentHeavyPreflight({
+        toolName,
+        transcriptPath,
+      });
+      if (preflightBlock) {
+        console.log(JSON.stringify(preflightBlock));
         return;
       }
     }

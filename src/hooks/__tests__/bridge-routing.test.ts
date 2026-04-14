@@ -20,6 +20,33 @@ import {
 } from '../bridge.js';
 import { flushPendingWrites } from '../subagent-tracker/index.js';
 
+function writeCanonicalTeamState(tempDir: string, sessionId: string, teamName: string, phase: string): void {
+  const canonicalTeamDir = join(tempDir, '.omc', 'state', 'team', teamName);
+  mkdirSync(canonicalTeamDir, { recursive: true });
+  writeFileSync(
+    join(canonicalTeamDir, 'manifest.json'),
+    JSON.stringify({
+      name: teamName,
+      task: `${teamName} task`,
+      leader: {
+        session_id: sessionId,
+        worker_id: 'leader-fixed',
+        role: 'leader',
+      },
+      created_at: new Date().toISOString(),
+      leader_cwd: tempDir,
+      team_state_root: join(tempDir, '.omc', 'state'),
+    }, null, 2),
+  );
+  writeFileSync(
+    join(canonicalTeamDir, 'phase-state.json'),
+    JSON.stringify({
+      current_phase: phase,
+      updated_at: new Date().toISOString(),
+    }, null, 2),
+  );
+}
+
 // ============================================================================
 // Hook Routing Tests
 // ============================================================================
@@ -281,17 +308,52 @@ Read src/hooks/bridge.ts first.`,
         const sessionDir = join(tempDir, '.omc', 'state', 'sessions', sessionId);
         const ralphState = JSON.parse(readFileSync(join(sessionDir, 'ralph-state.json'), 'utf-8')) as {
           awaiting_confirmation?: boolean;
+          awaiting_confirmation_set_at?: string;
           active?: boolean;
         };
         const ultraworkState = JSON.parse(readFileSync(join(sessionDir, 'ultrawork-state.json'), 'utf-8')) as {
           awaiting_confirmation?: boolean;
+          awaiting_confirmation_set_at?: string;
           active?: boolean;
         };
 
         expect(ralphState.active).toBe(true);
         expect(ralphState.awaiting_confirmation).toBe(true);
+        expect(typeof ralphState.awaiting_confirmation_set_at).toBe('string');
         expect(ultraworkState.active).toBe(true);
         expect(ultraworkState.awaiting_confirmation).toBe(true);
+        expect(typeof ultraworkState.awaiting_confirmation_set_at).toBe('string');
+
+        const stopResult = await processHook('persistent-mode', {
+          sessionId,
+          directory: tempDir,
+          stop_reason: 'end_turn',
+        } as HookInput);
+
+        expect(stopResult.continue).toBe(true);
+        expect(stopResult.message).toBeUndefined();
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not activate ultrawork state for explanatory reference follow-up prose', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-keyword-reference-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'keyword-reference-session';
+
+        const keywordResult = await processHook('keyword-detector', {
+          sessionId,
+          prompt: 'OMC Ultrawork = "special ops". how much would it cost?',
+          directory: tempDir,
+        });
+
+        expect(keywordResult.continue).toBe(true);
+        expect(keywordResult.message).toBeUndefined();
+
+        const sessionDir = join(tempDir, '.omc', 'state', 'sessions', sessionId);
+        expect(existsSync(join(sessionDir, 'ultrawork-state.json'))).toBe(false);
 
         const stopResult = await processHook('persistent-mode', {
           sessionId,
@@ -339,6 +401,35 @@ Read src/hooks/bridge.ts first.`,
       }
     });
 
+    it('strips legacy --no-prd text but still starts Ralph in PRD mode from keyword routing', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-keyword-ralph-prd-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'keyword-ralph-prd-session';
+
+        const result = await processHook('keyword-detector', {
+          sessionId,
+          prompt:
+            'ralph --no-prd fix the startup gate in src/hooks/bridge.ts and src/hooks/ralph/loop.ts by removing legacy bypass handling, preserving critic flag support, keeping linked ultrawork activation intact, adding focused regression coverage for keyword and skill entrypoints, confirming the startup PRD scaffold is still created, and avoiding unrelated orchestration behavior changes anywhere else in this worktree',
+          directory: tempDir,
+        });
+
+        expect(result.continue).toBe(true);
+
+        const ralphPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ralph-state.json');
+        const prdPath = join(tempDir, '.omc', 'prd.json');
+        expect(existsSync(ralphPath)).toBe(true);
+        expect(existsSync(prdPath)).toBe(true);
+
+        const ralphState = JSON.parse(readFileSync(ralphPath, 'utf-8')) as { prompt?: string; prd_mode?: boolean };
+        expect(ralphState.prompt).toBe(
+          'ralph fix the startup gate in src/hooks/bridge.ts and src/hooks/ralph/loop.ts by removing legacy bypass handling, preserving critic flag support, keeping linked ultrawork activation intact, adding focused regression coverage for keyword and skill entrypoints, confirming the startup PRD scaffold is still created, and avoiding unrelated orchestration behavior changes anywhere else in this worktree',
+        );
+        expect(ralphState.prd_mode).toBe(true);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
 
     it('clears awaiting confirmation when Skill tool actually invokes ralph', async () => {
       const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-confirm-ralph-'));
@@ -384,13 +475,17 @@ Read src/hooks/bridge.ts first.`,
 
         const ralphState = JSON.parse(readFileSync(join(sessionDir, 'ralph-state.json'), 'utf-8')) as {
           awaiting_confirmation?: boolean;
+          awaiting_confirmation_set_at?: string;
         };
         const ultraworkState = JSON.parse(readFileSync(join(sessionDir, 'ultrawork-state.json'), 'utf-8')) as {
           awaiting_confirmation?: boolean;
+          awaiting_confirmation_set_at?: string;
         };
 
         expect(ralphState.awaiting_confirmation).toBeUndefined();
+        expect(ralphState.awaiting_confirmation_set_at).toBeUndefined();
         expect(ultraworkState.awaiting_confirmation).toBeUndefined();
+        expect(ultraworkState.awaiting_confirmation_set_at).toBeUndefined();
       } finally {
         rmSync(tempDir, { recursive: true, force: true });
       }
@@ -474,6 +569,55 @@ Read src/hooks/bridge.ts first.`,
       }
     });
 
+    it('deactivates ralplan state when the consensus planning skill completes', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-ralplan-complete-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'ralplan-complete-session';
+
+        await processHook('pre-tool-use', {
+          sessionId,
+          toolName: 'Skill',
+          toolInput: { skill: 'oh-my-claudecode:ralplan' },
+          directory: tempDir,
+        });
+
+        const postResult = await processHook('post-tool-use', {
+          sessionId,
+          toolName: 'Skill',
+          toolInput: { skill: 'oh-my-claudecode:ralplan' },
+          toolOutput: { ok: true },
+          directory: tempDir,
+        });
+
+        expect(postResult.continue).toBe(true);
+
+        const ralplanPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ralplan-state.json');
+        const ralplanState = JSON.parse(readFileSync(ralplanPath, 'utf-8')) as {
+          active?: boolean;
+          current_phase?: string;
+          deactivated_reason?: string;
+          completed_at?: string;
+        };
+
+        expect(ralplanState.active).toBe(false);
+        expect(ralplanState.current_phase).toBe('complete');
+        expect(ralplanState.deactivated_reason).toBe('skill_completed');
+        expect(typeof ralplanState.completed_at).toBe('string');
+
+        const stopResult = await processHook('persistent-mode', {
+          sessionId,
+          directory: tempDir,
+          stop_reason: 'end_turn',
+        } as HookInput);
+
+        expect(stopResult.continue).toBe(true);
+        expect(stopResult.message).toBeUndefined();
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it('should handle session-start and return continue:true', async () => {
       const input: HookInput = {
         sessionId: 'test-session',
@@ -482,6 +626,26 @@ Read src/hooks/bridge.ts first.`,
 
       const result = await processHook('session-start', input);
       expect(result.continue).toBe(true);
+    });
+
+    it('should restore canonical team context when coarse team-state drifts away', async () => {
+      const tempDir = process.cwd();
+      const sessionId = 'canonical-team-session';
+      const canonicalTeamDir = join(tempDir, '.omc', 'state', 'team', 'canonical-team');
+      try {
+        writeCanonicalTeamState(tempDir, sessionId, 'canonical-team', 'executing');
+
+        const result = await processHook('session-start', {
+          sessionId,
+          directory: tempDir,
+        } as HookInput);
+
+        expect(result.continue).toBe(true);
+        expect(result.message).toContain('[TEAM MODE RESTORED]');
+        expect(result.message).toContain('canonical-team');
+      } finally {
+        rmSync(canonicalTeamDir, { recursive: true, force: true });
+      }
     });
 
     it('should handle stop-continuation and always return continue:true', async () => {
@@ -1022,6 +1186,54 @@ Read src/hooks/bridge.ts first.`,
 
       spy.mockRestore();
     });
+
+    it('surfaces blocker details in autopilot hook output', async () => {
+      const testDir = process.cwd();
+      try {
+        const sessionId = 'autopilot-blockers-session';
+        const sessionDir = join(testDir, '.omc', 'state', 'sessions', sessionId);
+        const teamRoot = join(testDir, '.omc', 'state', 'team', 'bridge-autopilot-demo-team');
+        mkdirSync(sessionDir, { recursive: true });
+        mkdirSync(join(teamRoot, 'tasks'), { recursive: true });
+        writeFileSync(join(sessionDir, 'autopilot-state.json'), JSON.stringify({
+          active: true,
+          phase: 'planning',
+          session_id: sessionId,
+          originalIdea: 'demo task',
+          expansion: { spec_path: null },
+          planning: { plan_path: null },
+        }, null, 2));
+        writeFileSync(join(sessionDir, 'team-state.json'), JSON.stringify({
+          active: true,
+          session_id: sessionId,
+          team_name: 'bridge-autopilot-demo-team',
+          current_phase: 'team-exec',
+        }, null, 2));
+        writeCanonicalTeamState(testDir, sessionId, 'bridge-autopilot-demo-team', 'executing');
+        writeFileSync(join(teamRoot, 'tasks', '1.json'), JSON.stringify({
+          id: '1',
+          subject: 'Blocked task',
+          description: 'Depends on missing task 13',
+          status: 'pending',
+          owner: 'worker-1',
+          blocked_by: ['13'],
+          depends_on: ['13'],
+          created_at: new Date().toISOString(),
+        }, null, 2));
+
+        const result = await processHook('autopilot', {
+          sessionId,
+          directory: testDir,
+        });
+
+        expect(result.continue).toBe(true);
+        expect(result.message).toContain('[AUTOPILOT - Phase: PLANNING]');
+        expect(result.message).toContain('[bridge-autopilot-demo-team] task-1 depends on missing task ids [13]');
+      } finally {
+        rmSync(join(testDir, '.omc', 'state', 'sessions', 'autopilot-blockers-session'), { recursive: true, force: true });
+        rmSync(join(testDir, '.omc', 'state', 'team', 'bridge-autopilot-demo-team'), { recursive: true, force: true });
+      }
+    });
   });
 
   // --------------------------------------------------------------------------
@@ -1077,21 +1289,30 @@ Read src/hooks/bridge.ts first.`,
       expect(decision.behavior).toBe('allow');
     });
 
-    it('permission-request: camelCase input also auto-allows safe command', async () => {
-      const input: HookInput = {
-        sessionId: 'test-session-858',
-        directory: '/tmp/test-routing',
-        toolName: 'Bash',
-        toolInput: { command: 'npm test' },
-      };
+    it('permission-request: camelCase input auto-allows explicitly targeted single-test commands', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-858-permission-camel-'));
+      try {
+        mkdirSync(join(tempDir, 'src', '__tests__'), { recursive: true });
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        writeFileSync(join(tempDir, 'src', '__tests__', 'safe.test.ts'), 'test("x", () => {});\n');
 
-      const result = await processHook('permission-request', input);
-      expect(result.continue).toBe(true);
-      const out = result as unknown as Record<string, unknown>;
-      expect(out.hookSpecificOutput).toBeDefined();
-      const specific = out.hookSpecificOutput as Record<string, unknown>;
-      const decision = specific.decision as Record<string, unknown>;
-      expect(decision.behavior).toBe('allow');
+        const input: HookInput = {
+          sessionId: 'test-session-858',
+          directory: tempDir,
+          toolName: 'Bash',
+          toolInput: { command: 'vitest run src/__tests__/safe.test.ts' },
+        };
+
+        const result = await processHook('permission-request', input);
+        expect(result.continue).toBe(true);
+        const out = result as unknown as Record<string, unknown>;
+        expect(out.hookSpecificOutput).toBeDefined();
+        const specific = out.hookSpecificOutput as Record<string, unknown>;
+        const decision = specific.decision as Record<string, unknown>;
+        expect(decision.behavior).toBe('allow');
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     });
 
     it('setup-init: snake_case input reaches handler and returns additionalContext', async () => {

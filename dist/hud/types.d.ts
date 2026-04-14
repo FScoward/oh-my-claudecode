@@ -139,6 +139,14 @@ export interface RateLimits {
     monthlyPercent?: number;
     /** When the monthly limit resets (null if unavailable) */
     monthlyResetsAt?: Date | null;
+    /** Extra (metered) usage percentage (0-100), derived from spent/limit or API utilization */
+    extraUsagePercent?: number;
+    /** Extra usage amount spent in USD */
+    extraUsageSpentUsd?: number;
+    /** Extra usage limit in USD */
+    extraUsageLimitUsd?: number;
+    /** When the extra usage period resets (null if unavailable) */
+    extraUsageResetsAt?: Date | null;
 }
 /**
  * Categorized error reasons for API usage fetch failures.
@@ -321,6 +329,7 @@ export interface HudElementConfig {
     useHyperlinks?: boolean;
     gitRepo: boolean;
     gitBranch: boolean;
+    gitStatus: boolean;
     gitInfoPosition: 'above' | 'below';
     model: boolean;
     modelFormat: ModelFormat;
@@ -341,6 +350,7 @@ export interface HudElementConfig {
     thinking: boolean;
     thinkingFormat: ThinkingFormat;
     apiKeySource: boolean;
+    hostname: boolean;
     profile: boolean;
     missionBoard?: boolean;
     promptTime: boolean;

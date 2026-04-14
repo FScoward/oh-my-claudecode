@@ -62,6 +62,19 @@ World`);
             const result = sanitizeForKeywordDetection('text <br /> more');
             expect(result).not.toContain('<br');
         });
+        it('should strip HTML comments that contain keyword triggers', () => {
+            const result = sanitizeForKeywordDetection(`Please review this draft document for tone and clarity:
+
+<!-- ralph: rewrite intro section with more urgency -->
+<!-- autopilot note: Why Artificially Inflating GitHub Star Counts Is Harmful:
+popularity without merit misleads developers, distorts discovery, unfairly rewards dishonest projects, and erodes trust in GitHub stars as a community signal. -->
+
+Final draft.`);
+            expect(result).not.toContain('ralph');
+            expect(result).not.toContain('autopilot');
+            expect(result).toContain('Please review this draft document for tone and clarity:');
+            expect(result).toContain('Final draft.');
+        });
         it('should strip URLs', () => {
             const result = sanitizeForKeywordDetection('see https://example.com/codex/path');
             expect(result).not.toContain('codex');
@@ -73,6 +86,15 @@ World`);
         it('should strip markdown code blocks', () => {
             const result = sanitizeForKeywordDetection('```\nask codex\n```');
             expect(result).not.toContain('codex');
+        });
+        it('should strip markdown blockquotes that contain keywords', () => {
+            const result = sanitizeForKeywordDetection('> ultrawork comparison\nactual question below');
+            expect(result).not.toContain('ultrawork');
+            expect(result).toContain('actual question below');
+        });
+        it('should strip markdown tables that contain keywords', () => {
+            const result = sanitizeForKeywordDetection('| mode | note |\n| --- | --- |\n| ultrawork | reference |');
+            expect(result).not.toContain('ultrawork');
         });
         it('should strip inline code', () => {
             const result = sanitizeForKeywordDetection('use `ask codex` command');
@@ -177,6 +199,20 @@ World`);
                 const result = detectKeywordsWithType('What is ralph and how do I use it?');
                 expect(result).toEqual([]);
             });
+            it('should NOT detect informational mode/now phrasing', () => {
+                expect(detectKeywordsWithType('What is autopilot mode now?')).toEqual([]);
+                expect(detectKeywordsWithType('what is ralph mode now?')).toEqual([]);
+            });
+            it('should NOT detect help-style use questions for autopilot', () => {
+                expect(detectKeywordsWithType('How do I use autopilot?')).toEqual([]);
+            });
+            it('should NOT detect what-is plus how-to-use phrasing for autopilot', () => {
+                expect(detectKeywordsWithType("What's autopilot and how to use it?")).toEqual([]);
+            });
+            it('should detect explicit activation even when a nearby help question exists', () => {
+                const result = detectKeywordsWithType('Use autopilot to fix bug in payments. What is the expected output?');
+                expect(result.find((r) => r.type === 'autopilot')).toBeDefined();
+            });
             it('should NOT detect informational Japanese questions about ralplan', () => {
                 const result = detectKeywordsWithType('ralplan とは？ 使い方を教えて');
                 expect(result).toEqual([]);
@@ -207,6 +243,22 @@ World`);
                 expect(autopilotResult.find((r) => r.type === 'autopilot')).toBeDefined();
                 const ralphResult = detectKeywordsWithType('랄프 기능으로 끝까지 진행해줘');
                 expect(ralphResult.find((r) => r.type === 'ralph')).toBeDefined();
+            });
+            it('should NOT detect diagnostic mentions of keywords as activation requests', () => {
+                expect(detectKeywordsWithType('ralph keeps looping, investigate')).toEqual([]);
+                expect(detectKeywordsWithType("there's an issue with ultrawork")).toEqual([]);
+                expect(detectKeywordsWithType('autopilot has a bug in this repo')).toEqual([]);
+                expect(detectKeywordsWithType('ralph-loop이 자꾸 재실행되는 문제가 있어. 점검해줘')).toEqual([]);
+            });
+            it('should still detect explicit activation requests that mention bug/issue context', () => {
+                const autopilot = detectKeywordsWithType('use autopilot to fix bug in payments');
+                expect(autopilot.find((r) => r.type === 'autopilot')).toBeDefined();
+                const ralph = detectKeywordsWithType('run ralph on issue in parser module');
+                expect(ralph.find((r) => r.type === 'ralph')).toBeDefined();
+                const autopilotIssue = detectKeywordsWithType('fix issue with autopilot in parser module');
+                expect(autopilotIssue.find((r) => r.type === 'autopilot')).toBeDefined();
+                const ralphProblem = detectKeywordsWithType('investigate problem with ralph state');
+                expect(ralphProblem.find((r) => r.type === 'ralph')).toBeDefined();
             });
             it('should NOT detect "don\'t stop" phrase', () => {
                 const result = detectKeywordsWithType("Don't stop until done");
@@ -281,6 +333,31 @@ World`);
                 const keywordResult = detectKeywordsWithType('agent pipeline the task and chain agents');
                 const pipelineLikeMatches = keywordResult.filter((r) => r.type === 'pipeline');
                 expect(pipelineLikeMatches).toHaveLength(0);
+            });
+            it('should NOT detect explanatory comparison prose from issue #2474', () => {
+                const result = detectKeywordsWithType(`🦌 DeerFlow vs ⚡ OMC Ultrawork - 완전 비교!
+...
+OMC Ultrawork = "특수부대 작전 반"
+...
+결론: "순식간에 많은 작업" → OMC Ultrawork ⚡
+이런대화가 한번이라면 몇번할수있을까 오픈라우터 20달러 결제기준 api로`);
+                expect(result).toEqual([]);
+            });
+            it('should NOT detect quoted follow-up references after a bad activation', () => {
+                const result = detectKeywordsWithType('The article said "OMC Ultrawork", but why is the answer the same?');
+                expect(result).toEqual([]);
+            });
+            it('should NOT detect single-mode explanatory definitions followed by an unrelated question', () => {
+                const result = detectKeywordsWithType('OMC Ultrawork = "special ops". how much would it cost?');
+                expect(result).toEqual([]);
+            });
+            it('should still detect explicit activation after a single-mode explanatory definition', () => {
+                const result = detectKeywordsWithType('OMC Ultrawork = "special ops". then use ultrawork on issue #2474 in src/hooks/keyword-detector/index.ts');
+                expect(result.find((r) => r.type === 'ultrawork')).toBeDefined();
+            });
+            it('should still detect explicit activation after comparison text', () => {
+                const result = detectKeywordsWithType('Compare DeerFlow vs ultrawork, then use ultrawork on issue #2474 in src/hooks/keyword-detector/index.ts');
+                expect(result.find((r) => r.type === 'ultrawork')).toBeDefined();
             });
         });
         describe('tdd keyword', () => {
@@ -479,6 +556,23 @@ World`);
                 const result = detectKeywordsWithType(text);
                 const ralphMatch = result.find((r) => r.type === 'ralph');
                 expect(ralphMatch).toBeUndefined();
+            });
+            it('should not detect keywords inside HTML comments', () => {
+                const text = `Please review this draft document for tone and clarity:
+
+<!-- ralph: rewrite intro section with more urgency -->
+<!-- autopilot note: Why Artificially Inflating GitHub Star Counts Is Harmful:
+popularity without merit misleads developers, distorts discovery, unfairly rewards dishonest projects, and erodes trust in GitHub stars as a community signal. -->
+
+Final draft:
+
+Why Artificially Inflating GitHub Star Counts Is Harmful
+=========================================================
+
+This article argues that fake popularity signals damage trust in open source.`;
+                const result = detectKeywordsWithType(text);
+                expect(result.find((r) => r.type === 'ralph')).toBeUndefined();
+                expect(result.find((r) => r.type === 'autopilot')).toBeUndefined();
             });
         });
         describe('codex keyword', () => {

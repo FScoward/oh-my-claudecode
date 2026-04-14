@@ -124,6 +124,16 @@ export declare function isPrintMode(args: string[]): boolean;
  */
 export declare function runClaude(cwd: string, args: string[], sessionId: string): void;
 /**
+ * Env vars that must be forwarded into tmux sessions.
+ * tmux new-session inherits the *server's* environment, not the calling
+ * process's, so vars set on process.env (e.g. CLAUDE_CONFIG_DIR at launch)
+ * are silently lost.  We inject them as `export` statements into the shell
+ * command that runs inside the tmux pane, *after* .zshrc/.bashrc sourcing
+ * so our values take precedence.
+ */
+export declare const TMUX_ENV_FORWARD: string[];
+export declare function buildEnvExportPrefix(vars: string[]): string;
+/**
  * postLaunch: Cleanup after Claude exits
  * Currently a placeholder - can be extended for:
  * - Session cleanup
@@ -135,5 +145,12 @@ export declare function postLaunch(_cwd: string, _sessionId: string): Promise<vo
  * Main launch command entry point
  * Orchestrates the 3-phase launch: preLaunch -> run -> postLaunch
  */
+/**
+ * Parse `--plugin-dir <path>` / `--plugin-dir=<path>` from launch args (non-consuming).
+ *
+ * Returns the resolved absolute path if found, or null. The flag is NOT removed
+ * from `args` — it must still forward to Claude Code's plugin loader untouched.
+ */
+export declare function parsePluginDirArg(args: string[]): string | null;
 export declare function launchCommand(args: string[]): Promise<void>;
 //# sourceMappingURL=launch.d.ts.map

@@ -43,7 +43,7 @@ export interface DetectedKeyword {
  */
 const KEYWORD_PATTERNS: Record<KeywordType, RegExp> = {
   cancel: /\b(cancelomc|stopomc)\b/i,
-  ralph: /\b(ralph)\b(?!-)|(랄프)/i,
+  ralph: /\b(ralph)\b(?!-)|(랄프)(?!로렌)/i,
   autopilot: /\b(autopilot|auto[\s-]?pilot|fullsend|full\s+auto)\b|(오토파일럿)/i,
   ultrawork: /\b(ultrawork|ulw)\b|(울트라워크)/i,
   // Team keyword detection disabled — team mode is now explicit-only via /team skill.
@@ -101,12 +101,18 @@ export const NON_LATIN_SCRIPT_PATTERN =
  * Strips XML tags, URLs, file paths, and code blocks.
  */
 export function sanitizeForKeywordDetection(text: string): string {
+  // Remove HTML/markdown comments first so keywords inside comments cannot trigger modes
+  let result = text.replace(/<!--[\s\S]*?-->/g, '');
   // Remove XML tag blocks (opening + content + closing; tag names must match)
-  let result = text.replace(/<(\w[\w-]*)[\s>][\s\S]*?<\/\1>/g, '');
+  result = result.replace(/<(\w[\w-]*)[\s>][\s\S]*?<\/\1>/g, '');
   // Remove self-closing XML tags
   result = result.replace(/<\w[\w-]*(?:\s[^>]*)?\s*\/>/g, '');
   // Remove URLs
   result = result.replace(/https?:\/\/\S+/g, '');
+  // Remove block quotes and markdown table rows - they are typically reference content
+  result = result.replace(/^\s*>\s.*$/gm, '');
+  result = result.replace(/^\s*\|(?:[^|\n]*\|){2,}\s*$/gm, '');
+  result = result.replace(/^\s*\|?(?:\s*:?-{3,}:?\s*\|){1,}\s*$/gm, '');
   // Remove file paths — requires leading / or ./ or multi-segment dir/file.ext
   result = result.replace(/(^|[\s"'`(])(?:\.?\/(?:[\w.-]+\/)*[\w.-]+|(?:[\w.-]+\/)+[\w.-]+\.\w+)/gm, '$1');
   // Remove code blocks (fenced and inline)
@@ -116,17 +122,167 @@ export function sanitizeForKeywordDetection(text: string): string {
 
 const INFORMATIONAL_INTENT_PATTERNS: RegExp[] = [
   /\b(?:what(?:'s|\s+is)|what\s+are|how\s+(?:to|do\s+i)\s+use|explain|explanation|tell\s+me\s+about|describe)\b/i,
-  /(?:뭐야|뭔데|무엇(?:이야|인가요)?|어떻게|설명|사용법|알려\s?줘|알려줄래|소개해?\s?줘|소개\s*부탁|설명해\s?줘|뭐가\s*달라|어떤\s*기능|기능\s*(?:알려|설명|뭐)|방법\s*(?:알려|설명|뭐))/u,
+  /(?:뭐야|뭔데|무엇(?:이야|인가요)?|어떻게|설명(?!서\s*(?:작성|만들|생성|추가|업데이트|수정|편집|쓰))|사용법|알려\s?줘|알려줄래|소개해?\s?줘|소개\s*부탁|설명해\s?줘|뭐가\s*달라|어떤\s*기능|기능\s*(?:알려|설명|뭐)|방법\s*(?:알려|설명|뭐))/u,
   /(?:とは|って何|使い方|説明)/u,
   /(?:什么是|怎(?:么|樣)用|如何使用|解释|說明|说明)/u,
 ];
 const INFORMATIONAL_CONTEXT_WINDOW = 80;
+const QUOTED_SPAN_PATTERN =
+  /"[^"\n]{1,400}"|'[^'\n]{1,400}'|“[^”\n]{1,400}”|‘[^’\n]{1,400}’/g;
+const REFERENCE_META_PATTERNS: RegExp[] = [
+  /\b(?:vs\.?|versus|compared\s+to|comparison|compare|article|blog\s+post|documentation|docs?|reference)\b/i,
+  /(?:비교|차이|설명|정리|문서|자료|가이드|이\s*(?:글|비교|문서)는|블로그)/u,
+  /\b(?:this\s+(?:article|comparison|guide|documentation|doc)|quoted|quote(?:d)?)\b/i,
+];
+const REFERENCE_EXPLANATION_PATTERNS: RegExp[] = [
+  /(?:^|\n)\s*(?:결론|특징|예시|요약|장점|단점|설명)\s*[:：]/u,
+  /\b(?:summary|conclusion|key\s+points?|example|examples|pros|cons|overview)\s*:/i,
+  /[^\n]{1,80}=\s*["“]/,
+  /[→⇒]/,
+];
+const QUESTION_FOLLOWUP_PATTERNS: RegExp[] = [
+  /\b(?:how\s+many|how\s+much|why|what\s+happened|what\s+went\s+wrong|token\s+budget|cost|pricing)\b/i,
+  /(?:왜|얼마|몇\s*번|몇번|토큰|가격|비용|질문)/u,
+];
+const MODE_REFERENCE_PATTERN =
+  /\b(?:ralph|autopilot|auto[\s-]?pilot|ultrawork|ulw|ralplan|ultrathink|deepsearch|deep[\s-]?analyze|deepanalyze|deep[\s-]interview|ouroboros|ccg|claude-codex-gemini|deerflow)\b/gi;
 
-function isInformationalKeywordContext(text: string, position: number, keywordLength: number): boolean {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getLineBounds(text: string, position: number): { start: number; end: number } {
+  const start = text.lastIndexOf('\n', Math.max(0, position - 1)) + 1;
+  const nextNewline = text.indexOf('\n', position);
+  const end = nextNewline === -1 ? text.length : nextNewline;
+  return { start, end };
+}
+
+function isWithinQuotedSpan(text: string, position: number): boolean {
+  for (const match of text.matchAll(QUOTED_SPAN_PATTERN)) {
+    if (match.index === undefined) continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (position >= start && position < end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stripQuotedSpans(text: string): string {
+  return text.replace(QUOTED_SPAN_PATTERN, ' ');
+}
+
+function countDistinctModeReferences(text: string): number {
+  const matches = text.match(MODE_REFERENCE_PATTERN) ?? [];
+  const normalized = new Set(
+    matches.map((match) => match.toLowerCase().replace(/\s+/g, '').replace(/-/g, '')),
+  );
+  return normalized.size;
+}
+
+function looksLikeReferenceContent(text: string): boolean {
+  const hasReferenceMeta = REFERENCE_META_PATTERNS.some((pattern) => pattern.test(text));
+  const hasExplanationShape = REFERENCE_EXPLANATION_PATTERNS.some((pattern) => pattern.test(text));
+  const hasAnyModeMention = countDistinctModeReferences(text) >= 1;
+  const hasMultipleModeMentions = countDistinctModeReferences(text) >= 2;
+  const hasQuestionOutsideQuotes = QUESTION_FOLLOWUP_PATTERNS.some((pattern) =>
+    pattern.test(stripQuotedSpans(text)),
+  );
+
+  return (
+    (hasReferenceMeta && (hasExplanationShape || hasAnyModeMention || hasQuestionOutsideQuotes)) ||
+    (hasExplanationShape && (hasMultipleModeMentions || hasQuestionOutsideQuotes)) ||
+    (hasMultipleModeMentions && hasQuestionOutsideQuotes)
+  );
+}
+
+function hasActivationIntentNearKeyword(context: string, keyword: string): boolean {
+  const escaped = escapeRegExp(keyword.trim());
+  if (!escaped) return false;
+
+  // Help-question phrasing like "How do I use autopilot?" should not be
+  // treated as activation intent.
+  const helpQuestionPatterns = [
+    new RegExp(`\\bhow\\s+do\\s+i\\s+use\\b[^\\n]{0,40}\\b${escaped}\\b`, 'i'),
+    new RegExp(`\\bwhat(?:'s|\\s+is)\\b[^\\n]{0,40}\\b${escaped}\\b[^\\n]{0,40}\\bhow\\s+to\\s+use\\b`, 'i'),
+  ];
+  if (helpQuestionPatterns.some((pattern) => pattern.test(context))) {
+    return false;
+  }
+
+  const patterns = [
+    new RegExp(`\\b(?:use|run|start|enable|activate|invoke|trigger|launch)\\b[^\\n]{0,28}\\b${escaped}\\b`, 'i'),
+    new RegExp(`\\b(?:fix|debug|investigate|resolve|handle|patch|address)\\b[^\\n]{0,28}\\b(?:issue|bug|problem|error)\\b[^\\n]{0,12}\\b(?:with|in)\\s+\\b${escaped}\\b`, 'i'),
+
+  ];
+
+  return patterns.some((pattern) => pattern.test(context));
+}
+
+function hasDiagnosticIntentNearKeyword(context: string, keyword: string): boolean {
+  const escaped = escapeRegExp(keyword.trim());
+  if (!escaped) return false;
+
+  const patterns = [
+    new RegExp(`\\b${escaped}\\b[^\\n]{0,48}\\b(?:keeps?\\s+(?:looping|re-?running)|has\\s+(?:a\\s+)?(?:bug|issue|problem|error)|is\\s+(?:stuck|broken|failing)|loop(?:ing)?)\\b`, 'i'),
+    new RegExp(`\\b(?:bug|issue|problem|error)\\b[^\\n]{0,16}\\b(?:with|in)\\s+\\b${escaped}\\b`, 'i'),
+    new RegExp(`${escaped}.{0,14}(?:자꾸|계속).{0,14}(?:재실행|반복|루프|멈추)`, 'u'),
+  ];
+
+  return patterns.some((pattern) => pattern.test(context));
+}
+
+function isInformationalKeywordContext(text: string, position: number, keywordLength: number, keywordText?: string): boolean {
   const start = Math.max(0, position - INFORMATIONAL_CONTEXT_WINDOW);
   const end = Math.min(text.length, position + keywordLength + INFORMATIONAL_CONTEXT_WINDOW);
   const context = text.slice(start, end);
-  return INFORMATIONAL_INTENT_PATTERNS.some(pattern => pattern.test(context));
+  const hasInformationalIntent = INFORMATIONAL_INTENT_PATTERNS.some((pattern) => pattern.test(context));
+  const hasStrongHelpQueryIntent = /\?|？|\b(?:how\s+(?:to|do\s+i)\s+use|what(?:'s|\s+is)|explain|describe|tell\s+me\s+about)\b|(?:사용법|使い方|什么是|怎么用|如何使用)/iu.test(context);
+  const lineBounds = getLineBounds(text, position);
+  const line = text.slice(lineBounds.start, lineBounds.end);
+  const questionOutsideQuotes = stripQuotedSpans(text);
+  const keywordInsideQuotes = isWithinQuotedSpan(text, position);
+
+  if (keywordText) {
+    const hasActivationIntent = hasActivationIntentNearKeyword(context, keywordText);
+    const hasExecutionDirective = /\b(?:fix|debug|investigate|resolve|handle|patch|address|implement|build)\b/i.test(context);
+
+    // Explicit command + execution intent should remain actionable even if the
+    // surrounding message also contains a help question.
+    if (hasActivationIntent && hasExecutionDirective) {
+      return false;
+    }
+
+    // Help-style informational queries must not activate execution modes,
+    // even when they contain phrases like "use <keyword>".
+    if (hasInformationalIntent && hasStrongHelpQueryIntent) {
+      return true;
+    }
+
+    if (hasActivationIntent) {
+      return false;
+    }
+
+    if (hasDiagnosticIntentNearKeyword(context, keywordText)) {
+      return true;
+    }
+  }
+
+  if (/^\s*>\s/.test(line) || /^\s*\|(?:[^|\n]*\|){2,}\s*$/.test(line)) {
+    return true;
+  }
+
+  if (keywordInsideQuotes && QUESTION_FOLLOWUP_PATTERNS.some((pattern) => pattern.test(questionOutsideQuotes))) {
+    return true;
+  }
+
+  if (looksLikeReferenceContent(text)) {
+    return true;
+  }
+
+  return hasInformationalIntent;
 }
 
 function findActionableKeywordMatch(
@@ -142,7 +298,7 @@ function findActionableKeywordMatch(
     }
 
     const keyword = match[0];
-    if (isInformationalKeywordContext(text, match.index, keyword.length)) {
+    if (isInformationalKeywordContext(text, match.index, keyword.length, keyword)) {
       continue;
     }
 

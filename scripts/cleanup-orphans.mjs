@@ -24,7 +24,7 @@
 import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { getClaudeConfigDir } from './lib/config-dir.mjs';
 
 const args = process.argv.slice(2);
 const teamNameIdx = args.indexOf('--team-name');
@@ -124,7 +124,7 @@ function getWindowsProcessListOutput() {
  * Check if a team's config still exists (i.e., team is still active).
  */
 function teamConfigExists(name) {
-  const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+  const configDir = getClaudeConfigDir();
   const configPath = join(configDir, 'teams', name, 'config.json');
   return existsSync(configPath);
 }

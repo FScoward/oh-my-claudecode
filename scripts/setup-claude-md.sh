@@ -13,14 +13,28 @@ INSTALL_STYLE="${2:-overwrite}"
 DOWNLOAD_URL="https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claudecode/main/docs/CLAUDE.md"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+. "$SCRIPT_DIR/lib/config-dir.sh"
 
 # Resolve active plugin root from installed_plugins.json.
 # Handles stale CLAUDE_PLUGIN_ROOT when a session was started before a plugin
 # update (e.g. 4.8.2 session invoking setup after updating to 4.9.0).
 # Same pattern as run.cjs resolveTarget() fallback.
 resolve_active_plugin_root() {
-  local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  is_valid_plugin_root() {
+    local candidate="$1"
+    [ -d "$candidate" ] && [ -f "${candidate}/docs/CLAUDE.md" ]
+  }
+
+  list_cache_versions() {
+    local base="$1"
+    ls -1 "$base" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+  }
+
+  local config_dir
+  config_dir="$(resolve_claude_config_dir)"
   local installed_plugins="${config_dir}/plugins/installed_plugins.json"
+  local cache_base
+  cache_base="$(dirname "$SCRIPT_PLUGIN_ROOT")"
 
   if [ -f "$installed_plugins" ] && command -v jq >/dev/null 2>&1; then
     local active_path
@@ -31,19 +45,41 @@ resolve_active_plugin_root() {
       | .value[0].installPath // empty
     ' "$installed_plugins" 2>/dev/null)
 
-    if [ -n "$active_path" ] && [ -d "$active_path" ]; then
+    if [ -n "$active_path" ] && is_valid_plugin_root "$active_path"; then
+      # Guard against stale installed_plugins.json after plugin update:
+      # if cache contains a newer valid version, prefer it.
+      if [ -d "$cache_base" ]; then
+        local active_version latest_cache_version preferred_version
+        active_version="$(basename "$active_path")"
+        latest_cache_version=$(list_cache_versions "$cache_base" | while IFS= read -r v; do
+          if is_valid_plugin_root "${cache_base}/${v}"; then
+            echo "$v"
+          fi
+        done | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
+
+        if [ -n "$latest_cache_version" ] && [ -d "${cache_base}/${latest_cache_version}" ]; then
+          preferred_version=$(printf '%s\n%s\n' "$active_version" "$latest_cache_version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
+          if [ "$preferred_version" = "$latest_cache_version" ] && [ "$latest_cache_version" != "$active_version" ]; then
+            echo "${cache_base}/${latest_cache_version}"
+            return 0
+          fi
+        fi
+      fi
+
       echo "$active_path"
       return 0
     fi
   fi
 
   # Fallback: scan sibling version directories for the latest (mirrors run.cjs)
-  local cache_base
-  cache_base="$(dirname "$SCRIPT_PLUGIN_ROOT")"
   if [ -d "$cache_base" ]; then
     local latest
-    latest=$(ls -1 "$cache_base" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
-    if [ -n "$latest" ] && [ -d "${cache_base}/${latest}" ]; then
+    latest=$(list_cache_versions "$cache_base" | while IFS= read -r v; do
+      if is_valid_plugin_root "${cache_base}/${v}"; then
+        echo "$v"
+      fi
+    done | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
+    if [ -n "$latest" ] && is_valid_plugin_root "${cache_base}/${latest}"; then
       echo "${cache_base}/${latest}"
       return 0
     fi
@@ -89,7 +125,7 @@ EOF
 }
 
 # Determine target path
-CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CONFIG_DIR="$(resolve_claude_config_dir)"
 if [ "$MODE" = "local" ]; then
   mkdir -p .claude/skills/omc-reference
   TARGET_PATH=".claude/CLAUDE.md"
@@ -296,6 +332,11 @@ else
     echo "Installed OMC companion file and preserved existing CLAUDE.md"
   else
     # No markers: wrap new content in markers, append old content as user section
+    # Strip any preserve-mode import block left by a prior preserve install
+    if grep -Fq "$OMC_IMPORT_START" "$TARGET_PATH"; then
+      perl -0pe 's/^<!-- OMC:IMPORT:START -->\R[\s\S]*?^<!-- OMC:IMPORT:END -->(?:\R)?//msg' "$TARGET_PATH" > "${TARGET_PATH}.importless"
+      mv "${TARGET_PATH}.importless" "$TARGET_PATH"
+    fi
     OLD_CONTENT=$(cat "$TARGET_PATH")
     {
       echo '<!-- OMC:START -->'
@@ -309,6 +350,20 @@ else
     echo "Migrated existing CLAUDE.md (added OMC markers, preserved old content)"
   fi
   rm -f "$TEMP_OMC"
+
+  # Clean up orphaned companion file from a prior preserve-mode install.
+  # If left behind, prepareOmcLaunchConfigDir reads stale companion content
+  # instead of the freshly-updated CLAUDE.md during omc launches.
+  if [ "$MODE" = "global" ] && [ "$INSTALL_STYLE" = "overwrite" ]; then
+    COMPANION_TARGET_PATH="$CONFIG_DIR/$COMPANION_FILENAME"
+    if [ -f "$COMPANION_TARGET_PATH" ]; then
+      if [ -n "$BACKUP_DATE" ]; then
+        cp "$COMPANION_TARGET_PATH" "${COMPANION_TARGET_PATH}.backup.${BACKUP_DATE}"
+      fi
+      rm -f "$COMPANION_TARGET_PATH"
+      echo "Removed orphaned companion file from prior preserve-mode install"
+    fi
+  fi
 fi
 
 if ! grep -q '<!-- OMC:START -->' "$VALIDATION_PATH" || ! grep -q '<!-- OMC:END -->' "$VALIDATION_PATH"; then

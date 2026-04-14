@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 
-import { getConfigDir } from '../utils/config-dir.js';
+import { getClaudeConfigDir } from '../utils/config-dir.js';
 import {
   getGlobalOmcConfigPath,
   getGlobalOmcConfigCandidates,
@@ -45,6 +45,7 @@ export interface UnifiedMcpRegistryStatus {
 
 const MANAGED_START = '# BEGIN OMC MANAGED MCP REGISTRY';
 const MANAGED_END = '# END OMC MANAGED MCP REGISTRY';
+const DEFAULT_LAUNCHER_MCP_STARTUP_TIMEOUT_SEC = 15;
 
 export function getUnifiedMcpRegistryPath(): string {
   return process.env.OMC_MCP_REGISTRY_PATH?.trim() || getGlobalOmcConfigPath('mcp-registry.json');
@@ -71,7 +72,7 @@ export function getClaudeMcpConfigPath(): string {
     return process.env.CLAUDE_MCP_CONFIG_PATH.trim();
   }
 
-  return join(dirname(getConfigDir()), '.claude.json');
+  return join(dirname(getClaudeConfigDir()), '.claude.json');
 }
 
 export function getCodexConfigPath(): string {
@@ -86,8 +87,40 @@ function isStringRecord(value: unknown): value is Record<string, string> {
     && Object.values(value).every(item => typeof item === 'string');
 }
 
+const RETIRED_TEAM_MCP_PATH_PATTERN = /(^|[\\/])bridge[\\/]+team-mcp\.cjs$/i;
+
+function isRetiredTeamMcpEntry(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const args = Array.isArray(raw.args) && raw.args.every(item => typeof item === 'string')
+    ? raw.args
+    : [];
+
+  return args.some(arg => RETIRED_TEAM_MCP_PATH_PATTERN.test(arg));
+}
+
+function launcherCommandBasename(command: string): string {
+  return command.replace(/\\/g, '/').trim().split('/').pop()?.toLowerCase() ?? '';
+}
+
+function isLauncherBackedMcpCommand(command: string, args: readonly string[]): boolean {
+  const base = launcherCommandBasename(command);
+  if (base === 'npx' || base === 'uvx') {
+    return true;
+  }
+
+  return base === 'npm' && args[0]?.toLowerCase() === 'exec';
+}
+
 function normalizeRegistryEntry(value: unknown): UnifiedMcpRegistryEntry | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  if (isRetiredTeamMcpEntry(value)) {
     return null;
   }
 
@@ -105,18 +138,20 @@ function normalizeRegistryEntry(value: unknown): UnifiedMcpRegistryEntry | null 
 
   const args = Array.isArray(raw.args) && raw.args.every(item => typeof item === 'string')
     ? [...raw.args]
-    : undefined;
+    : [];
   const env = isStringRecord(raw.env) ? { ...raw.env } : undefined;
   const timeout = typeof raw.timeout === 'number' && Number.isFinite(raw.timeout) && raw.timeout > 0
     ? raw.timeout
     : undefined;
+  const effectiveTimeout =
+    timeout ?? (command && isLauncherBackedMcpCommand(command, args) ? DEFAULT_LAUNCHER_MCP_STARTUP_TIMEOUT_SEC : undefined);
 
   return {
     ...(command ? { command } : {}),
-    ...(args && args.length > 0 ? { args } : {}),
+    ...(args.length > 0 ? { args } : {}),
     ...(env && Object.keys(env).length > 0 ? { env } : {}),
     ...(url ? { url } : {}),
-    ...(timeout ? { timeout } : {}),
+    ...(effectiveTimeout ? { timeout: effectiveTimeout } : {}),
   };
 }
 
@@ -142,6 +177,37 @@ function normalizeRegistry(value: unknown): UnifiedMcpRegistry {
 
 export function extractClaudeMcpRegistry(settings: Record<string, unknown>): UnifiedMcpRegistry {
   return normalizeRegistry(settings.mcpServers);
+}
+
+export function stripRetiredTeamMcpServers<T extends Record<string, unknown>>(settings: T): { settings: T; changed: boolean } {
+  const mcpServers = settings.mcpServers;
+  if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
+    return { settings, changed: false };
+  }
+
+  let changed = false;
+  const nextServers: Record<string, unknown> = {};
+
+  for (const [name, entry] of Object.entries(mcpServers)) {
+    if (isRetiredTeamMcpEntry(entry)) {
+      changed = true;
+      continue;
+    }
+    nextServers[name] = entry;
+  }
+
+  if (!changed) {
+    return { settings, changed: false };
+  }
+
+  const nextSettings = { ...settings } as Record<string, unknown>;
+  if (Object.keys(nextServers).length === 0) {
+    delete nextSettings.mcpServers;
+  } else {
+    nextSettings.mcpServers = nextServers;
+  }
+
+  return { settings: nextSettings as T, changed: true };
 }
 
 function loadRegistryFromDisk(path: string): UnifiedMcpRegistry {

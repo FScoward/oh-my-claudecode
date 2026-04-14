@@ -31,6 +31,10 @@ export declare function getUnifiedMcpRegistryPath(): string;
 export declare function getClaudeMcpConfigPath(): string;
 export declare function getCodexConfigPath(): string;
 export declare function extractClaudeMcpRegistry(settings: Record<string, unknown>): UnifiedMcpRegistry;
+export declare function stripRetiredTeamMcpServers<T extends Record<string, unknown>>(settings: T): {
+    settings: T;
+    changed: boolean;
+};
 export declare function applyRegistryToClaudeSettings(settings: Record<string, unknown>): {
     settings: Record<string, unknown>;
     changed: boolean;

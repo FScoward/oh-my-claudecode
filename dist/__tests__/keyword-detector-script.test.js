@@ -50,5 +50,88 @@ describe('keyword-detector.mjs mode-message dispatch', () => {
         expect(context).toContain('[MAGIC KEYWORD: RALPLAN]');
         expect(context).toContain('name: ralplan');
     });
+    it('ignores HTML comments that mention ralph and autopilot during normal review text', () => {
+        const output = runKeywordDetector(`Please review this draft document for tone and clarity:
+
+<!-- ralph: rewrite intro section with more urgency -->
+<!-- autopilot note: Why Artificially Inflating GitHub Star Counts Is Harmful:
+popularity without merit misleads developers, distorts discovery, unfairly rewards dishonest projects, and erodes trust in GitHub stars as a community signal. -->
+
+Final draft:
+
+Why Artificially Inflating GitHub Star Counts Is Harmful
+=========================================================
+
+This article argues that fake popularity signals damage trust in open source.`);
+        const context = output.hookSpecificOutput?.additionalContext ?? '';
+        expect(output.continue).toBe(true);
+        expect(context).not.toContain('[MAGIC KEYWORD: RALPH]');
+        expect(context).not.toContain('[MAGIC KEYWORD: AUTOPILOT]');
+        expect(context).toBe('');
+    });
+    it('does not activate ultrawork for issue #2474 explanatory comparison text', () => {
+        const output = runKeywordDetector(`🦌 DeerFlow vs ⚡ OMC Ultrawork - 완전 비교!
+...
+OMC Ultrawork = "특수부대 작전 반"
+...
+결론: "순식간에 많은 작업" → OMC Ultrawork ⚡
+이런대화가 한번이라면 몇번할수있을까 오픈라우터 20달러 결제기준 api로`);
+        const context = output.hookSpecificOutput?.additionalContext ?? '';
+        expect(output.continue).toBe(true);
+        expect(context).not.toContain('[MAGIC KEYWORD: ULTRAWORK]');
+        expect(context).toBe('');
+    });
+    it('does not re-trigger on quoted follow-up references to ultrawork', () => {
+        const output = runKeywordDetector('The article said "OMC Ultrawork", but why is the answer the same?');
+        const context = output.hookSpecificOutput?.additionalContext ?? '';
+        expect(output.continue).toBe(true);
+        expect(context).not.toContain('[MAGIC KEYWORD: ULTRAWORK]');
+        expect(context).toBe('');
+    });
+    it('does not activate ultrawork for single-mode explanatory definitions followed by a budget question', () => {
+        const output = runKeywordDetector('OMC Ultrawork = "special ops". how much would it cost?');
+        const context = output.hookSpecificOutput?.additionalContext ?? '';
+        expect(output.continue).toBe(true);
+        expect(context).not.toContain('[MAGIC KEYWORD: ULTRAWORK]');
+        expect(context).toBe('');
+    });
+    // Regression: issue #2541 — review-seed echo must not trip code-review / security-review alerts
+    it('does not activate code-review when prompt is echoed review-instruction text with approve/request-changes/merge-ready', () => {
+        const prompt = [
+            'You are performing a code review of PR #2541.',
+            'Reply with exactly one verdict:',
+            '- approve',
+            '- request-changes',
+            '- merge-ready',
+        ].join('\n');
+        const output = runKeywordDetector(prompt);
+        const context = output.hookSpecificOutput?.additionalContext ?? '';
+        expect(output.continue).toBe(true);
+        expect(context).not.toContain('[MAGIC KEYWORD: CODE-REVIEW]');
+        expect(context).not.toContain('<code-review-mode>');
+        expect(context).toBe('');
+    });
+    it('does not activate security-review when prompt is echoed review-instruction text with approve/request-changes/blocked', () => {
+        const prompt = [
+            'You are performing a security review.',
+            'Choose one verdict:',
+            '- approve',
+            '- request-changes',
+            '- blocked',
+        ].join('\n');
+        const output = runKeywordDetector(prompt);
+        const context = output.hookSpecificOutput?.additionalContext ?? '';
+        expect(output.continue).toBe(true);
+        expect(context).not.toContain('[MAGIC KEYWORD: SECURITY-REVIEW]');
+        expect(context).not.toContain('<security-review-mode>');
+        expect(context).toBe('');
+    });
+    it('still activates code-review for a genuine user request (positive control)', () => {
+        const output = runKeywordDetector('code review this diff');
+        const context = output.hookSpecificOutput?.additionalContext ?? '';
+        expect(output.continue).toBe(true);
+        expect(context).toContain('<code-review-mode>');
+        expect(context).not.toContain('[MAGIC KEYWORD: CODE-REVIEW]');
+    });
 });
 //# sourceMappingURL=keyword-detector-script.test.js.map

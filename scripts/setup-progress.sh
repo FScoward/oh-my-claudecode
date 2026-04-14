@@ -8,8 +8,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/lib/config-dir.sh"
+
 STATE_FILE=".omc/state/setup-state.json"
-CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CONFIG_DIR="$(resolve_claude_config_dir)"
 CONFIG_FILE="$CONFIG_DIR/.omc-config.json"
 
 # Cross-platform ISO date to epoch conversion

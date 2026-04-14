@@ -12,11 +12,6 @@
  */
 export declare function toForwardSlash(path: string): string;
 /**
- * Get Claude config directory path.
- * Respects the CLAUDE_CONFIG_DIR environment variable when set.
- */
-export declare function getClaudeConfigDir(): string;
-/**
  * Get a path suitable for use in shell commands
  * Converts backslashes to forward slashes for cross-platform compatibility
  */
@@ -83,6 +78,10 @@ export interface PurgeCacheResult {
     removed: number;
     /** Paths that were removed */
     removedPaths: string[];
+    /** Number of stale version directories replaced with symlinks to the active version */
+    symlinked: number;
+    /** Paths that were converted to symlinks */
+    symlinkPaths: string[];
     /** Errors encountered (non-fatal) */
     errors: string[];
 }
