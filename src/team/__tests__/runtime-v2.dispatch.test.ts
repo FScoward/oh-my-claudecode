@@ -61,6 +61,7 @@ vi.mock('../tmux-session.js', () => ({
 
 describe('runtime v2 startup inbox dispatch', () => {
   let cwd: string;
+  const originalCwd = process.cwd();
 
   beforeEach(() => {
     vi.resetModules();
@@ -119,6 +120,7 @@ describe('runtime v2 startup inbox dispatch', () => {
   });
 
   afterEach(async () => {
+    process.chdir(originalCwd);
     if (cwd) await rm(cwd, { recursive: true, force: true });
   });
 
@@ -143,8 +145,8 @@ describe('runtime v2 startup inbox dispatch', () => {
     expect(requests[0]?.status).toBe('notified');
     expect(requests[0]?.inbox_correlation_key).toBe('startup:worker-1:1');
     expect(requests[0]?.trigger_message).toContain('.omc/state/team/dispatch-team/workers/worker-1/inbox.md');
-    expect(requests[0]?.trigger_message).toContain('start work now');
-    expect(requests[0]?.trigger_message).toContain('next feasible work');
+    expect(requests[0]?.trigger_message).toContain('execute now');
+    expect(requests[0]?.trigger_message).toContain('concrete progress');
 
     const inboxPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'workers', 'worker-1', 'inbox.md');
     const inbox = await readFile(inboxPath, 'utf-8');
@@ -217,6 +219,36 @@ describe('runtime v2 startup inbox dispatch', () => {
     const configPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'config.json');
     const persisted = JSON.parse(await readFile(configPath, 'utf-8'));
     expect(persisted.workers.map((worker: { role: string }) => worker.role)).toEqual(['architect', 'writer']);
+  });
+
+  it('routes inferred review work through alias-keyed resolved snapshot entries', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-alias-routing-'));
+    await mkdir(join(cwd, '.claude'), { recursive: true });
+    await writeFile(
+      join(cwd, '.claude', 'omc.jsonc'),
+      JSON.stringify({
+        team: {
+          roleRouting: {
+            reviewer: { provider: 'gemini' },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    process.chdir(cwd);
+
+    const { startTeamV2 } = await import('../runtime-v2.js');
+
+    const runtime = await startTeamV2({
+      teamName: 'dispatch-team',
+      workerCount: 1,
+      agentTypes: ['claude'],
+      tasks: [{ subject: 'Review component naming', description: 'code review pass for PR' }],
+      cwd,
+    });
+
+    expect(runtime.config.resolved_routing?.['code-reviewer']?.primary.provider).toBe('gemini');
+    expect(modelContractMocks.buildWorkerArgv).toHaveBeenCalledWith('gemini', expect.any(Object));
   });
 
   it('passes through dedicated-window startup requests', async () => {

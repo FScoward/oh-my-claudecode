@@ -148,9 +148,17 @@ function applyDeepInterviewRuntimeSettings(template: string): string {
     // Fix #2545: replace remaining hardcoded 20%/0.2 references that conflict with runtime threshold injection
     .replace('(default: 20%)', `(default: ${percent})`)
     .replace('(default 0.2)', `(default ${threshold})`)
+    .replace('"ambiguityThreshold": 0.2,', `"ambiguityThreshold": ${threshold},`)
     .replace('Gate: ≤20% ambiguity', `Gate: ≤${percent} ambiguity`)
     .replace('(threshold: 20%).', `(threshold: ${percent}).`)
     .replace('ambiguity ≤ 20%', `ambiguity ≤ ${percent}`);
+}
+
+export function renderBundledSkillBody(skillName: string, body: string): string {
+  const rewrittenBody = rewriteOmcCliInvocations(body.trim());
+  return skillName === 'deep-interview'
+    ? applyDeepInterviewRuntimeSettings(rewrittenBody)
+    : rewrittenBody;
 }
 
 /**
@@ -163,9 +171,7 @@ function loadSkillFromFile(skillPath: string, skillName: string): BuiltinSkill[]
     const resolvedName = metadata.name || skillName;
     const safePrimaryName = toSafeSkillName(resolvedName);
     const pipeline = parseSkillPipelineMetadata(metadata);
-    const renderedBody = safePrimaryName === 'deep-interview'
-      ? applyDeepInterviewRuntimeSettings(rewriteOmcCliInvocations(body.trim()))
-      : rewriteOmcCliInvocations(body.trim());
+    const renderedBody = renderBundledSkillBody(safePrimaryName, body);
     const template = [
       renderedBody,
       renderSkillRuntimeGuidance(safePrimaryName),
@@ -255,6 +261,13 @@ function loadSkillsFromDirectory(): BuiltinSkill[] {
 
 // Cache loaded skills to avoid repeated file reads
 let cachedSkills: BuiltinSkill[] | null = null;
+let cachedSkillsKey: string | null = null;
+
+function getBuiltinSkillsCacheKey(): string {
+  return JSON.stringify({
+    deepInterviewAmbiguityThreshold: getDeepInterviewAmbiguityThreshold(),
+  });
+}
 
 /**
  * Get all builtin skills
@@ -263,8 +276,10 @@ let cachedSkills: BuiltinSkill[] | null = null;
  * Results are cached after first load.
  */
 export function createBuiltinSkills(): BuiltinSkill[] {
-  if (cachedSkills === null) {
+  const cacheKey = getBuiltinSkillsCacheKey();
+  if (cachedSkills === null || cachedSkillsKey !== cacheKey) {
     cachedSkills = loadSkillsFromDirectory();
+    cachedSkillsKey = cacheKey;
   }
   return cachedSkills;
 }
@@ -298,6 +313,7 @@ export function listBuiltinSkillNames(options?: ListBuiltinSkillNamesOptions): s
  */
 export function clearSkillsCache(): void {
   cachedSkills = null;
+  cachedSkillsKey = null;
 }
 
 /**

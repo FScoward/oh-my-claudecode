@@ -233,6 +233,78 @@ function deactivateRalplanState(directory, sessionId) {
             : "skill_completed",
     }, directory, sessionId);
 }
+function seedRalplanStartupState(directory, sessionId) {
+    const existingState = readModeState("ralplan", directory, sessionId);
+    if (existingState?.active === true) {
+        if (existingState.awaiting_confirmation === true) {
+            markModeAwaitingConfirmation(directory, sessionId, "ralplan");
+        }
+        return;
+    }
+    activateRalplanState(directory, sessionId);
+    markModeAwaitingConfirmation(directory, sessionId, "ralplan");
+}
+async function seedAutopilotStartupState(directory, prompt, sessionId) {
+    const { readAutopilotState, writeAutopilotState, DEFAULT_CONFIG } = await import("./autopilot/index.js");
+    const existingState = readAutopilotState(directory, sessionId);
+    const existingAutopilotRecord = existingState;
+    if (existingState?.active === true) {
+        if (existingAutopilotRecord?.awaiting_confirmation === true) {
+            markModeAwaitingConfirmation(directory, sessionId, "autopilot");
+        }
+        return;
+    }
+    const now = new Date().toISOString();
+    const wrote = writeAutopilotState(directory, {
+        active: true,
+        phase: "expansion",
+        iteration: 1,
+        max_iterations: DEFAULT_CONFIG.maxIterations ?? 10,
+        originalIdea: prompt,
+        expansion: {
+            analyst_complete: false,
+            architect_complete: false,
+            spec_path: null,
+            requirements_summary: "",
+            tech_stack: [],
+        },
+        planning: {
+            plan_path: null,
+            architect_iterations: 0,
+            approved: false,
+        },
+        execution: {
+            ralph_iterations: 0,
+            ultrawork_active: false,
+            tasks_completed: 0,
+            tasks_total: 0,
+            files_created: [],
+            files_modified: [],
+        },
+        qa: {
+            ultraqa_cycles: 0,
+            build_status: "pending",
+            lint_status: "pending",
+            test_status: "pending",
+        },
+        validation: {
+            architects_spawned: 0,
+            verdicts: [],
+            all_approved: false,
+            validation_rounds: 0,
+        },
+        started_at: now,
+        completed_at: null,
+        phase_durations: {},
+        total_agents_spawned: 0,
+        wisdom_entries: 0,
+        session_id: sessionId,
+        project_path: directory,
+    }, sessionId);
+    if (wrote) {
+        markModeAwaitingConfirmation(directory, sessionId, "autopilot");
+    }
+}
 function readTeamStagedState(directory, sessionId) {
     const stateDir = join(getOmcRoot(directory), "state");
     const statePaths = sessionId
@@ -499,6 +571,21 @@ function getPromptText(input) {
     }
     return "";
 }
+function isExplicitRalplanSlashInvocation(promptText) {
+    return /^\s*\/(?:oh-my-claudecode:)?ralplan(?:\s|$)/i.test(promptText);
+}
+function activateRalplanStartupState(directory, sessionId) {
+    const now = new Date().toISOString();
+    writeModeState("ralplan", {
+        active: true,
+        session_id: sessionId,
+        current_phase: "ralplan",
+        started_at: now,
+        awaiting_confirmation: true,
+        awaiting_confirmation_set_at: now,
+        last_checked_at: now,
+    }, directory, sessionId);
+}
 /**
  * Process keyword detection hook
  * Detects magic keywords and returns injection message
@@ -519,6 +606,19 @@ async function processKeywordDetector(input) {
     const sessionId = input.sessionId;
     const directory = resolveToWorktreeRoot(input.directory);
     const messages = [];
+    const explicitRalplanSlashInvocation = isExplicitRalplanSlashInvocation(promptText);
+    if (explicitRalplanSlashInvocation) {
+        activateRalplanStartupState(directory, sessionId);
+        return {
+            continue: true,
+            hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: `[RALPLAN INIT] Explicit /ralplan invoke detected during UserPromptSubmit.\n` +
+                    `ralplan state is armed for startup and marked awaiting confirmation, so the stop hook will not block this initialization path.\n` +
+                    `Proceed immediately with the consensus planning workflow for:\n${promptText}`,
+            },
+        };
+    }
     // Record prompt submission time in HUD state
     try {
         const hudState = readHudState(directory, input.sessionId) || {
@@ -661,6 +761,12 @@ async function processKeywordDetector(input) {
             case "autopilot":
             case "ralplan":
             case "deep-interview":
+                if (keywordType === "autopilot") {
+                    await seedAutopilotStartupState(directory, cleanedText, sessionId);
+                }
+                else if (keywordType === "ralplan") {
+                    seedRalplanStartupState(directory, sessionId);
+                }
                 messages.push(`[MODE: ${keywordType.toUpperCase()}] Skill invocation handled by UserPromptSubmit hook.`);
                 break;
             case "codex":
@@ -881,7 +987,7 @@ async function processSessionStart(input) {
         // Non-blocking: codebase map failure must never break session start
     }
     // Check for active autopilot state - only restore if it belongs to this session
-    const autopilotState = readAutopilotState(directory);
+    const autopilotState = readAutopilotState(directory, sessionId);
     if (autopilotState?.active && autopilotState.session_id === sessionId) {
         messages.push(`<session-restore>
 
@@ -900,7 +1006,7 @@ Treat this as prior-session context only. Prioritize the user's newest request, 
 `);
     }
     // Check for active ultrawork state - only restore if it belongs to this session
-    const ultraworkState = readUltraworkState(directory);
+    const ultraworkState = readUltraworkState(directory, sessionId);
     if (ultraworkState?.active && ultraworkState.session_id === sessionId) {
         messages.push(`<session-restore>
 
@@ -910,6 +1016,34 @@ You have an active ultrawork session from ${ultraworkState.started_at}.
 Original task: ${ultraworkState.original_prompt}
 
 Treat this as prior-session context only. Prioritize the user's newest request, and resume ultrawork only if the user explicitly asks to continue it.
+
+</session-restore>
+
+---
+
+`);
+    }
+    const ralplanState = readModeState("ralplan", directory, sessionId);
+    if (ralplanState?.active === true && ralplanState.session_id === sessionId) {
+        const ralplanPhase = typeof ralplanState.current_phase === "string"
+            ? ralplanState.current_phase
+            : typeof ralplanState.phase === "string"
+                ? ralplanState.phase
+                : typeof ralplanState.status === "string"
+                    ? ralplanState.status
+                    : "ralplan";
+        const restoreStatus = ralplanState.awaiting_confirmation === true
+            ? "awaiting skill confirmation"
+            : "active";
+        messages.push(`<session-restore>
+
+[RALPLAN MODE RESTORED]
+
+You have an active ralplan consensus planning session from ${ralplanState.started_at ?? "an earlier turn"}.
+Current phase: ${ralplanPhase}
+Status: ${restoreStatus}
+
+Treat this as prior-session context only. Prioritize the user's newest request, and resume ralplan only if the user explicitly asks to continue it.
 
 </session-restore>
 
