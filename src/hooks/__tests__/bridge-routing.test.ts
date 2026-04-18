@@ -813,6 +813,27 @@ $ ultrawork search the codebase`,
       }
     });
 
+    it('does not arm ralplan state for keywords inside delegated /ask codex prompts', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-ask-codex-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'ask-codex-session';
+
+        const result = await processHook('keyword-detector', {
+          sessionId,
+          prompt: '/ask codex 지금까지 논의한걸 ralplan으로 계획서 작성해줘',
+          directory: tempDir,
+        });
+
+        expect(result.continue).toBe(true);
+        expect(result.message).toBeUndefined();
+        expect((result as unknown as Record<string, unknown>).hookSpecificOutput).toBeUndefined();
+        expect(existsSync(join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ralplan-state.json'))).toBe(false);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it('activates ralplan state when Skill tool invokes omc-plan in consensus mode', async () => {
       const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-plan-consensus-skill-'));
       try {
@@ -892,6 +913,124 @@ $ ultrawork search the codebase`,
 
         expect(stopResult.continue).toBe(true);
         expect(stopResult.message).toBeUndefined();
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('seeds workflow slot for explicit /deep-interview slash invocation in UserPromptSubmit', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-di-slash-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'di-slash-session';
+
+        const result = await processHook('keyword-detector', {
+          sessionId,
+          prompt: '/oh-my-claudecode:deep-interview explore auth flows',
+          directory: tempDir,
+        });
+
+        expect(result.continue).toBe(true);
+
+        const slotPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'skill-active-state.json');
+        expect(existsSync(slotPath)).toBe(true);
+
+        const slot = JSON.parse(readFileSync(slotPath, 'utf-8')) as {
+          version?: number;
+          active_skills?: Record<string, { initialized_mode?: string; session_id?: string }>;
+        };
+        expect(slot.version).toBe(2);
+        expect(slot.active_skills?.['deep-interview']?.initialized_mode).toBe('deep-interview');
+        expect(slot.active_skills?.['deep-interview']?.session_id).toBe(sessionId);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('seeds workflow slot for explicit /self-improve slash invocation in UserPromptSubmit', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-si-slash-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'si-slash-session';
+
+        const result = await processHook('keyword-detector', {
+          sessionId,
+          prompt: '/self-improve refactor test coverage',
+          directory: tempDir,
+        });
+
+        expect(result.continue).toBe(true);
+
+        const slotPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'skill-active-state.json');
+        expect(existsSync(slotPath)).toBe(true);
+
+        const slot = JSON.parse(readFileSync(slotPath, 'utf-8')) as {
+          version?: number;
+          active_skills?: Record<string, { initialized_mode?: string; session_id?: string }>;
+        };
+        expect(slot.version).toBe(2);
+        expect(slot.active_skills?.['self-improve']?.initialized_mode).toBe('self-improve');
+        expect(slot.active_skills?.['self-improve']?.session_id).toBe(sessionId);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('seeds workflow slot when Skill tool invokes oh-my-claudecode:deep-interview', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-di-skill-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'di-skill-session';
+
+        const result = await processHook('pre-tool-use', {
+          sessionId,
+          toolName: 'Skill',
+          toolInput: { skill: 'oh-my-claudecode:deep-interview' },
+          directory: tempDir,
+        });
+
+        expect(result.continue).toBe(true);
+
+        const slotPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'skill-active-state.json');
+        expect(existsSync(slotPath)).toBe(true);
+
+        const slot = JSON.parse(readFileSync(slotPath, 'utf-8')) as {
+          version?: number;
+          active_skills?: Record<string, { initialized_mode?: string; session_id?: string }>;
+        };
+        expect(slot.version).toBe(2);
+        expect(slot.active_skills?.['deep-interview']?.initialized_mode).toBe('deep-interview');
+        expect(slot.active_skills?.['deep-interview']?.session_id).toBe(sessionId);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('seeds workflow slot when Skill tool invokes oh-my-claudecode:self-improve', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'bridge-routing-si-skill-'));
+      try {
+        execFileSync('git', ['init'], { cwd: tempDir, stdio: 'pipe' });
+        const sessionId = 'si-skill-session';
+
+        const result = await processHook('pre-tool-use', {
+          sessionId,
+          toolName: 'Skill',
+          toolInput: { skill: 'oh-my-claudecode:self-improve' },
+          directory: tempDir,
+        });
+
+        expect(result.continue).toBe(true);
+
+        const slotPath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'skill-active-state.json');
+        expect(existsSync(slotPath)).toBe(true);
+
+        const slot = JSON.parse(readFileSync(slotPath, 'utf-8')) as {
+          version?: number;
+          active_skills?: Record<string, { initialized_mode?: string; session_id?: string }>;
+        };
+        expect(slot.version).toBe(2);
+        expect(slot.active_skills?.['self-improve']?.initialized_mode).toBe('self-improve');
+        expect(slot.active_skills?.['self-improve']?.session_id).toBe(sessionId);
       } finally {
         rmSync(tempDir, { recursive: true, force: true });
       }

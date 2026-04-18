@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { StatuslineStdin } from '../../hud/types.js';
-import { getContextPercent, getModelName, stabilizeContextPercent } from '../../hud/stdin.js';
+import { getContextPercent, getModelName, getRateLimitsFromStdin, stabilizeContextPercent } from '../../hud/stdin.js';
 
 function makeStdin(overrides: Partial<StatuslineStdin> = {}): StatuslineStdin {
   return {
@@ -68,6 +68,37 @@ describe('HUD stdin context percent', () => {
     expect(getContextPercent(stabilizeContextPercent(current, previous))).toBe(54);
   });
 
+  it('ignores cache_read_input_tokens in the manual fallback calculation', () => {
+    const stdin = makeStdin({
+      context_window: {
+        context_window_size: 1000,
+        current_usage: {
+          input_tokens: 120,
+          cache_creation_input_tokens: 30,
+          cache_read_input_tokens: 250_000,
+        },
+      },
+    });
+
+    expect(getContextPercent(stdin)).toBe(15);
+  });
+
+  it('keeps preferring native percentage even when cache reads are huge', () => {
+    const stdin = makeStdin({
+      context_window: {
+        used_percentage: 54,
+        context_window_size: 1000,
+        current_usage: {
+          input_tokens: 120,
+          cache_creation_input_tokens: 30,
+          cache_read_input_tokens: 250_000,
+        },
+      },
+    });
+
+    expect(getContextPercent(stdin)).toBe(54);
+  });
+
   it('does not hide a real context jump when the fallback differs materially', () => {
     const previous = makeStdin({
       context_window: {
@@ -93,6 +124,33 @@ describe('HUD stdin context percent', () => {
 
     expect(getContextPercent(stabilizeContextPercent(current, previous))).toBe(20);
   });
+
+  it('does not let cache-read spikes interfere with stabilization decisions', () => {
+    const previous = makeStdin({
+      context_window: {
+        used_percentage: 54,
+        context_window_size: 1000,
+        current_usage: {
+          input_tokens: 540,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+    });
+    const current = makeStdin({
+      context_window: {
+        context_window_size: 1000,
+        current_usage: {
+          input_tokens: 520,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 250_000,
+        },
+      },
+    });
+
+    expect(getContextPercent(current)).toBe(52);
+    expect(getContextPercent(stabilizeContextPercent(current, previous))).toBe(54);
+  });
 });
 
 
@@ -116,5 +174,51 @@ describe('HUD stdin model display', () => {
 
   it('returns Unknown when stdin omits the model block', () => {
     expect(getModelName(makeStdin({ model: undefined }))).toBe('Unknown');
+  });
+});
+
+describe('HUD stdin rate limits', () => {
+  it('parses stdin rate_limits into the existing RateLimits shape', () => {
+    const result = getRateLimitsFromStdin(makeStdin({
+      rate_limits: {
+        five_hour: {
+          used_percentage: 11,
+          resets_at: 1776348000,
+        },
+        seven_day: {
+          used_percentage: 2,
+          resets_at: '2026-04-22T00:00:00.000Z',
+        },
+      },
+    }));
+
+    expect(result).toEqual({
+      fiveHourPercent: 11,
+      weeklyPercent: 2,
+      fiveHourResetsAt: new Date(1776348000 * 1000),
+      weeklyResetsAt: new Date('2026-04-22T00:00:00.000Z'),
+    });
+  });
+
+  it('returns null when stdin omits rate limits', () => {
+    expect(getRateLimitsFromStdin(makeStdin())).toBeNull();
+  });
+
+  it('tolerates invalid reset values without breaking the result', () => {
+    const result = getRateLimitsFromStdin(makeStdin({
+      rate_limits: {
+        five_hour: {
+          used_percentage: 140,
+          resets_at: 'not-a-date',
+        },
+      },
+    }));
+
+    expect(result).toEqual({
+      fiveHourPercent: 100,
+      weeklyPercent: undefined,
+      fiveHourResetsAt: null,
+      weeklyResetsAt: null,
+    });
   });
 });
