@@ -243,7 +243,7 @@ export interface BackgroundTask {
 
 export interface MagicKeyword {
   triggers: string[];
-  action: (prompt: string, agentName?: string) => string;
+  action: (prompt: string, agentName?: string, modelId?: string) => string;
   description: string;
 }
 
@@ -466,6 +466,8 @@ export interface TeamOpsConfig {
   monitorIntervalMs?: number;
   shutdownTimeoutMs?: number;
   costMode?: TeamCostMode;
+  /** Opt-in native team worker worktrees. Disabled unless explicitly set. */
+  worktreeMode?: 'disabled' | 'off' | 'detached' | 'branch' | 'named';
 }
 
 /** `team` config block in PluginConfig. */

@@ -314,6 +314,108 @@ describe('unified MCP registry sync', () => {
     expect(second.content).toBe(first.content);
   });
 
+  it('does not append managed duplicates for existing user-owned mcp_servers tables', () => {
+    const existingToml = [
+      'model = "gpt-5"',
+      '',
+      '[mcp_servers.atlassian]',
+      'command = "uvx"',
+      'args = ["mcp-atlassian"]',
+      '',
+    ].join('\n');
+
+    const registry = {
+      atlassian: {
+        command: 'uvx',
+        args: ['mcp-atlassian'],
+      },
+      storybook_local: {
+        command: 'npx',
+        args: ['-y', '@storybook/mcp'],
+        timeout: 15,
+      },
+    };
+
+    const result = syncCodexConfigToml(existingToml, registry);
+
+    expect(result.changed).toBe(true);
+    expect(result.content.match(/\[mcp_servers\.atlassian\]/g)).toHaveLength(1);
+    expect(result.content).toContain('[mcp_servers.storybook_local]');
+    expect(result.content).toContain('# BEGIN OMC MANAGED MCP REGISTRY');
+    expect(result.content).toContain('# END OMC MANAGED MCP REGISTRY');
+
+    const second = syncCodexConfigToml(result.content, registry);
+    expect(second.changed).toBe(false);
+    expect(second.content).toBe(result.content);
+  });
+
+  it('preserves an existing user-owned codex table when setup sync runs repeatedly', () => {
+    writeFileSync(getUnifiedMcpRegistryPath(), JSON.stringify({
+      atlassian: { command: 'uvx', args: ['mcp-atlassian'] },
+      storybook_local: { command: 'npx', args: ['-y', '@storybook/mcp'], timeout: 15 },
+    }, null, 2));
+    writeFileSync(getCodexConfigPath(), [
+      'model = "gpt-5"',
+      '',
+      '[mcp_servers.atlassian]',
+      'command = "uvx"',
+      'args = ["mcp-atlassian"]',
+      '',
+    ].join('\n'));
+
+    const first = syncUnifiedMcpRegistryTargets({ theme: 'dark' });
+    const second = syncUnifiedMcpRegistryTargets({ theme: 'dark' });
+    const codexConfig = readFileSync(getCodexConfigPath(), 'utf-8');
+
+    expect(first.result.codexChanged).toBe(true);
+    expect(second.result.codexChanged).toBe(false);
+    expect(codexConfig.match(/\[mcp_servers\.atlassian\]/g)).toHaveLength(1);
+    expect(codexConfig).toContain('[mcp_servers.storybook_local]');
+  });
+
+  it('skips invalid registry server names when rendering managed Codex TOML blocks', () => {
+    const maliciousName = 'evil]\nmodel = "pwned"\n[mcp_servers.injected';
+    const result = syncCodexConfigToml('model = "gpt-5"\n', {
+      [maliciousName]: {
+        command: 'uvx',
+        args: ['demo-server'],
+      },
+      safe_name: {
+        command: 'custom-mcp',
+        args: ['serve'],
+      },
+    });
+
+    expect(result.content).toContain('model = "gpt-5"');
+    expect(result.content).toContain('[mcp_servers.safe_name]');
+    expect(result.content).not.toContain('[mcp_servers.evil]');
+    expect(result.content).not.toContain('[mcp_servers.injected]');
+    expect(result.content).not.toContain('model = "pwned"');
+  });
+
+  it('does not let malformed registry names inject extra Codex MCP tables during setup sync', () => {
+    const maliciousName = 'evil]\nmodel = "pwned"\n[mcp_servers.injected';
+    writeFileSync(getUnifiedMcpRegistryPath(), JSON.stringify({
+      [maliciousName]: {
+        command: 'uvx',
+        args: ['demo-server'],
+      },
+      safe_name: {
+        command: 'custom-mcp',
+        args: ['serve'],
+      },
+    }, null, 2));
+
+    const { result } = syncUnifiedMcpRegistryTargets({ theme: 'dark' });
+    const codexConfig = readFileSync(getCodexConfigPath(), 'utf-8');
+
+    expect(result.codexChanged).toBe(true);
+    expect(codexConfig).toContain('[mcp_servers.safe_name]');
+    expect(codexConfig).not.toContain('[mcp_servers.evil]');
+    expect(codexConfig).not.toContain('[mcp_servers.injected]');
+    expect(codexConfig).not.toContain('model = "pwned"');
+  });
+
   it('removes previously managed Claude and Codex MCP entries when the registry becomes empty', () => {
     writeFileSync(join(omcDir, 'mcp-registry-state.json'), JSON.stringify({ managedServers: ['gitnexus'] }, null, 2));
     writeFileSync(getUnifiedMcpRegistryPath(), JSON.stringify({}, null, 2));

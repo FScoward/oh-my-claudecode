@@ -15,7 +15,7 @@
 
 *Claude Code를 배우지 마세요. 그냥 OMC를 쓰세요.*
 
-[시작하기](#빠른-시작) • [문서](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI 레퍼런스](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [워크플로우](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [마이그레이션 가이드](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
+[시작하기](#빠른-시작) • [문서](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI 레퍼런스](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [워크플로우](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [마이그레이션 가이드](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -150,7 +150,7 @@ omc team shutdown auth-review
 ## 기능
 
 ### 실행 모드
-다양한 사용 사례를 위한 여러 전략 - 완전 자율 빌드부터 토큰 효율적인 리팩토링까지. [자세히 보기 →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+다양한 사용 사례를 위한 여러 전략 - 완전 자율 빌드부터 토큰 효율적인 리팩토링까지. [자세히 보기 →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | 모드 | 특징 | 용도 |
 |------|---------|---------|
@@ -340,10 +340,10 @@ OpenClaw 페이로드를 ClawdBot을 통해 Discord에 전달하는 레퍼런스
 ## 문서
 
 - **[전체 레퍼런스](docs/REFERENCE.md)** - 완전한 기능 문서
-- **[CLI 레퍼런스](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference)** - 모든 `omc` 명령어, 플래그 및 도구
-- **[알림 가이드](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#notifications)** - Discord, Telegram, Slack 및 webhook 설정
-- **[추천 워크플로우](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows)** - 일반 작업을 위한 검증된 스킬 체인
-- **[릴리스 노트](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#release-notes)** - 각 버전의 새로운 기능
+- **[CLI 레퍼런스](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference)** - 모든 `omc` 명령어, 플래그 및 도구
+- **[알림 가이드](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#notifications)** - Discord, Telegram, Slack 및 webhook 설정
+- **[추천 워크플로우](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows)** - 일반 작업을 위한 검증된 스킬 체인
+- **[릴리스 노트](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#release-notes)** - 각 버전의 새로운 기능
 - **[웹사이트](https://yeachan-heo.github.io/oh-my-claudecode-website)** - 인터랙티브 가이드와 예제
 - **[마이그레이션 가이드](docs/MIGRATION.md)** - v2.x에서 업그레이드
 - **[아키텍처](docs/ARCHITECTURE.md)** - 내부 작동 원리

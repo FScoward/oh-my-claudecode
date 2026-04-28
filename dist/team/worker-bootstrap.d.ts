@@ -10,6 +10,13 @@ export interface WorkerBootstrapParams {
     }>;
     bootstrapInstructions?: string;
     cwd: string;
+    /**
+     * Worker-facing root used in instructions. The default is the leader cwd
+     * relative global state root (`.omc/state`); non-default values are treated as
+     * a team-specific root (`.../.omc/state/team/<team>`), matching
+     * `OMC_TEAM_STATE_ROOT` and `teamStateRoot()` semantics.
+     */
+    instructionStateRoot?: string;
 }
 export declare function generateTriggerMessage(teamName: string, workerName: string, teamStateRoot?: string): string;
 export declare function generatePromptModeStartupPrompt(teamName: string, workerName: string, teamStateRoot?: string, cliOutputContract?: string): string;
@@ -27,6 +34,10 @@ export declare function generateWorkerOverlay(params: WorkerBootstrapParams): st
 export declare function composeInitialInbox(teamName: string, workerName: string, content: string, cwd: string, cliOutputContract?: string): Promise<void>;
 /**
  * Append a message to the worker inbox.
+ *
+ * Sanitizes both `teamName` and `workerName` (mirroring the leader-inbox
+ * pattern) and validates the resolved path stays under `cwd` to prevent
+ * traversal — callers in `merge-orchestrator` may pass un-sanitized names.
  */
 export declare function appendToInbox(teamName: string, workerName: string, message: string, cwd: string): Promise<void>;
 export { getWorkerEnv } from './model-contract.js';

@@ -111,7 +111,7 @@ Si vous rencontrez des problèmes après la mise à jour, videz l'ancien cache d
 
 ### Modes d'orchestration
 
-Plusieurs stratégies pour différents cas d'utilisation — de l'orchestration Team au refactoring économe en tokens. [En savoir plus →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Plusieurs stratégies pour différents cas d'utilisation — de l'orchestration Team au refactoring économe en tokens. [En savoir plus →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Mode                            | Description                                                                                 | Utilisation                                                                      |
 | ------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |

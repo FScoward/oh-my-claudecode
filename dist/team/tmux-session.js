@@ -769,20 +769,27 @@ export async function injectToLeaderPane(sessionName, leaderPaneId, message) {
     catch { /* best-effort */ }
     return sendToWorker(sessionName, leaderPaneId, prefixed);
 }
-/**
- * Check if a worker pane is still alive.
- * Uses pane ID for stable targeting (not pane index).
- */
-export async function isWorkerAlive(paneId) {
+function isTmuxPaneNotFoundError(error) {
+    const err = error;
+    const text = [err?.stderr, err?.stdout, err?.message]
+        .filter((part) => typeof part === 'string')
+        .join('\n')
+        .toLowerCase();
+    return /can't find pane|can't find window|can't find session|no such pane|pane not found|unknown pane/.test(text);
+}
+export async function getWorkerLiveness(paneId) {
     try {
         const result = await tmuxCmdAsync([
             'display-message', '-t', paneId, '-p', '#{pane_dead}'
         ]);
-        return result.stdout.trim() === '0';
+        return result.stdout.trim() === '0' ? 'alive' : 'dead';
     }
-    catch {
-        return false;
+    catch (error) {
+        return isTmuxPaneNotFoundError(error) ? 'dead' : 'unknown';
     }
+}
+export async function isWorkerAlive(paneId) {
+    return (await getWorkerLiveness(paneId)) === 'alive';
 }
 /**
  * Graceful-then-force kill of worker panes.

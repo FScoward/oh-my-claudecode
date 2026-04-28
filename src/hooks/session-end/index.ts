@@ -42,6 +42,7 @@ interface SessionOwnedTeamCleanupResult {
 }
 
 type LegacyStopCallbackPlatform = 'file' | 'telegram' | 'discord';
+const SESSION_STARTED_MARKER_FILE = 'session-started.json';
 
 function hasExplicitNotificationConfig(profileName?: string): boolean {
   const config = getOMCConfig();
@@ -221,9 +222,16 @@ export function recordSessionMetrics(directory: string, input: SessionEndInput):
 }
 
 /**
- * Clean up transient state files
+ * Clean up transient state files.
+ *
+ * @param directory - Worktree root (or any path under it).
+ * @param endingSessionId - Optional id of the session that is ending.
+ *   When provided, per-session transient caches (HUD stdin cache) are
+ *   removed only from that session's directory so other concurrent
+ *   sessions keep their live state. When omitted (e.g. legacy callers
+ *   or tests), the previous behavior is preserved for compatibility.
  */
-export function cleanupTransientState(directory: string): number {
+export function cleanupTransientState(directory: string, endingSessionId?: string): number {
   let filesRemoved = 0;
   const omcDir = getOmcRoot(directory);
 
@@ -314,9 +322,29 @@ export function cleanupTransientState(directory: string): number {
       // Ignore errors
     }
 
-    // Clean up cancel signal files and empty session directories
+    // Clean up cancel signal files, stale per-session transient caches,
+    // and empty session directories.
     const sessionsDir = path.join(stateDir, 'sessions');
     if (fs.existsSync(sessionsDir)) {
+      // Patterns that are safe to delete across every session dir:
+      // these are short-lived markers/breakers that do not represent
+      // live per-session state an active concurrent session is reading.
+      const crossSessionSafePatterns = [
+        /^cancel-signal/,
+        /stop-breaker/,
+      ];
+      // Patterns that must only be deleted from the session that is
+      // actually ending — deleting them from a still-running session
+      // would reintroduce cross-session interference.
+      const endingSessionOnlyPatterns = [
+        // HUD's stdin cache is session-scoped (see `src/hud/stdin.ts`)
+        // and consumed by `omc hud --watch` for the owning session.
+        /^hud-stdin-cache\.json$/,
+      ];
+      const isEndingSession = (sid: string): boolean =>
+        typeof endingSessionId === 'string'
+        && endingSessionId.length > 0
+        && sid === endingSessionId;
       try {
         const sessionDirs = fs.readdirSync(sessionsDir);
         for (const sid of sessionDirs) {
@@ -325,9 +353,13 @@ export function cleanupTransientState(directory: string): number {
             const stat = fs.statSync(sessionDir);
             if (!stat.isDirectory()) continue;
 
+            const activePatterns = isEndingSession(sid)
+              ? [...crossSessionSafePatterns, ...endingSessionOnlyPatterns]
+              : crossSessionSafePatterns;
+
             const sessionFiles = fs.readdirSync(sessionDir);
             for (const file of sessionFiles) {
-              if (/^cancel-signal/.test(file) || /stop-breaker/.test(file)) {
+              if (activePatterns.some(p => p.test(file))) {
                 try {
                   fs.unlinkSync(path.join(sessionDir, file));
                   filesRemoved++;
@@ -559,6 +591,23 @@ export function cleanupMissionState(directory: string, sessionId?: string): numb
   }
 }
 
+function cleanupSessionStartedMarker(directory: string, sessionId: string): void {
+  try {
+    validateSessionId(sessionId);
+  } catch {
+    return;
+  }
+
+  try {
+    const markerPath = path.join(getOmcRoot(directory), 'state', 'sessions', sessionId, SESSION_STARTED_MARKER_FILE);
+    if (fs.existsSync(markerPath)) {
+      fs.unlinkSync(markerPath);
+    }
+  } catch {
+    // Best-effort marker cleanup only; SessionEnd cleanup must continue.
+  }
+}
+
 function extractTeamNameFromState(state: Record<string, unknown> | null): string | null {
   if (!state || typeof state !== 'object') return null;
   const rawTeamName = state.team_name ?? state.teamName;
@@ -710,7 +759,7 @@ export async function processSessionEnd(input: SessionEndInput): Promise<HookOut
   await cleanupSessionOwnedTeams(directory, input.session_id);
 
   // Clean up transient state files
-  cleanupTransientState(directory);
+  cleanupTransientState(directory, input.session_id);
 
   // Clean up mode state files to prevent stale state issues
   // This ensures the stop hook won't malfunction in subsequent sessions
@@ -720,6 +769,10 @@ export async function processSessionEnd(input: SessionEndInput): Promise<HookOut
   // Clean up mission-state.json entries belonging to this session
   // Without this, the HUD keeps showing stale mode/mission info
   cleanupMissionState(directory, input.session_id);
+
+  // Mark this session as normally ended so SessionStart reconciliation does
+  // not treat it as hard-terminated.
+  cleanupSessionStartedMarker(directory, input.session_id);
 
   // Clean up Python REPL bridge sessions used in this transcript (#641).
   // Best-effort only: session end should not fail because cleanup fails.

@@ -111,7 +111,7 @@ Se riscontri problemi dopo l'aggiornamento, svuota la vecchia cache del plugin:
 
 ### Modalità di orchestrazione
 
-Strategie multiple per diversi casi d'uso — dall'orchestrazione basata su Team al refactoring efficiente in termini di token. [Scopri di più →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Strategie multiple per diversi casi d'uso — dall'orchestrazione basata su Team al refactoring efficiente in termini di token. [Scopri di più →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Modalità                        | Descrizione                                                                             | Utilizzo                                                                                 |
 | ------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |

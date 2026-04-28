@@ -36,6 +36,33 @@ const { readStdin } = await import(pathToFileURL(join(__dirname, 'lib', 'stdin.m
 const { atomicWriteFileSync } = await import(pathToFileURL(join(__dirname, 'lib', 'atomic-write.mjs')).href);
 const { getClaudeConfigDir } = await import(pathToFileURL(join(__dirname, 'lib', 'config-dir.mjs')).href);
 
+
+const _omcRoot = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..');
+const SKILL_INVOCATION_USER_REQUEST_MAX = 1200;
+
+function compactHookText(text, maxChars = SKILL_INVOCATION_USER_REQUEST_MAX) {
+  const notice = '\n...[truncated; original user prompt remains available in the conversation]';
+  if (!text || text.length <= maxChars) return text || '';
+  if (maxChars <= notice.length) return notice.slice(0, Math.max(0, maxChars));
+  return `${text.slice(0, maxChars - notice.length).trimEnd()}${notice}`;
+}
+
+function getSkillPathCandidates(skillName) {
+  const roots = [
+    process.env.CLAUDE_PLUGIN_ROOT,
+    _omcRoot,
+    process.cwd(),
+  ].filter(Boolean);
+  return [...new Set(roots.map(root => join(root, 'skills', skillName, 'SKILL.md')))];
+}
+
+function resolveSkillPath(skillName) {
+  for (const skillPath of getSkillPathCandidates(skillName)) {
+    if (existsSync(skillPath)) return skillPath;
+  }
+  return getSkillPathCandidates(skillName)[0] || `skills/${skillName}/SKILL.md`;
+}
+
 const ULTRATHINK_MESSAGE = `<think-mode>
 
 **ULTRATHINK MODE ENABLED** - Extended reasoning activated.
@@ -180,7 +207,7 @@ const ROLE_BOUNDARY_PATTERN =
   /^<\s*\/?\s*(system|human|assistant|user|tool_use|tool_result)\b[^>]*>/i;
 const SKILL_TRANSCRIPT_LINE_PATTERN =
   /^\s*Skill:\s+oh-my-(?:claudecode|codex):/i;
-const USER_REQUEST_LINE_PATTERN = /^\s*User request:\s*$/i;
+const USER_REQUEST_LINE_PATTERN = /^\s*User request(?:\s*\([^)]*\))?:\s*$/i;
 const SHELL_TRANSCRIPT_LINE_PATTERN = /^\s*[$%❯]\s+/;
 const GIT_DIFF_START_PATTERNS = [
   /^diff\s+--git\s+a\//,
@@ -323,6 +350,105 @@ const QUESTION_FOLLOWUP_PATTERNS = [
   /\b(?:how\s+many|how\s+much|why|what\s+happened|what\s+went\s+wrong|token\s+budget|cost|pricing)\b/i,
   /(?:왜|얼마|몇\s*번|몇번|토큰|가격|비용|질문)/u,
 ];
+
+// Patterns that identify system-generated echoes (hook outputs) which users may
+// paste back into a prompt while debugging. If a mode keyword only appears
+// inside such an echo block we must NOT re-activate the mode: otherwise
+// copying a "[RALPH LOOP - ITERATION N] ..." block to ask "why does this keep
+// firing?" silently re-triggers ralph and the echo itself becomes state.prompt
+// — a self-reinforcing loop that is hard to cancel.
+// Continuation lines that hook output typically emits DIRECTLY after a
+// recognized block header. They must be stripped only in that context —
+// never standalone — because a user might legitimately start a prompt with
+// "Task: …" or similar (Codex automated review P1/P2 on #2795).
+const ECHO_CONTINUATION = '(?:\\r?\\n[ \\t]*(?:Task:\\s|When FULLY complete \\(after Architect verification\\)|run\\s+\\/oh-my-claudecode:cancel).*)*';
+
+// Each pattern is a single logical block: the block header line + zero or
+// more continuation lines emitted right after it. The whole match is
+// stripped together.
+function buildEchoBlockRegex(headerBody) {
+  return new RegExp(`^[ \\t]*${headerBody}.*${ECHO_CONTINUATION}$`, 'gim');
+}
+
+const SYSTEM_ECHO_BLOCK_PATTERNS = [
+  buildEchoBlockRegex('\\[RALPH LOOP\\s*-\\s*ITERATION[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[RALPH LOOP\\s*-\\s*(?:HARD LIMIT|EXTENDED)\\]'),
+  buildEchoBlockRegex('\\[TEAM\\s*-\\s*Phase:[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[AUTOPILOT[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[ULTRAPILOT[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[ULTRAWORK[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[ULTRAQA[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[PIPELINE[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[SWARM[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[TOOL ERROR[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[MAGIC KEYWORD:[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[MAGIC KEYWORDS DETECTED:[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('Stop hook (?:blocking error|feedback|stopped continuation)'),
+  buildEchoBlockRegex('PreToolUse:[^\\n]*hook additional context:'),
+  buildEchoBlockRegex('PostToolUse:[^\\n]*hook additional context:'),
+];
+
+const SYSTEM_ECHO_SIGNATURES = [
+  /\bWhen FULLY complete \(after Architect verification\)\b/i,
+  /\brun\s+\/oh-my-claudecode:cancel\b/i,
+  /\[RALPH LOOP\s*-\s*ITERATION\b/i,
+];
+
+const MAX_STATE_PROMPT_LEN = 500;
+
+function stripSystemEchoes(text) {
+  if (typeof text !== 'string' || text.length === 0) return '';
+  let cleaned = text;
+  for (const pattern of SYSTEM_ECHO_BLOCK_PATTERNS) {
+    cleaned = cleaned.replace(pattern, ' ');
+  }
+  return cleaned;
+}
+
+function looksLikeSystemEcho(text) {
+  if (typeof text !== 'string' || text.length === 0) return false;
+  if (SYSTEM_ECHO_SIGNATURES.some((pattern) => pattern.test(text))) return true;
+  // Also treat the presence of ANY echo block pattern as an echo.
+  for (const pattern of SYSTEM_ECHO_BLOCK_PATTERNS) {
+    const probe = new RegExp(pattern.source, pattern.flags.replace('g', ''));
+    if (probe.test(text)) return true;
+  }
+  return false;
+}
+
+/**
+ * Sanitize a prompt before persisting it to a *-state.json file.
+ *
+ * Strategy:
+ * 1. Strip echoes first. If non-empty content remains AND that remainder no
+ *    longer looks like an echo, keep it (preserves the real user request in
+ *    an "echo + blank line + real request" paste).
+ * 2. Otherwise, if the raw prompt looks like a pure echo, substitute the
+ *    placeholder sentinel.
+ * 3. Finally, hard-truncate to MAX_STATE_PROMPT_LEN chars.
+ */
+function sanitizePromptForState(prompt) {
+  if (typeof prompt !== 'string') return '';
+  const trimmed = prompt.trim();
+  if (!trimmed) return '';
+
+  const stripped = stripSystemEchoes(trimmed).trim();
+  if (stripped.length > 0 && !looksLikeSystemEcho(stripped)) {
+    return stripped.length > MAX_STATE_PROMPT_LEN
+      ? `${stripped.slice(0, MAX_STATE_PROMPT_LEN - 3)}...`
+      : stripped;
+  }
+
+  if (looksLikeSystemEcho(trimmed)) {
+    return '(prompt omitted: pasted system echo)';
+  }
+
+  const base = stripped.length > 0 ? stripped : trimmed;
+  return base.length > MAX_STATE_PROMPT_LEN
+    ? `${base.slice(0, MAX_STATE_PROMPT_LEN - 3)}...`
+    : base;
+}
+
 const MODE_REFERENCE_PATTERN =
   /\b(?:ralph|autopilot|auto[\s-]?pilot|ultrawork|ulw|ralplan|ultrathink|deepsearch|deep[\s-]?analyze|deepanalyze|deep[\s-]interview|ouroboros|ccg|claude-codex-gemini|deerflow)\b/gi;
 
@@ -453,15 +579,23 @@ function isInformationalKeywordContext(text, position, keywordLength, keywordTex
 }
 
 function hasActionableKeyword(text, pattern) {
+  // Strip system-generated echo blocks (hook outputs, Stop-hook wrappers)
+  // before searching for keywords. Otherwise pasting a previous
+  // "[RALPH LOOP - ITERATION N] ..." block into a prompt would re-activate
+  // the mode and the echo itself would become the new state.prompt.
+  const searchText = looksLikeSystemEcho(text)
+    ? stripSystemEchoes(text)
+    : text;
+
   const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
   const globalPattern = new RegExp(pattern.source, flags);
 
-  for (const match of text.matchAll(globalPattern)) {
+  for (const match of searchText.matchAll(globalPattern)) {
     if (match.index === undefined) {
       continue;
     }
 
-    if (isInformationalKeywordContext(text, match.index, match[0].length, match[0])) {
+    if (isInformationalKeywordContext(searchText, match.index, match[0].length, match[0])) {
       continue;
     }
 
@@ -472,19 +606,24 @@ function hasActionableKeyword(text, pattern) {
 }
 
 function hasActionableRalplanKeyword(text, pattern) {
+  // Same echo guard as hasActionableKeyword.
+  const searchText = looksLikeSystemEcho(text)
+    ? stripSystemEchoes(text)
+    : text;
+
   const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
   const globalPattern = new RegExp(pattern.source, flags);
 
-  for (const match of text.matchAll(globalPattern)) {
+  for (const match of searchText.matchAll(globalPattern)) {
     if (match.index === undefined) {
       continue;
     }
 
-    if (isInformationalKeywordContext(text, match.index, match[0].length, match[0])) {
+    if (isInformationalKeywordContext(searchText, match.index, match[0].length, match[0])) {
       continue;
     }
 
-    if (!hasExplicitInvocationContext(text, match.index, match[0].length, match[0])) {
+    if (!hasExplicitInvocationContext(searchText, match.index, match[0].length, match[0])) {
       continue;
     }
 
@@ -498,6 +637,10 @@ function hasActionableRalplanKeyword(text, pattern) {
 const SESSION_ID_ALLOWLIST = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
 
 function activateState(directory, prompt, stateName, sessionId) {
+  const now = new Date().toISOString();
+  // Sanitize prompt BEFORE writing to state: prevents pasted system echoes
+  // and oversized blobs from being persisted and re-emitted by Stop hook.
+  const safePrompt = sanitizePromptForState(prompt);
   let state;
 
   if (stateName === 'ralph') {
@@ -506,24 +649,26 @@ function activateState(directory, prompt, stateName, sessionId) {
       active: true,
       iteration: 1,
       max_iterations: 100,
-      started_at: new Date().toISOString(),
-      prompt: prompt,
+      started_at: now,
+      prompt: safePrompt,
       session_id: sessionId || undefined,
       project_path: directory,
       reinforcement_count: 0,
       awaiting_confirmation: true,
-      last_checked_at: new Date().toISOString()
+      awaiting_confirmation_set_at: now,
+      last_checked_at: now
     };
   } else {
     state = {
       active: true,
-      started_at: new Date().toISOString(),
-      original_prompt: prompt,
+      started_at: now,
+      original_prompt: safePrompt,
       session_id: sessionId || undefined,
       project_path: directory,
       reinforcement_count: 0,
       awaiting_confirmation: true,
-      last_checked_at: new Date().toISOString()
+      awaiting_confirmation_set_at: now,
+      last_checked_at: now
     };
   }
 
@@ -593,20 +738,27 @@ function linkRalphTeam(directory, sessionId) {
 }
 
 /**
- * Create a skill invocation message that tells Claude to use the Skill tool
+ * Create a compact skill invocation guide without inlining SKILL.md bodies.
+ * Full skill text remains available by path, avoiding UserPromptSubmit token blowups.
  */
 function createSkillInvocation(skillName, originalPrompt, args = '') {
-  const argsSection = args ? `\nArguments: ${args}` : '';
+  const argsSection = args ? `
+Arguments: ${args}` : '';
+  const skillPath = resolveSkillPath(skillName);
+  const pathStatus = existsSync(skillPath)
+    ? `Read fallback: open ${skillPath} and follow its SKILL.md instructions.`
+    : `Read fallback: locate skills/${skillName}/SKILL.md in the active oh-my-claudecode plugin/install and follow it.`;
+
   return `[MAGIC KEYWORD: ${skillName.toUpperCase()}]
 
-You MUST invoke the skill using the Skill tool:
+Skill routing detected: ${skillName}
+Preferred invocation: /oh-my-claudecode:${skillName}${args ? ` ${args}` : ''}
+${pathStatus}${argsSection}
 
-Skill: oh-my-claudecode:${skillName}${argsSection}
+User request (compact echo; original prompt remains authoritative):
+${compactHookText(originalPrompt)}
 
-User request:
-${originalPrompt}
-
-IMPORTANT: Invoke the skill IMMEDIATELY. Do not proceed without loading the skill instructions.`;
+IMPORTANT: Start the ${skillName} workflow immediately. If the slash invocation is unavailable, read the SKILL.md at the fallback path instead of relying on this compact guide.`;
 }
 
 /**
@@ -619,21 +771,26 @@ function createMultiSkillInvocation(skills, originalPrompt) {
   }
 
   const skillBlocks = skills.map((s, i) => {
-    const argsSection = s.args ? `\nArguments: ${s.args}` : '';
+    const skillPath = resolveSkillPath(s.name);
+    const argsText = s.args ? ` ${s.args}` : '';
+    const pathStatus = existsSync(skillPath)
+      ? `Read fallback: ${skillPath}`
+      : `Read fallback: locate skills/${s.name}/SKILL.md in the active oh-my-claudecode plugin/install`;
     return `### Skill ${i + 1}: ${s.name.toUpperCase()}
-Skill: oh-my-claudecode:${s.name}${argsSection}`;
+Preferred invocation: /oh-my-claudecode:${s.name}${argsText}
+${pathStatus}`;
   }).join('\n\n');
 
   return `[MAGIC KEYWORDS DETECTED: ${skills.map(s => s.name.toUpperCase()).join(', ')}]
 
-You MUST invoke ALL of the following skills using the Skill tool, in order:
+Execute ALL detected workflows in order using compact invocation guidance. Do not inline full SKILL.md files into the prompt.
 
 ${skillBlocks}
 
-User request:
-${originalPrompt}
+User request (compact echo; original prompt remains authoritative):
+${compactHookText(originalPrompt)}
 
-IMPORTANT: Invoke ALL skills listed above. Start with the first skill IMMEDIATELY. After it completes, invoke the next skill in order. Do not skip any skill.`;
+IMPORTANT: Complete ALL skills listed above in order. Start with the first skill IMMEDIATELY.`;
 }
 
 /**

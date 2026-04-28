@@ -47,6 +47,7 @@ export interface UnifiedMcpRegistryStatus {
 const MANAGED_START = '# BEGIN OMC MANAGED MCP REGISTRY';
 const MANAGED_END = '# END OMC MANAGED MCP REGISTRY';
 const DEFAULT_LAUNCHER_MCP_STARTUP_TIMEOUT_SEC = 15;
+const CODEX_MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export function getUnifiedMcpRegistryPath(): string {
   return process.env.OMC_MCP_REGISTRY_PATH?.trim() || getGlobalOmcConfigPath('mcp-registry.json');
@@ -438,6 +439,27 @@ function stripManagedCodexBlock(content: string): string {
   return content.replace(managedBlockPattern, '').trimEnd();
 }
 
+function parseCodexMcpServerNames(content: string): Set<string> {
+  const names = new Set<string>();
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+
+    const sectionMatch = line.match(/^\[mcp_servers\.([^\]]+)\]$/);
+    if (sectionMatch) {
+      const name = sectionMatch[1].trim();
+      if (name && CODEX_MCP_SERVER_NAME_PATTERN.test(name)) {
+        names.add(name);
+      }
+    }
+  }
+
+  return names;
+}
+
 export function renderManagedCodexMcpBlock(registry: UnifiedMcpRegistry): string {
   const names = Object.keys(registry);
   if (names.length === 0) {
@@ -450,7 +472,13 @@ export function renderManagedCodexMcpBlock(registry: UnifiedMcpRegistry): string
 
 export function syncCodexConfigToml(existingContent: string, registry: UnifiedMcpRegistry): { content: string; changed: boolean } {
   const base = stripManagedCodexBlock(existingContent);
-  const managedBlock = renderManagedCodexMcpBlock(registry);
+  const existingServerNames = parseCodexMcpServerNames(base);
+  const managedRegistry = Object.fromEntries(
+    Object.entries(registry).filter(([name]) => (
+      CODEX_MCP_SERVER_NAME_PATTERN.test(name) && !existingServerNames.has(name)
+    ))
+  );
+  const managedBlock = renderManagedCodexMcpBlock(managedRegistry);
   const nextContent = managedBlock
     ? `${base ? `${base}\n\n` : ''}${managedBlock}\n`
     : (base ? `${base}\n` : '');

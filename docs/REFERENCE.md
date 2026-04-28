@@ -192,9 +192,13 @@ name: architect
 description: Your custom description
 tools: Read, Grep, Glob, Bash, Edit
 model: opus # or sonnet, haiku
+# Optional: effort inherits from the parent Claude Code session unless you add an explicit override.
+# effort: high
 ---
 Your custom system prompt here...
 ```
+
+Bundled OMC agent prompts currently do **not** ship an `effort:` frontmatter field. Any effort language inside `agents/*.md` is behavioral guidance for the prompt body, while runtime effort inherits from the parent Claude Code session unless the agent markdown explicitly declares an override.
 
 ### Project-Level Config
 
@@ -360,6 +364,8 @@ omc team api claim-task --input '{"team_name":"auth-review","task_id":"1","worke
 ```
 
 Supported entrypoints: direct start (`omc team [N:agent] "<task>"`), `status`, `shutdown`, and `api`.
+
+Native team worker worktrees are an opt-in/config-gated runtime-v2 rollout. See [Native Team Worktree Mode](TEAM-WORKTREE-MODE.md) for the worktree path contract, canonical `OMC_TEAM_STATE_ROOT` behavior, status fields, and dirty-worktree cleanup policy.
 
 Topology behavior:
 - inside classic tmux (`$TMUX` set): reuse the current tmux surface for split-pane or `--new-window` layouts

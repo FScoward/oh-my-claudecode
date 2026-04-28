@@ -31,6 +31,7 @@ import {
   writeRalphState,
   incrementRalphIteration,
   clearRalphState,
+  findPrdPath,
   getPrdCompletionStatus,
   getRalphContext,
   getStory,
@@ -57,6 +58,7 @@ import type { TeamPipelinePhase } from '../team-pipeline/types.js';
 import { getActiveAgentSnapshot } from '../subagent-tracker/index.js';
 import type { IdleNotificationRepoState } from './idle-repo-state.js';
 import { truncatePromptForEcho } from '../../lib/truncate-prompt.js';
+import { isModeActive } from '../mode-registry/index.js';
 
 export interface ToolErrorState {
   tool_name: string;
@@ -861,12 +863,12 @@ async function checkRalphLoop(
       // Check for architect approval
       if (checkArchitectApprovalInTranscript(sessionId, verificationState)) {
         if (verificationState.verification_scope === 'story' && verificationState.story_id) {
-          markStoryArchitectVerified(workingDir, verificationState.story_id);
+          markStoryArchitectVerified(workingDir, verificationState.story_id, undefined, sessionId);
           clearVerificationState(workingDir, sessionId);
 
           const refreshedState = readRalphState(workingDir, sessionId);
           if (refreshedState) {
-            const refreshedPrd = getPrdCompletionStatus(workingDir);
+            const refreshedPrd = getPrdCompletionStatus(workingDir, sessionId);
             refreshedState.current_story_id = refreshedPrd.nextStory?.id;
             writeRalphState(workingDir, refreshedState, sessionId);
           }
@@ -894,7 +896,7 @@ async function checkRalphLoop(
       const rejection = checkArchitectRejectionInTranscript(sessionId);
       if (verificationState && rejection.rejected) {
         if (verificationState.verification_scope === 'story' && verificationState.story_id) {
-          markStoryIncomplete(workingDir, verificationState.story_id, rejection.feedback);
+          markStoryIncomplete(workingDir, verificationState.story_id, rejection.feedback, sessionId);
         }
         // Architect rejected - continue with feedback
         recordArchitectFeedback(workingDir, false, rejection.feedback, sessionId);
@@ -918,7 +920,7 @@ async function checkRalphLoop(
 
     if (verificationState?.pending) {
       const storyUnderReview = verificationState.story_id
-        ? getStory(workingDir, verificationState.story_id) ?? undefined
+        ? getStory(workingDir, verificationState.story_id, sessionId) ?? undefined
         : undefined;
 
       // Verification still pending - remind to run the selected reviewer
@@ -935,9 +937,9 @@ async function checkRalphLoop(
     }
   }
 
-  const prdStatus = getPrdCompletionStatus(workingDir);
+  const prdStatus = getPrdCompletionStatus(workingDir, sessionId);
   const currentStory = state.current_story_id
-    ? getStory(workingDir, state.current_story_id)
+    ? getStory(workingDir, state.current_story_id, sessionId)
     : prdStatus.nextStory;
 
   if (currentStory?.passes && currentStory.architectVerified !== true) {
@@ -1031,9 +1033,10 @@ async function checkRalphLoop(
   }
 
   // Get PRD context for injection
-  const ralphContext = getRalphContext(workingDir);
+  const ralphContext = getRalphContext(workingDir, sessionId);
+  const activePrdPath = prdStatus.hasPrd ? findPrdPath(workingDir, sessionId) : null;
   const prdInstruction = prdStatus.hasPrd
-    ? `2. Check prd.json - verify the current story's acceptance criteria are met, then mark it passes: true. Are ALL stories complete?`
+    ? `2. Check ${activePrdPath ?? 'prd.json'} - verify the current story's acceptance criteria are met, then mark it passes: true. Are ALL stories complete?`
     : `2. Check your todo list - are ALL items marked complete?`;
 
   const continuationPrompt = `<ralph-continuation>
@@ -1874,9 +1877,11 @@ export async function checkPersistentModes(
   };
 
   const runRalphPriority = async (): Promise<PersistentModeResult | null> => {
-    // Skip when the ralph workflow slot is tombstoned — a stale `ralph-state.json`
-    // from a crashed session must not block a fresh invocation.
-    if (tombstonedWorkflowModes.has('ralph')) return null;
+    // Skip when the authoritative registry says Ralph is inactive. This keeps
+    // Stop enforcement aligned with state_list_active and ignores stale
+    // restored/cache artifacts (including tombstoned workflow slots) after
+    // cancel/state_clear has made the registry empty.
+    if (tombstonedWorkflowModes.has('ralph') || !isModeActive('ralph', workingDir, sessionId)) return null;
     return checkRalphLoop(sessionId, workingDir, cancelInProgress);
   };
 
@@ -1923,7 +1928,7 @@ export async function checkPersistentModes(
   }
 
   // Priority 2: Ultrawork Mode (performance mode with persistence)
-  if (!tombstonedWorkflowModes.has('ultrawork')) {
+  if (!tombstonedWorkflowModes.has('ultrawork') && isModeActive('ultrawork', workingDir, sessionId)) {
     const ultraworkResult = await checkUltrawork(sessionId, workingDir, hasIncompleteTodos, cancelInProgress);
     if (ultraworkResult) {
       return ultraworkResult;

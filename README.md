@@ -15,7 +15,7 @@ English | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](READM
 
 _Don't learn Claude Code. Just use OMC._
 
-[Get Started](#quick-start) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [Migration Guide](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
+[Get Started](#quick-start) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [Migration Guide](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -175,6 +175,8 @@ For mixed Codex + Gemini work in one command, use the **`/ccg`** skill (routes v
 
 Workers spawn on-demand and die when their task completes — no idle resource usage. Requires `codex` / `gemini` CLIs installed and an active tmux session.
 
+Native team worker worktrees are being added behind an opt-in/config gate. See [Native Team Worktree Mode](docs/TEAM-WORKTREE-MODE.md) for the workspace contract, canonical state-root rules, dirty-worktree preservation policy, and verification checklist.
+
 > **Note: Package naming** — The project is branded as **oh-my-claudecode** (repo, plugin, commands), but the npm package is published as [`oh-my-claude-sisyphus`](https://www.npmjs.com/package/oh-my-claude-sisyphus). If you install or upgrade the CLI tools via npm/bun, use `npm i -g oh-my-claude-sisyphus@latest`.
 
 ### Updating
@@ -232,7 +234,7 @@ If you experience issues after updating, clear the old plugin cache:
 
 ### Orchestration Modes
 
-Multiple strategies for different use cases — from Team-backed orchestration to token-efficient refactoring. [Learn more →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Multiple strategies for different use cases — from Team-backed orchestration to token-efficient refactoring. [Learn more →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Mode                    | What it is                                                                              | Use For                                                |
 | ----------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------ |
@@ -270,7 +272,7 @@ Learn once, reuse forever. OMC extracts hard-won debugging knowledge into portab
 | | Project Scope | User Scope |
 |---|---|---|
 | **Path** | `.omc/skills/` | `~/.omc/skills/` |
-| **Shared with** | Team (version-controlled) | All your projects |
+| **Shared with** | Team (commit the skill file to keep it across worktrees) | All your projects |
 | **Priority** | Higher (overrides user) | Lower (fallback) |
 
 ```yaml
@@ -287,6 +289,8 @@ Wrap handler at server.py:42 in try/except ClientDisconnectedError...
 **Manage skills:** `/skill list | add | remove | edit | search`
 **Auto-learn:** `/learner` extracts reusable patterns with strict quality gates
 **Auto-inject:** Matching skills load into context automatically — no manual recall needed
+
+Project-scoped skills are stored in `.omc/skills/` and are intended to be committed when you want them shared. If you create them inside a linked git worktree and do not commit them, they disappear when that worktree is removed.
 
 [Full feature list →](docs/REFERENCE.md)
 
@@ -464,10 +468,10 @@ See `scripts/openclaw-gateway-demo.mjs` for a reference gateway that relays Open
 ## Documentation
 
 - **[Full Reference](docs/REFERENCE.md)** - Complete feature documentation
-- **[CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference)** - All `omc` commands, flags, and tools
-- **[Notifications Guide](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#notifications)** - Discord, Telegram, Slack, and webhook setup
-- **[Recommended Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows)** - Battle-tested skill chains for common tasks
-- **[Release Notes](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#release-notes)** - What's new in each version
+- **[CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference)** - All `omc` commands, flags, and tools
+- **[Notifications Guide](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#notifications)** - Discord, Telegram, Slack, and webhook setup
+- **[Recommended Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows)** - Battle-tested skill chains for common tasks
+- **[Release Notes](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#release-notes)** - What's new in each version
 - **[Website](https://yeachan-heo.github.io/oh-my-claudecode-website)** - Interactive guides and examples
 - **[Migration Guide](docs/MIGRATION.md)** - Upgrade from v2.x
 - **[Architecture](docs/ARCHITECTURE.md)** - How it works under the hood
@@ -528,17 +532,18 @@ MIT
 
 Top personal non-fork, non-archived repos from all-time OMC contributors (100+ GitHub stars).
 
-- [@Yeachan-Heo](https://github.com/Yeachan-Heo) — [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) (⭐ 30k)
-- [@junhoyeo](https://github.com/junhoyeo) — [tokscale](https://github.com/junhoyeo/tokscale) (⭐ 2k)
-- [@psmux](https://github.com/psmux) — [psmux](https://github.com/psmux/psmux) (⭐ 1.4k)
-- [@BowTiedSwan](https://github.com/BowTiedSwan) — [buildflow](https://github.com/BowTiedSwan/buildflow) (⭐ 289)
-- [@alohays](https://github.com/alohays) — [awesome-visual-representation-learning-with-transformers](https://github.com/alohays/awesome-visual-representation-learning-with-transformers) (⭐ 269)
+- [@Yeachan-Heo](https://github.com/Yeachan-Heo) — [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) (⭐ 32k)
+- [@junhoyeo](https://github.com/junhoyeo) — [tokscale](https://github.com/junhoyeo/tokscale) (⭐ 2.3k)
+- [@psmux](https://github.com/psmux) — [psmux](https://github.com/psmux/psmux) (⭐ 1.6k)
+- [@BowTiedSwan](https://github.com/BowTiedSwan) — [buildflow](https://github.com/BowTiedSwan/buildflow) (⭐ 291)
+- [@alohays](https://github.com/alohays) — [awesome-visual-representation-learning-with-transformers](https://github.com/alohays/awesome-visual-representation-learning-with-transformers) (⭐ 268)
 - [@jcwleo](https://github.com/jcwleo) — [random-network-distillation-pytorch](https://github.com/jcwleo/random-network-distillation-pytorch) (⭐ 261)
 - [@emgeee](https://github.com/emgeee) — [mean-tutorial](https://github.com/emgeee/mean-tutorial) (⭐ 200)
-- [@anduinnn](https://github.com/anduinnn) — [HiFiNi-Auto-CheckIn](https://github.com/anduinnn/HiFiNi-Auto-CheckIn) (⭐ 170)
-- [@MeroZemory](https://github.com/MeroZemory) — [ida-multi-mcp](https://github.com/MeroZemory/ida-multi-mcp) (⭐ 154)
+- [@shaun0927](https://github.com/shaun0927) — [openchrome](https://github.com/shaun0927/openchrome) (⭐ 186)
+- [@MeroZemory](https://github.com/MeroZemory) — [ida-multi-mcp](https://github.com/MeroZemory/ida-multi-mcp) (⭐ 182)
+- [@anduinnn](https://github.com/anduinnn) — [HiFiNi-Auto-CheckIn](https://github.com/anduinnn/HiFiNi-Auto-CheckIn) (⭐ 171)
+- [@HaD0Yun](https://github.com/HaD0Yun) — [Gopeak-godot-mcp](https://github.com/HaD0Yun/Gopeak-godot-mcp) (⭐ 148)
 - [@Znuff](https://github.com/Znuff) — [consolas-powerline](https://github.com/Znuff/consolas-powerline) (⭐ 146)
-- [@HaD0Yun](https://github.com/HaD0Yun) — [Gopeak-godot-mcp](https://github.com/HaD0Yun/Gopeak-godot-mcp) (⭐ 133)
 
 <!-- OMC:FEATURED-CONTRIBUTORS:END -->
 

@@ -115,6 +115,7 @@ ensure_local_omc_git_exclude() {
 
   cat >> "$exclude_path" <<'EOF'
 # BEGIN OMC local artifacts
+!.omc/
 .omc/*
 !.omc/skills/
 !.omc/skills/**

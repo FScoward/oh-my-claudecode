@@ -26,6 +26,7 @@ import { isSkininthegamebrosUser } from '../utils/skininthegamebros-user.js';
 import { syncUnifiedMcpRegistryTargets } from './mcp-registry.js';
 import { OMC_CONFIG_FILE_REL } from '../lib/paths.js';
 import { buildHudWrapper } from '../lib/hud-wrapper-template.js';
+import { syncOmcLearnedUserSkillsForClaudeCode } from '../utils/user-skill-compat.js';
 
 /** Claude Code configuration directory */
 export const CLAUDE_CONFIG_DIR = getClaudeConfigDir();
@@ -191,9 +192,24 @@ function quoteShellArg(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-function buildStatusLineCommand(nodeBin: string, hudScriptPath: string, findNodePath?: string): string {
+function buildStatusLineCommand(
+  nodeBin: string,
+  hudScriptPath: string,
+  findNodePath?: string,
+  cacheWrapperPath?: string,
+): string {
   if (isWindows()) {
     return `${quoteShellArg(nodeBin)} ${quoteShellArg(hudScriptPath)}`;
+  }
+
+  const normalizedHudScriptPath = hudScriptPath.replace(/\\/g, '/');
+
+  if (cacheWrapperPath) {
+    if (isDefaultClaudeConfigDirPath(CLAUDE_CONFIG_DIR)) {
+      return 'sh ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud-cache.sh ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud.mjs';
+    }
+
+    return `sh ${quoteShellArg(cacheWrapperPath.replace(/\\/g, '/'))} ${quoteShellArg(normalizedHudScriptPath)}`;
   }
 
   if (isDefaultClaudeConfigDirPath(CLAUDE_CONFIG_DIR)) {
@@ -204,7 +220,6 @@ function buildStatusLineCommand(nodeBin: string, hudScriptPath: string, findNode
     return 'node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud.mjs';
   }
 
-  const normalizedHudScriptPath = hudScriptPath.replace(/\\/g, '/');
   if (findNodePath) {
     return `sh ${quoteShellArg(findNodePath.replace(/\\/g, '/'))} ${quoteShellArg(normalizedHudScriptPath)}`;
   }
@@ -515,6 +530,8 @@ function configureInstallerSettings(
       try {
         const findNodeSrc = join(getPackageDir(), 'scripts', 'find-node.sh');
         const findNodeDest = join(HUD_DIR, 'find-node.sh');
+        const cacheWrapperSrc = join(getPackageDir(), 'scripts', 'lib', 'hud-cache-wrapper.sh');
+        const cacheWrapperDest = join(HUD_DIR, 'omc-hud-cache.sh');
         const configDirHelperSrc = join(getPackageDir(), 'scripts', 'lib', 'config-dir.sh');
         const hudLibDir = join(HUD_DIR, 'lib');
         const configDirHelperDest = join(hudLibDir, 'config-dir.sh');
@@ -522,10 +539,12 @@ function configureInstallerSettings(
           mkdirSync(hudLibDir, { recursive: true });
         }
         copyFileSync(findNodeSrc, findNodeDest);
+        copyFileSync(cacheWrapperSrc, cacheWrapperDest);
         copyFileSync(configDirHelperSrc, configDirHelperDest);
         chmodSync(findNodeDest, 0o755);
+        chmodSync(cacheWrapperDest, 0o755);
         chmodSync(configDirHelperDest, 0o755);
-        statusLineCommand = buildStatusLineCommand(nodeBin, context.hudScriptPath.replace(/\\/g, '/'), findNodeDest);
+        statusLineCommand = buildStatusLineCommand(nodeBin, context.hudScriptPath.replace(/\\/g, '/'), findNodeDest, cacheWrapperDest);
       } catch {
         statusLineCommand = buildStatusLineCommand(nodeBin, context.hudScriptPath.replace(/\\/g, '/'));
       }
@@ -1385,6 +1404,16 @@ function syncBundledSkillDefinitions(log: (msg: string) => void, options?: { saf
   return installedSkills;
 }
 
+function syncUserSkillCompatShims(log: (msg: string) => void): string[] {
+  const synced = syncOmcLearnedUserSkillsForClaudeCode();
+
+  for (const skillName of synced) {
+    log(`  Synced user skill compatibility shim: ${join(skillName, 'SKILL.md').replace(/\\/g, '/')}`);
+  }
+
+  return synced;
+}
+
 function loadClaudeMdContent(): string {
   const claudeMdPath = join(getPackageDir(), 'docs', 'CLAUDE.md');
 
@@ -1773,6 +1802,13 @@ export function install(options: InstallOptions = {}): InstallResult {
       const removedSkills = cleanupStaleSkills(log);
       if (removedSkills.length > 0) {
         log(`Cleaned up ${removedSkills.length} stale skill(s)`);
+      }
+    }
+
+    if (existsSync(SKILLS_DIR)) {
+      const syncedUserSkillCompat = syncUserSkillCompatShims(log);
+      if (syncedUserSkillCompat.length > 0) {
+        log(`Synced ${syncedUserSkillCompat.length} user skill compatibility shim(s)`);
       }
     }
 

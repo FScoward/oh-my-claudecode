@@ -111,7 +111,7 @@ Bei Problemen nach der Aktualisierung leeren Sie den alten Plugin-Cache:
 
 ### Orchestrierungsmodi
 
-Mehrere Strategien für verschiedene Anwendungsfälle — von Team-gestützter Orchestrierung bis token-effizientem Refactoring. [Mehr erfahren →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Mehrere Strategien für verschiedene Anwendungsfälle — von Team-gestützter Orchestrierung bis token-effizientem Refactoring. [Mehr erfahren →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Modus                             | Beschreibung                                                                               | Verwendung                                                                           |
 | --------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |

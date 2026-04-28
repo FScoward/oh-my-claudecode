@@ -13,10 +13,11 @@
  * ```
  */
 import { pathToFileURL } from "url";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync, } from "fs";
 import { dirname, join } from "path";
 import { resolveToWorktreeRoot, getOmcRoot } from "../lib/worktree-paths.js";
 import { readModeState, writeModeState } from "../lib/mode-state-io.js";
+import { SESSION_END_MODE_STATE_FILES } from "../lib/mode-names.js";
 import { formatOmcCliInvocation } from "../utils/omc-cli-rendering.js";
 import { createSwallowedErrorLogger } from "../lib/swallowed-error.js";
 import { readCanonicalTeamStateCandidate } from "./team-canonical-state.js";
@@ -32,7 +33,8 @@ import { resolveAutopilotPlanPath, resolveOpenQuestionsPlanPath, } from "../conf
 import { formatAutopilotRuntimeInsight } from "./autopilot/runtime-insight.js";
 import { writeSkillActiveState, isCanonicalWorkflowSkill, upsertWorkflowSkillSlot, markWorkflowSkillCompleted, pruneExpiredWorkflowSkillTombstones, readSkillActiveStateNormalized, writeSkillActiveStateCopies, } from "./skill-state/index.js";
 import { parseExplicitWorkflowSlashInvocation } from "./keyword-detector/index.js";
-import { ULTRAWORK_MESSAGE, ULTRATHINK_MESSAGE, SEARCH_MESSAGE, ANALYZE_MESSAGE, TDD_MESSAGE, CODE_REVIEW_MESSAGE, SECURITY_REVIEW_MESSAGE, RALPH_MESSAGE, PROMPT_TRANSLATION_MESSAGE, } from "../installer/hooks.js";
+import { ULTRATHINK_MESSAGE, SEARCH_MESSAGE, ANALYZE_MESSAGE, TDD_MESSAGE, CODE_REVIEW_MESSAGE, SECURITY_REVIEW_MESSAGE, RALPH_MESSAGE, PROMPT_TRANSLATION_MESSAGE, } from "../installer/hooks.js";
+import { getUltraworkMessage } from "./keyword-detector/ultrawork/index.js";
 // Agent dashboard is used in pre/post-tool-use hot path
 import { getAgentDashboard } from "./subagent-tracker/index.js";
 // Session replay recordFileTouch is used in pre-tool-use hot path
@@ -85,12 +87,248 @@ const MODE_CONFIRMATION_SKILL_MAP = {
     autopilot: ["autopilot"],
     ralplan: ["ralplan"],
 };
+const SESSION_START_CONTEXT_BUDGET = 6000;
+const SESSION_START_OMISSION_NOTICE = '[Additional SessionStart context omitted to preserve the 6000-character aggregate budget.]';
+const SESSION_STARTED_MARKER_FILE = "session-started.json";
+const LINUX_BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+function compactBudgetedText(text, maxChars) {
+    const notice = "\n...[truncated to preserve SessionStart context budget]";
+    if (!text || text.length <= maxChars)
+        return text || "";
+    if (maxChars <= notice.length)
+        return notice.slice(0, Math.max(0, maxChars));
+    return `${text.slice(0, maxChars - notice.length).trimEnd()}${notice}`;
+}
+function buildSessionStartAdditionalContext(messages) {
+    if (messages.length === 0)
+        return "";
+    const priorityOrder = [
+        /\[MODEL ROUTING OVERRIDE/,
+        /\[AUTOPILOT MODE RESTORED\]/,
+        /\[ULTRAWORK MODE RESTORED\]/,
+        /\[RALPLAN MODE RESTORED\]/,
+        /\[TEAM MODE RESTORED\]/,
+        /\[ROOT AGENTS\.md LOADED\]/,
+        /\[PENDING TASKS DETECTED\]/,
+    ];
+    const ordered = messages
+        .map((message, index) => {
+        const priority = priorityOrder.findIndex((pattern) => pattern.test(message));
+        return { message, index, priority: priority === -1 ? priorityOrder.length + index : priority };
+    })
+        .sort((a, b) => a.priority - b.priority || a.index - b.index)
+        .map((entry) => entry.message);
+    let used = 0;
+    const selected = [];
+    for (const message of ordered) {
+        const separatorLength = selected.length > 0 ? 1 : 0;
+        if (used + separatorLength + message.length > SESSION_START_CONTEXT_BUDGET) {
+            const remainingBudget = SESSION_START_CONTEXT_BUDGET - used - separatorLength;
+            if (remainingBudget > 0) {
+                selected.push(remainingBudget > 120
+                    ? compactBudgetedText(message, remainingBudget)
+                    : compactBudgetedText(SESSION_START_OMISSION_NOTICE, remainingBudget));
+            }
+            break;
+        }
+        selected.push(message);
+        used += separatorLength + message.length;
+    }
+    return selected.join("\n");
+}
+function readLinuxBootId() {
+    try {
+        if (!existsSync(LINUX_BOOT_ID_PATH))
+            return undefined;
+        const bootId = readFileSync(LINUX_BOOT_ID_PATH, "utf-8").trim();
+        return bootId.length > 0 ? bootId : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+function sessionStateDir(directory, sessionId) {
+    return join(getOmcRoot(directory), "state", "sessions", sessionId);
+}
+function sessionStartedMarkerPath(directory, sessionId) {
+    return join(sessionStateDir(directory, sessionId), SESSION_STARTED_MARKER_FILE);
+}
+function readJsonObject(filePath) {
+    try {
+        if (!existsSync(filePath))
+            return null;
+        const parsed = JSON.parse(readFileSync(filePath, "utf-8"));
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? parsed
+            : null;
+    }
+    catch {
+        return null;
+    }
+}
+function writeSessionStartedMarker(directory, sessionId) {
+    if (!sessionId || !SAFE_SESSION_ID_PATTERN.test(sessionId))
+        return;
+    try {
+        const dir = sessionStateDir(directory, sessionId);
+        mkdirSync(dir, { recursive: true });
+        const marker = {
+            session_id: sessionId,
+            started_at: new Date().toISOString(),
+            cwd: directory,
+            pid: process.pid,
+            // Do not persist process.ppid here: installed hooks run through
+            // scripts/run.cjs, whose short-lived process exits as soon as this
+            // hook returns. Treating that runner PID as owner liveness caused
+            // later SessionStart hooks to falsely clean live session state.
+            boot_id: readLinuxBootId(),
+        };
+        writeFileSync(sessionStartedMarkerPath(directory, sessionId), JSON.stringify(marker, null, 2), {
+            encoding: "utf-8",
+            mode: 0o600,
+        });
+    }
+    catch {
+        // SessionStart markers are best-effort and must never block startup.
+    }
+}
+function removeSessionStartedMarker(directory, sessionId) {
+    if (!sessionId || !SAFE_SESSION_ID_PATTERN.test(sessionId))
+        return;
+    try {
+        const markerPath = sessionStartedMarkerPath(directory, sessionId);
+        if (existsSync(markerPath)) {
+            unlinkSync(markerPath);
+        }
+    }
+    catch {
+        // Best-effort marker cleanup only.
+    }
+}
+function hasSessionEndSummary(directory, sessionId) {
+    return existsSync(join(getOmcRoot(directory), "sessions", `${sessionId}.json`));
+}
+function cleanupSessionModeStateFiles(directory, sessionId) {
+    const dir = sessionStateDir(directory, sessionId);
+    for (const { file } of SESSION_END_MODE_STATE_FILES) {
+        const filePath = join(dir, file);
+        const state = readJsonObject(filePath);
+        // SessionStart reconciliation is intentionally narrower than SessionEnd:
+        // only remove files inside the explicit stale session directory. Do not
+        // touch legacy/global state, even if it is unowned or shares a mode name.
+        if (state?.active === true || file === "skill-active-state.json") {
+            try {
+                unlinkSync(filePath);
+            }
+            catch {
+                // Leave files in place when deletion fails.
+            }
+        }
+    }
+}
+function cleanupMissionStateForSession(directory, sessionId) {
+    const missionStatePath = join(getOmcRoot(directory), "state", "mission-state.json");
+    const parsed = readJsonObject(missionStatePath);
+    if (!Array.isArray(parsed?.missions))
+        return;
+    const before = parsed.missions.length;
+    parsed.missions = parsed.missions.filter((mission) => {
+        if (mission.source !== "session")
+            return true;
+        const missionId = typeof mission.id === "string" ? mission.id : "";
+        return !missionId.includes(sessionId);
+    });
+    if (parsed.missions.length === before)
+        return;
+    try {
+        parsed.updatedAt = new Date().toISOString();
+        writeFileSync(missionStatePath, JSON.stringify(parsed, null, 2));
+    }
+    catch {
+        // Best-effort cleanup only.
+    }
+}
+/**
+ * Return true only when SessionStart has durable abandonment evidence.
+ *
+ * Claude Code SessionStart input currently provides session metadata such as
+ * session_id, transcript_path, cwd, source, model, and agent_type, but no
+ * stable owner process for the interactive session. In installed OMC hooks the
+ * immediate hook parent belongs to scripts/run.cjs and is intentionally
+ * short-lived, so same-boot PID liveness checks are not reliable here. SessionEnd
+ * remains the primary same-boot cleanup path; SessionStart only reconciles
+ * durable leftovers, such as markers from a previous OS boot.
+ */
+function hasDurableAbandonmentEvidence(marker) {
+    const storedBootId = typeof marker.boot_id === "string" ? marker.boot_id : undefined;
+    const currentBootId = readLinuxBootId();
+    if (storedBootId && currentBootId && storedBootId !== currentBootId) {
+        return true;
+    }
+    // Same-boot hard-kill cleanup requires a durable owner signal. Claude Code
+    // does not currently provide one to hooks, so keep active state rather than
+    // guessing from hook-runner process ancestry or transcript metadata.
+    return false;
+}
+async function reconcileAbandonedSessionStarts(directory, currentSessionId) {
+    const sessionsDir = join(getOmcRoot(directory), "state", "sessions");
+    if (!existsSync(sessionsDir))
+        return;
+    let entries;
+    try {
+        entries = readdirSync(sessionsDir);
+    }
+    catch {
+        return;
+    }
+    for (const sessionId of entries) {
+        if (!SAFE_SESSION_ID_PATTERN.test(sessionId) || sessionId === currentSessionId)
+            continue;
+        const markerPath = sessionStartedMarkerPath(directory, sessionId);
+        const marker = readJsonObject(markerPath);
+        if (!marker)
+            continue;
+        // Explicit ownership only: the marker must belong to the session directory.
+        if (marker.session_id !== sessionId)
+            continue;
+        // If SessionEnd already wrote its summary, only remove the leftover marker.
+        if (hasSessionEndSummary(directory, sessionId)) {
+            removeSessionStartedMarker(directory, sessionId);
+            continue;
+        }
+        if (!hasDurableAbandonmentEvidence(marker))
+            continue;
+        // Deliberately narrow: clear only OMC session-scoped mode/mission state.
+        // Do not call team runtime shutdown here; SessionStart must not kill tmux PIDs.
+        cleanupSessionModeStateFiles(directory, sessionId);
+        cleanupMissionStateForSession(directory, sessionId);
+        removeSessionStartedMarker(directory, sessionId);
+        try {
+            const remaining = readdirSync(sessionStateDir(directory, sessionId));
+            if (remaining.length === 0) {
+                rmdirSync(sessionStateDir(directory, sessionId));
+            }
+        }
+        catch {
+            // Leave non-empty/unreadable directories untouched.
+        }
+    }
+}
 function getExtraField(input, key) {
     return input[key];
 }
 function getHookToolUseId(input) {
     const value = getExtraField(input, "tool_use_id");
     return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+function getHookContextString(input, ...keys) {
+    for (const key of keys) {
+        const value = getExtraField(input, key);
+        if (typeof value === "string" && value.trim().length > 0) {
+            return value.trim();
+        }
+    }
+    return undefined;
 }
 function extractAsyncAgentId(toolOutput) {
     if (typeof toolOutput !== "string") {
@@ -885,7 +1123,7 @@ async function processKeywordDetector(input) {
                 if (activated) {
                     markModeAwaitingConfirmation(directory, sessionId, 'ultrawork');
                 }
-                messages.push(ULTRAWORK_MESSAGE);
+                messages.push(getUltraworkMessage(getHookContextString(input, "agentName", "agent_name"), getHookContextString(input, "model", "modelId", "model_id")));
                 break;
             }
             case "ultrathink":
@@ -1086,6 +1324,8 @@ When team verification passes or cancel is requested, allow terminal cleanup beh
 async function processSessionStart(input) {
     const sessionId = input.sessionId;
     const directory = resolveToWorktreeRoot(input.directory);
+    writeSessionStartedMarker(directory, sessionId);
+    await reconcileAbandonedSessionStarts(directory, sessionId);
     // Lazy-load session-start dependencies
     const { initSilentAutoUpdate } = await import("../features/auto-update.js");
     const { readAutopilotState } = await import("./autopilot/index.js");
@@ -1310,7 +1550,7 @@ The CLAUDE.md instruction "Pass model on Task calls: haiku, sonnet, opus" does N
     if (messages.length > 0) {
         return {
             continue: true,
-            message: messages.join("\n"),
+            message: buildSessionStartAdditionalContext(messages),
         };
     }
     return { continue: true };

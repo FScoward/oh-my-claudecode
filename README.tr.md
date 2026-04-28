@@ -111,7 +111,7 @@ Güncellemeden sonra sorun yaşarsanız, eski plugin önbelleğini temizleyin:
 
 ### Orkestrasyon Modları
 
-Farklı kullanım senaryoları için birden fazla strateji — Team destekli orkestrasyondan token-verimli yeniden düzenlemeye. [Daha fazla bilgi →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Farklı kullanım senaryoları için birden fazla strateji — Team destekli orkestrasyondan token-verimli yeniden düzenlemeye. [Daha fazla bilgi →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Mod                           | Nedir                                                                                  | Kullanım Alanı                                                    |
 | ----------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |

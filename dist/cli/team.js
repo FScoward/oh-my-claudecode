@@ -6,7 +6,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { executeTeamApiOperation as executeCanonicalTeamApiOperation, resolveTeamApiOperation } from '../team/api-interop.js';
 import { cleanupTeamWorktrees } from '../team/git-worktree.js';
-import { killWorkerPanes, killTeamSession } from '../team/tmux-session.js';
+import { killWorkerPanes, killTeamSession, getWorkerLiveness } from '../team/tmux-session.js';
 import { validateTeamName } from '../team/team-name.js';
 import { monitorTeam, resumeTeam, shutdownTeam } from '../team/runtime.js';
 import { readTeamConfig } from '../team/monitor.js';
@@ -106,6 +106,35 @@ function parseJsonSafe(content) {
     catch {
         return null;
     }
+}
+async function resolveCleanupPaneEvidence(job, jobsDir, jobId) {
+    const paneArtifact = await readFile(panesArtifactPath(jobsDir, jobId), 'utf-8')
+        .then((content) => parseJsonSafe(content))
+        .catch(() => null);
+    if (paneArtifact?.paneIds?.length)
+        return { paneArtifact };
+    const config = await readTeamConfig(job.teamName, job.cwd).catch(() => null);
+    if (!config) {
+        return { paneArtifact, livenessUnknownReason: 'worker_liveness_unknown:no_config_or_panes' };
+    }
+    const configPaneIds = (config.workers ?? [])
+        .map((worker) => worker.pane_id)
+        .filter((paneId) => typeof paneId === 'string' && paneId.trim().length > 0);
+    if (configPaneIds.length > 0) {
+        return {
+            paneArtifact: {
+                paneIds: configPaneIds,
+                leaderPaneId: config.leader_pane_id ?? paneArtifact?.leaderPaneId ?? '',
+                sessionName: config.tmux_session || paneArtifact?.sessionName,
+                ownsWindow: config.tmux_window_owned ?? paneArtifact?.ownsWindow,
+            },
+        };
+    }
+    const hasConfiguredWorkers = (config.workers ?? []).length > 0 || config.worker_count > 0;
+    if (hasConfiguredWorkers) {
+        return { paneArtifact, livenessUnknownReason: 'worker_liveness_unknown:no_worker_pane_ids' };
+    }
+    return { paneArtifact };
 }
 function readJobFromDisk(jobId, jobsDir) {
     try {
@@ -239,6 +268,7 @@ export async function startTeamJob(input) {
         pollIntervalMs: input.pollIntervalMs,
         sentinelGateTimeoutMs: input.sentinelGateTimeoutMs,
         sentinelGatePollIntervalMs: input.sentinelGatePollIntervalMs,
+        autoMerge: input.autoMerge,
     };
     if (child.stdin && typeof child.stdin.on === 'function') {
         child.stdin.on('error', () => { });
@@ -295,9 +325,18 @@ export async function cleanupTeamJob(jobId, graceMs = 10_000) {
     if (!job) {
         throw new Error(`No job found: ${jobId}`);
     }
-    const paneArtifact = await readFile(panesArtifactPath(jobsDir, jobId), 'utf-8')
-        .then((content) => parseJsonSafe(content))
-        .catch(() => null);
+    const { paneArtifact, livenessUnknownReason } = await resolveCleanupPaneEvidence(job, jobsDir, jobId);
+    if (livenessUnknownReason) {
+        writeJobToDisk(jobId, {
+            ...job,
+            cleanupBlockedAt: new Date().toISOString(),
+            cleanupBlockedReason: livenessUnknownReason,
+        }, jobsDir);
+        return {
+            jobId,
+            message: `Preserved team state because worker liveness could not be proven (${livenessUnknownReason})`,
+        };
+    }
     if (paneArtifact?.sessionName && (paneArtifact.ownsWindow === true || !paneArtifact.sessionName.includes(':'))) {
         const sessionMode = paneArtifact.ownsWindow === true
             ? (paneArtifact.sessionName.includes(':') ? 'dedicated-window' : 'detached-session')
@@ -313,16 +352,52 @@ export async function cleanupTeamJob(jobId, graceMs = 10_000) {
             graceMs,
         });
     }
+    if (paneArtifact?.paneIds?.length) {
+        const liveness = await Promise.all(paneArtifact.paneIds.map(async (paneId) => [paneId, await getWorkerLiveness(paneId)]));
+        const alivePaneIds = liveness.filter(([, state]) => state === 'alive').map(([paneId]) => paneId);
+        const unknownPaneIds = liveness.filter(([, state]) => state === 'unknown').map(([paneId]) => paneId);
+        if (alivePaneIds.length > 0 || unknownPaneIds.length > 0) {
+            const reason = alivePaneIds.length > 0
+                ? `worker_panes_still_alive:${alivePaneIds.join(',')}`
+                : `worker_liveness_unknown:${unknownPaneIds.join(',')}`;
+            writeJobToDisk(jobId, {
+                ...job,
+                cleanupBlockedAt: new Date().toISOString(),
+                cleanupBlockedReason: reason,
+            }, jobsDir);
+            return {
+                jobId,
+                message: alivePaneIds.length > 0
+                    ? `Preserved team state because worker pane(s) are still alive: ${alivePaneIds.join(', ')}`
+                    : `Preserved team state because worker pane liveness is unknown: ${unknownPaneIds.join(', ')}`,
+            };
+        }
+    }
+    let preservedWorktrees = 0;
+    try {
+        const cleanupResult = cleanupTeamWorktrees(job.teamName, job.cwd);
+        preservedWorktrees = cleanupResult.preserved.length;
+    }
+    catch {
+        // best-effort for dormant team-owned worktree infrastructure; preserve state
+        // when cleanup could not prove worktree metadata/backups are disposable.
+        preservedWorktrees = 1;
+    }
+    if (preservedWorktrees > 0) {
+        writeJobToDisk(jobId, {
+            ...job,
+            cleanupBlockedAt: new Date().toISOString(),
+            cleanupBlockedReason: `worktrees_preserved:${preservedWorktrees}`,
+        }, jobsDir);
+        return {
+            jobId,
+            message: `Preserved team state because ${preservedWorktrees} worktree(s) require follow-up cleanup`,
+        };
+    }
     await rm(teamStateRoot(job.cwd, job.teamName), {
         recursive: true,
         force: true,
     }).catch(() => undefined);
-    try {
-        cleanupTeamWorktrees(job.teamName, job.cwd);
-    }
-    catch {
-        // best-effort for dormant team-owned worktree infrastructure
-    }
     writeJobToDisk(jobId, {
         ...job,
         cleanedUpAt: new Date().toISOString(),
@@ -354,9 +429,22 @@ export async function teamStatusByTeamName(teamName, cwd = process.cwd()) {
             running: true,
             sessionName: config?.tmux_session,
             leaderPaneId: config?.leader_pane_id,
+            workspace_mode: config?.workspace_mode,
+            worktree_mode: config?.worktree_mode,
+            team_state_root: config?.team_state_root,
             workerPaneIds: Array.from(new Set((config?.workers ?? [])
                 .map((worker) => worker.pane_id)
                 .filter((paneId) => typeof paneId === 'string' && paneId.trim().length > 0))),
+            workers: (config?.workers ?? []).map((worker) => ({
+                name: worker.name,
+                working_dir: worker.working_dir,
+                worktree_repo_root: worker.worktree_repo_root,
+                worktree_path: worker.worktree_path,
+                worktree_branch: worker.worktree_branch,
+                worktree_detached: worker.worktree_detached,
+                worktree_created: worker.worktree_created,
+                team_state_root: worker.team_state_root,
+            })),
             snapshot,
         };
     }
@@ -490,7 +578,7 @@ export async function teamCleanupCommand(jobId, cleanupOptions = {}, options = {
 }
 export const TEAM_USAGE = `
 Usage:
-  omc team start --agent <claude|codex|gemini|cursor>[,<agent>...] --task "<task>" [--count N] [--name TEAM] [--cwd DIR] [--new-window] [--json]
+  omc team start --agent <claude|codex|gemini|cursor>[,<agent>...] --task "<task>" [--count N] [--name TEAM] [--cwd DIR] [--new-window] [--auto-merge] [--json]
   omc team status <job_id|team_name> [--json] [--cwd DIR]
   omc team wait <job_id> [--timeout-ms MS] [--json]
   omc team cleanup <job_id> [--grace-ms MS] [--json]
@@ -498,6 +586,17 @@ Usage:
   omc team shutdown <team_name> [--force] [--json] [--cwd DIR]
   omc team api <operation> [--input '<json>'] [--json] [--cwd DIR]
   omc team [ralph] <N:agent-type[:role]> "task" [--json] [--cwd DIR] [--new-window]
+
+Worktrees:
+  Native per-worker git worktree mode is opt-in/config-gated with team.ops.worktreeMode or OMC_TEAM_WORKTREE_MODE=detached|named.
+  Status JSON includes workspace_mode, worktree_mode, team_state_root, and per-worker worktree metadata.
+
+Auto-merge (v2-only):
+  --auto-merge          Enable per-commit auto-merge to leader and auto-rebase fanout.
+                        Each worker runs in a dedicated git worktree on omc-team/{team}/{worker}.
+                        Bursts of rapid worker commits coalesce to a single merge of HEAD.
+                        Requires OMC_RUNTIME_V2=1. Leader branch must not be 'main' or 'master'.
+                        Equivalent to OMC_TEAMS_AUTO_MERGE=1.
 
 Examples:
   omc team start --agent codex --count 2 --task "review auth flow" --new-window
@@ -507,6 +606,10 @@ Examples:
   omc team shutdown auth-review --force
   omc team api list-tasks --input '{"teamName":"auth-review"}' --json
   omc team 3:codex "refactor launch command"
+
+Worktree mode:
+  Native worker worktrees are opt-in/config-gated for runtime-v2.
+  Status surfaces workspace_mode, worktree_mode, team_state_root, and worker worktree metadata when enabled.
 `.trim();
 function parseStartArgs(args) {
     const agentValues = [];
@@ -520,6 +623,8 @@ function parseStartArgs(args) {
     let pollIntervalMs;
     let sentinelGateTimeoutMs;
     let sentinelGatePollIntervalMs;
+    // --auto-merge / OMC_TEAMS_AUTO_MERGE=1 enables the merge orchestrator (v2-only).
+    let autoMerge = process.env.OMC_TEAMS_AUTO_MERGE === '1';
     for (let i = 0; i < args.length; i += 1) {
         const token = args[i];
         const next = args[i + 1];
@@ -529,6 +634,10 @@ function parseStartArgs(args) {
         }
         if (token === '--new-window') {
             newWindow = true;
+            continue;
+        }
+        if (token === '--auto-merge') {
+            autoMerge = true;
             continue;
         }
         if (token === '--agent') {
@@ -665,6 +774,7 @@ function parseStartArgs(args) {
             ...(pollIntervalMs != null ? { pollIntervalMs } : {}),
             ...(sentinelGateTimeoutMs != null ? { sentinelGateTimeoutMs } : {}),
             ...(sentinelGatePollIntervalMs != null ? { sentinelGatePollIntervalMs } : {}),
+            ...(autoMerge ? { autoMerge: true } : {}),
         },
         json,
     };
@@ -864,6 +974,7 @@ function parseLegacyStartAlias(args) {
     let json = false;
     let cwd = process.cwd();
     let newWindow = false;
+    let autoMerge = process.env.OMC_TEAMS_AUTO_MERGE === '1';
     const taskParts = [];
     for (let i = index; i < args.length; i += 1) {
         const token = args[i];
@@ -874,6 +985,10 @@ function parseLegacyStartAlias(args) {
         }
         if (token === '--new-window') {
             newWindow = true;
+            continue;
+        }
+        if (token === '--auto-merge') {
+            autoMerge = true;
             continue;
         }
         if (token === '--cwd') {
@@ -902,6 +1017,7 @@ function parseLegacyStartAlias(args) {
         json,
         cwd,
         ...(newWindow ? { newWindow: true } : {}),
+        ...(autoMerge ? { autoMerge: true } : {}),
     };
 }
 export async function teamCommand(argv) {
@@ -978,6 +1094,7 @@ export async function teamCommand(argv) {
                 tasks,
                 cwd: legacy.cwd,
                 ...(legacy.newWindow ? { newWindow: true } : {}),
+                ...(legacy.autoMerge ? { autoMerge: true } : {}),
             });
             output(result, legacy.json);
             return;
