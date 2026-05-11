@@ -65,13 +65,6 @@ export declare function killSession(teamName: string, workerName: string): void;
 export declare function isSessionAlive(teamName: string, workerName: string): boolean;
 /** List all active worker sessions for a team */
 export declare function listActiveSessions(teamName: string): string[];
-/**
- * Spawn bridge in session via config temp file.
- *
- * Instead of passing JSON via tmux send-keys (brittle quoting), the caller
- * writes config to a temp file and passes --config flag:
- *   node dist/team/bridge-entry.js --config /tmp/omc-bridge-{worker}.json
- */
 export declare function spawnBridgeInSession(tmuxSession: string, bridgeScriptPath: string, configFilePath: string): void;
 /**
  * Create a tmux team topology for a team leader/worker layout.
@@ -129,6 +122,8 @@ export declare function injectToLeaderPane(sessionName: string, leaderPaneId: st
  * Check if a worker pane is still alive.
  * Uses pane ID for stable targeting (not pane index).
  */
+export type WorkerPaneLiveness = 'alive' | 'dead' | 'unknown';
+export declare function getWorkerLiveness(paneId: string): Promise<WorkerPaneLiveness>;
 export declare function isWorkerAlive(paneId: string): Promise<boolean>;
 /**
  * Graceful-then-force kill of worker panes.

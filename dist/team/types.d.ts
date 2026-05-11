@@ -120,12 +120,31 @@ export interface TaskFailureSidecar {
     lastFailedAt: string;
 }
 /** Worker backend type */
-export type WorkerBackend = 'claude-native' | 'mcp-codex' | 'mcp-gemini' | 'tmux-claude' | 'tmux-codex' | 'tmux-gemini';
+export type WorkerBackend = 'claude-native' | 'mcp-codex' | 'mcp-gemini' | 'tmux-claude' | 'tmux-codex' | 'tmux-gemini' | 'tmux-cursor';
 /** Worker capability tag */
 export type WorkerCapability = 'code-edit' | 'code-review' | 'security-review' | 'architecture' | 'testing' | 'documentation' | 'ui-design' | 'refactoring' | 'research' | 'general';
 /** Team task with required version for optimistic concurrency */
 export interface TeamTaskV2 extends TeamTask {
     version: number;
+}
+export type TeamTaskDelegationMode = 'none' | 'optional' | 'auto' | 'required';
+export type TeamTaskChildModelPolicy = 'standard' | 'fast' | 'inherit' | 'frontier';
+export interface TeamTaskDelegationComplianceEvidence {
+    status: 'spawned' | 'skipped';
+    source: 'terminal_result';
+    detail: string;
+    recorded_at: string;
+}
+export interface TeamTaskDelegationPlan {
+    mode: TeamTaskDelegationMode;
+    max_parallel_subtasks?: number;
+    required_parallel_probe?: boolean;
+    spawn_before_serial_search_threshold?: number;
+    child_model_policy?: TeamTaskChildModelPolicy;
+    child_model?: string;
+    subtask_candidates?: string[];
+    child_report_format?: 'bullets' | 'json';
+    skip_allowed_reason_required?: boolean;
 }
 /** Claim metadata attached to a task */
 export interface TeamTaskClaim {
@@ -150,6 +169,8 @@ export interface TeamTask {
     claim?: TeamTaskClaim;
     created_at: string;
     completed_at?: string;
+    delegation?: TeamTaskDelegationPlan;
+    delegation_compliance?: TeamTaskDelegationComplianceEvidence;
 }
 /** Team leader identity */
 export interface TeamLeader {
@@ -198,6 +219,7 @@ export interface TeamManifestV2 {
     leader_cwd?: string;
     team_state_root?: string;
     workspace_mode?: 'single' | 'worktree';
+    worktree_mode?: 'disabled' | 'detached' | 'named';
     lifecycle_profile?: 'default' | 'linked_ralph';
     leader_pane_id: string | null;
     hud_pane_id: string | null;
@@ -210,14 +232,16 @@ export interface WorkerInfo {
     name: string;
     index: number;
     role: string;
-    worker_cli?: 'codex' | 'claude' | 'gemini';
+    worker_cli?: 'codex' | 'claude' | 'gemini' | 'cursor';
     assigned_tasks: string[];
     pid?: number;
     pane_id?: string;
     working_dir?: string;
+    worktree_repo_root?: string;
     worktree_path?: string;
     worktree_branch?: string;
     worktree_detached?: boolean;
+    worktree_created?: boolean;
     team_state_root?: string;
     /**
      * Verdict-output file path for CLI-worker output contract (AC-7).
@@ -244,6 +268,7 @@ export interface TeamConfig {
     leader_cwd?: string;
     team_state_root?: string;
     workspace_mode?: 'single' | 'worktree';
+    worktree_mode?: 'disabled' | 'detached' | 'named';
     lifecycle_profile?: 'default' | 'linked_ralph';
     leader_pane_id: string | null;
     hud_pane_id: string | null;
@@ -360,7 +385,7 @@ export type TransitionTaskResult = {
     task: TeamTaskV2;
 } | {
     ok: false;
-    error: 'claim_conflict' | 'invalid_transition' | 'task_not_found' | 'already_terminal' | 'lease_expired';
+    error: 'claim_conflict' | 'invalid_transition' | 'task_not_found' | 'already_terminal' | 'lease_expired' | 'missing_delegation_compliance_evidence';
 };
 /** Result of releasing a task claim */
 export type ReleaseTaskClaimResult = {
@@ -374,6 +399,9 @@ export type ReleaseTaskClaimResult = {
 export interface TeamSummary {
     teamName: string;
     workerCount: number;
+    team_state_root?: string;
+    workspace_mode?: 'single' | 'worktree';
+    worktree_mode?: 'disabled' | 'detached' | 'named';
     tasks: {
         total: number;
         pending: number;
@@ -387,6 +415,13 @@ export interface TeamSummary {
         alive: boolean;
         lastTurnAt: string | null;
         turnsWithoutProgress: number;
+        working_dir?: string;
+        worktree_repo_root?: string;
+        worktree_path?: string;
+        worktree_branch?: string;
+        worktree_detached?: boolean;
+        worktree_created?: boolean;
+        team_state_root?: string;
     }>;
     nonReportingWorkers: string[];
     performance?: TeamSummaryPerformance;
@@ -409,6 +444,7 @@ export interface ShutdownAck {
 export interface TeamMonitorSnapshotState {
     taskStatusById: Record<string, string>;
     workerAliveByName: Record<string, boolean>;
+    workerLivenessByName?: Record<string, 'alive' | 'dead' | 'unknown'>;
     workerStateByName: Record<string, string>;
     workerTurnCountByName: Record<string, number>;
     workerTaskIdByName: Record<string, string>;

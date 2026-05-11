@@ -56,7 +56,7 @@ describe('delegation-enforcer', () => {
             expect(result.injected).toBe(false);
             expect(result.modifiedInput.model).toBe('sonnet');
         });
-        it('normalizes explicit Bedrock model ID to CC alias (issue #1415)', () => {
+        it('preserves explicit provider-specific Bedrock model ID', () => {
             const input = {
                 description: 'Test task',
                 prompt: 'Do something',
@@ -65,7 +65,7 @@ describe('delegation-enforcer', () => {
             };
             const result = enforceModel(input);
             expect(result.injected).toBe(false);
-            expect(result.modifiedInput.model).toBe('sonnet');
+            expect(result.modifiedInput.model).toBe('us.anthropic.claude-sonnet-4-6-v1:0');
         });
         it('injects model from agent definition when not specified', () => {
             const input = {
@@ -297,7 +297,7 @@ describe('delegation-enforcer', () => {
         });
     });
     describe('env-resolved agent defaults (issue #1415)', () => {
-        it('injects Bedrock family env model IDs instead of hardcoded tier aliases', () => {
+        it('preserves Bedrock family env IDs without auto-enabling forceInherit from tier env alone', () => {
             process.env.CLAUDE_CODE_BEDROCK_SONNET_MODEL = 'us.anthropic.claude-sonnet-4-6-v1:0';
             const input = {
                 description: 'Test task',
@@ -306,13 +306,25 @@ describe('delegation-enforcer', () => {
             };
             const result = enforceModel(input);
             expect(result.injected).toBe(true);
-            // Even with Bedrock env vars, enforceModel normalizes to CC aliases
-            expect(result.model).toBe('sonnet');
-            expect(result.modifiedInput.model).toBe('sonnet');
+            expect(result.model).toBe('us.anthropic.claude-sonnet-4-6-v1:0');
+            expect(result.modifiedInput.model).toBe('us.anthropic.claude-sonnet-4-6-v1:0');
         });
-        it('getModelForAgent returns normalized CC aliases even with Bedrock env vars', () => {
+        it('preserves Bedrock family env model IDs when forceInherit is explicitly disabled', () => {
+            process.env.OMC_ROUTING_FORCE_INHERIT = 'false';
+            process.env.CLAUDE_CODE_BEDROCK_SONNET_MODEL = 'us.anthropic.claude-sonnet-4-6-v1:0';
+            const input = {
+                description: 'Test task',
+                prompt: 'Do something',
+                subagent_type: 'executor'
+            };
+            const result = enforceModel(input);
+            expect(result.injected).toBe(true);
+            expect(result.model).toBe('us.anthropic.claude-sonnet-4-6-v1:0');
+            expect(result.modifiedInput.model).toBe('us.anthropic.claude-sonnet-4-6-v1:0');
+        });
+        it('getModelForAgent preserves provider-specific IDs from Bedrock env vars', () => {
             process.env.CLAUDE_CODE_BEDROCK_OPUS_MODEL = 'us.anthropic.claude-opus-4-6-v1:0';
-            expect(getModelForAgent('architect')).toBe('opus');
+            expect(getModelForAgent('architect')).toBe('us.anthropic.claude-opus-4-6-v1:0');
         });
     });
     describe('modelAliases config override (issue #1211)', () => {

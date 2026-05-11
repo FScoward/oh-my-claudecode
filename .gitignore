@@ -1,8 +1,10 @@
 node_modules/
 *.log
 .DS_Store
-.omc/
-.omc/
+!.omc/
+.omc/*
+!.omc/skills/
+!.omc/skills/**
 .idea/
 .claude/
 

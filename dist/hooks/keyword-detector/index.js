@@ -31,6 +31,26 @@ const KEYWORD_PATTERNS = {
     gemini: /\b(ask|use|delegate\s+to)\s+gemini\b/i
 };
 /**
+ * Matches the upstream Ouroboros CLI invocation form at the start of the
+ * prompt: `ouroboros <sub>`, `ooo <sub>`, or `/ouroboros:<sub>`. Used as a
+ * skip predicate for the deep-interview trigger so direct CLI calls are
+ * not rerouted into the OMC skill.
+ */
+const OUROBOROS_BRAND_AT_START = /^\s*\/?(?:ouroboros|ooo)\b/i;
+/**
+ * Optional per-keyword skip predicate. When the predicate returns true for
+ * a given prompt, the corresponding keyword regex match is suppressed even
+ * if it would otherwise fire. Used for narrow false-positive guards.
+ *
+ * `deep-interview` matches the bare brand name `ouroboros`, which fires on
+ * upstream CLI invocations like `ouroboros auto "X"`, `ooo auto`, and
+ * `/ouroboros:auto`. The predicate defers to the upstream CLI in those
+ * cases without changing what the trigger recognizes elsewhere.
+ */
+const KEYWORD_SKIP_PREDICATES = {
+    'deep-interview': (text) => OUROBOROS_BRAND_AT_START.test(text),
+};
+/**
  * Priority order for keyword detection
  */
 const KEYWORD_PRIORITY = [
@@ -38,6 +58,64 @@ const KEYWORD_PRIORITY = [
     'ccg', 'ralplan', 'tdd', 'code-review', 'security-review',
     'ultrathink', 'deepsearch', 'analyze', 'deep-interview', 'codex', 'gemini'
 ];
+/**
+ * Canonical workflow skills detected via explicit slash invocation.
+ * Mirrors `CANONICAL_WORKFLOW_SKILLS` in `skill-state/index.ts`. Listed here
+ * (rather than imported) to keep the keyword-detector free of cross-module
+ * dependencies on skill-state.
+ */
+const CANONICAL_WORKFLOW_SLASH_SKILLS = [
+    'autopilot',
+    'ralph',
+    'team',
+    'ultrawork',
+    'ultraqa',
+    'deep-interview',
+    'ralplan',
+    'self-improve',
+];
+/**
+ * Map workflow slash skills to keyword types so explicit slash invocations
+ * surface alongside ordinary keyword detection. Skills with no dedicated
+ * KeywordType (`ultraqa`, `self-improve`) are intentionally absent — the
+ * bridge handles their seeding via the parser result instead of through the
+ * keyword-priority loop.
+ */
+const SLASH_SKILL_TO_KEYWORD_TYPE = {
+    autopilot: 'autopilot',
+    ralph: 'ralph',
+    team: 'team',
+    ultrawork: 'ultrawork',
+    'deep-interview': 'deep-interview',
+    ralplan: 'ralplan',
+};
+const WORKFLOW_SLASH_PATTERN = new RegExp('^\\s*/(?:oh-my-claudecode:|omc:)?(' +
+    CANONICAL_WORKFLOW_SLASH_SKILLS
+        .map((skill) => skill.replace(/-/g, '\\-'))
+        .join('|') +
+    ')(?=\\s|$|[?!.,;:])', 'i');
+/**
+ * Parse an explicit workflow slash invocation at the start of a prompt.
+ *
+ * Recognizes `/<skill>`, `/omc:<skill>`, and `/oh-my-claudecode:<skill>` for
+ * the canonical workflow skill list. Code fences and inline backticks are
+ * stripped first so quoted commands do not match. The trailing lookahead
+ * (whitespace, end-of-text, or punctuation) prevents file paths like
+ * `/ralph-logs/foo.txt` from matching `/ralph`.
+ *
+ * Returns `null` when no explicit invocation is present.
+ */
+export function parseExplicitWorkflowSlashInvocation(promptText) {
+    if (typeof promptText !== 'string' || promptText.length === 0)
+        return null;
+    const stripped = removeCodeBlocks(promptText);
+    const match = WORKFLOW_SLASH_PATTERN.exec(stripped);
+    if (!match)
+        return null;
+    const skill = match[1].toLowerCase();
+    const args = stripped.slice(match[0].length).trim();
+    return { skill, args, raw: match[0] };
+}
 /**
  * Remove code blocks from text to prevent false positives
  * Handles both fenced code blocks and inline code
@@ -53,7 +131,7 @@ export function removeCodeBlocks(text) {
 const PASTED_MAGIC_KEYWORD_HEADER_PATTERN = /^\s*\[MAGIC KEYWORDS?(?: DETECTED)?:.*$/i;
 const ROLE_BOUNDARY_PATTERN = /^<\s*\/?\s*(system|human|assistant|user|tool_use|tool_result)\b[^>]*>/i;
 const SKILL_TRANSCRIPT_LINE_PATTERN = /^\s*Skill:\s+oh-my-(?:claudecode|codex):/i;
-const USER_REQUEST_LINE_PATTERN = /^\s*User request:\s*$/i;
+const USER_REQUEST_LINE_PATTERN = /^\s*User request(?:\s*\([^)]*\))?:\s*$/i;
 const SHELL_TRANSCRIPT_LINE_PATTERN = /^\s*[$%❯]\s+/;
 const GIT_DIFF_START_PATTERNS = [
     /^diff\s+--git\s+a\//,
@@ -398,6 +476,24 @@ export function extractPromptText(parts) {
  */
 export function detectKeywordsWithType(text, _agentName) {
     const detected = [];
+    // Check for an explicit canonical workflow slash invocation BEFORE sanitization.
+    // The general sanitizer strips bare `/word` tokens as file paths, so bare
+    // commands like `/ralph fix auth` would otherwise never match. This must be
+    // robust to surrounding whitespace, namespace prefixes (`/omc:`,
+    // `/oh-my-claudecode:`), and code-fence/backtick wrapping (handled inside
+    // the parser via removeCodeBlocks).
+    const explicitSlash = parseExplicitWorkflowSlashInvocation(text);
+    const explicitSlashType = explicitSlash
+        ? SLASH_SKILL_TO_KEYWORD_TYPE[explicitSlash.skill]
+        : undefined;
+    if (explicitSlash && explicitSlashType) {
+        const position = Math.max(0, text.indexOf(explicitSlash.raw.trim()));
+        detected.push({
+            type: explicitSlashType,
+            keyword: explicitSlash.raw.trim(),
+            position,
+        });
+    }
     const cleanedText = sanitizeForKeywordDetection(text);
     // Check each keyword type
     for (const type of KEYWORD_PRIORITY) {
@@ -405,7 +501,16 @@ export function detectKeywordsWithType(text, _agentName) {
         if (type === 'team') {
             continue;
         }
+        // Skip the type that the explicit-slash detector already surfaced so we
+        // do not emit duplicate entries for the same intent.
+        if (explicitSlashType && type === explicitSlashType) {
+            continue;
+        }
         const pattern = KEYWORD_PATTERNS[type];
+        const skipPredicate = KEYWORD_SKIP_PREDICATES[type];
+        if (skipPredicate && skipPredicate(cleanedText)) {
+            continue;
+        }
         const match = type === 'ralplan'
             ? findActionableRalplanMatch(cleanedText, pattern)
             : findActionableKeywordMatch(cleanedText, pattern);

@@ -8,8 +8,9 @@ import { listDispatchRequests, markDispatchRequestDelivered, markDispatchRequest
 import { generateMailboxTriggerMessage } from './worker-bootstrap.js';
 import { shutdownTeam } from './runtime.js';
 import { shutdownTeamV2 } from './runtime-v2.js';
+import { inspectTeamWorktreeCleanupSafety } from './git-worktree.js';
 import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
-const TEAM_UPDATE_TASK_MUTABLE_FIELDS = new Set(['subject', 'description', 'blocked_by', 'requires_code_change']);
+const TEAM_UPDATE_TASK_MUTABLE_FIELDS = new Set(['subject', 'description', 'blocked_by', 'requires_code_change', 'delegation']);
 const TEAM_UPDATE_TASK_REQUEST_FIELDS = new Set(['team_name', 'task_id', 'workingDirectory', ...TEAM_UPDATE_TASK_MUTABLE_FIELDS]);
 export const LEGACY_TEAM_MCP_TOOLS = [
     'team_send_message',
@@ -92,6 +93,64 @@ function parseValidatedTaskIdArray(value, fieldName) {
     }
     return taskIds;
 }
+function parseTaskDelegationPlan(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('delegation must be an object');
+    }
+    const raw = value;
+    const mode = raw.mode;
+    if (mode !== 'none' && mode !== 'optional' && mode !== 'auto' && mode !== 'required') {
+        throw new Error('delegation.mode must be one of: none, optional, auto, required');
+    }
+    const plan = { mode };
+    if ('max_parallel_subtasks' in raw) {
+        if (!isFiniteInteger(raw.max_parallel_subtasks) || raw.max_parallel_subtasks < 1) {
+            throw new Error('delegation.max_parallel_subtasks must be a positive integer when provided');
+        }
+        plan.max_parallel_subtasks = raw.max_parallel_subtasks;
+    }
+    if ('required_parallel_probe' in raw) {
+        if (typeof raw.required_parallel_probe !== 'boolean')
+            throw new Error('delegation.required_parallel_probe must be a boolean when provided');
+        plan.required_parallel_probe = raw.required_parallel_probe;
+    }
+    if ('spawn_before_serial_search_threshold' in raw) {
+        if (!isFiniteInteger(raw.spawn_before_serial_search_threshold) || raw.spawn_before_serial_search_threshold < 1) {
+            throw new Error('delegation.spawn_before_serial_search_threshold must be a positive integer when provided');
+        }
+        plan.spawn_before_serial_search_threshold = raw.spawn_before_serial_search_threshold;
+    }
+    if ('child_model_policy' in raw) {
+        const policy = raw.child_model_policy;
+        if (policy !== 'standard' && policy !== 'fast' && policy !== 'inherit' && policy !== 'frontier') {
+            throw new Error('delegation.child_model_policy must be one of: standard, fast, inherit, frontier');
+        }
+        plan.child_model_policy = policy;
+    }
+    if ('child_model' in raw) {
+        if (typeof raw.child_model !== 'string')
+            throw new Error('delegation.child_model must be a string when provided');
+        plan.child_model = raw.child_model;
+    }
+    if ('subtask_candidates' in raw) {
+        if (!Array.isArray(raw.subtask_candidates) || !raw.subtask_candidates.every((item) => typeof item === 'string')) {
+            throw new Error('delegation.subtask_candidates must be an array of strings when provided');
+        }
+        plan.subtask_candidates = raw.subtask_candidates;
+    }
+    if ('child_report_format' in raw) {
+        const format = raw.child_report_format;
+        if (format !== 'bullets' && format !== 'json')
+            throw new Error('delegation.child_report_format must be bullets or json when provided');
+        plan.child_report_format = format;
+    }
+    if ('skip_allowed_reason_required' in raw) {
+        if (typeof raw.skip_allowed_reason_required !== 'boolean')
+            throw new Error('delegation.skip_allowed_reason_required must be a boolean when provided');
+        plan.skip_allowed_reason_required = raw.skip_allowed_reason_required;
+    }
+    return plan;
+}
 function teamStateExists(teamName, candidateCwd) {
     if (!TEAM_NAME_SAFE_PATTERN.test(teamName))
         return false;
@@ -134,9 +193,26 @@ function isRuntimeV2Config(config) {
 function isLegacyRuntimeConfig(config) {
     return !!config && typeof config === 'object' && Array.isArray(config.agentTypes);
 }
+function assertNoNativeWorktreeCleanupEvidence(teamName, cwd) {
+    const safety = inspectTeamWorktreeCleanupSafety(teamName, cwd);
+    if (!safety.hasEvidence)
+        return;
+    const evidence = safety.blockers.length > 0
+        ? safety.blockers
+        : safety.entries.map((entry) => ({
+            workerName: entry.workerName,
+            path: entry.path,
+            reason: 'worktree_cleanup_evidence_present',
+        }));
+    const details = evidence
+        .map((item) => `${item.workerName}:${item.reason}:${item.path}`)
+        .join(';');
+    throw new Error(`cleanup_blocked:worktree_cleanup_evidence_present:${details}`);
+}
 async function executeTeamCleanupViaRuntime(teamName, cwd) {
     const config = await teamReadConfig(teamName, cwd);
     if (!config) {
+        assertNoNativeWorktreeCleanupEvidence(teamName, cwd);
         await teamCleanup(teamName, cwd);
         return;
     }
@@ -155,6 +231,7 @@ async function executeTeamCleanupViaRuntime(teamName, cwd) {
         await shutdownTeam(teamName, sessionName, cwd, 30_000, undefined, leaderPaneId, legacyConfig.tmuxOwnsWindow === true);
         return;
     }
+    assertNoNativeWorktreeCleanupEvidence(teamName, cwd);
     await teamCleanup(teamName, cwd);
 }
 function readTeamStateRootFromFile(path) {
@@ -218,7 +295,10 @@ function resolveTeamWorkingDirectory(teamName, preferredCwd) {
         return preferredCwd;
     const envTeamStateRoot = readTeamStateRootFromEnv();
     if (typeof envTeamStateRoot === 'string' && envTeamStateRoot.trim() !== '') {
-        return stateRootToWorkingDirectory(envTeamStateRoot.trim());
+        const envWorkingDirectory = stateRootToWorkingDirectory(envTeamStateRoot.trim());
+        if (teamStateExists(normalizedTeamName, envWorkingDirectory)) {
+            return envWorkingDirectory;
+        }
     }
     const seeds = [];
     for (const seed of [preferredCwd, process.cwd()]) {
@@ -477,8 +557,18 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                 const owner = args.owner;
                 const blockedBy = args.blocked_by;
                 const requiresCodeChange = args.requires_code_change;
+                let delegation;
+                if ('delegation' in args) {
+                    try {
+                        delegation = parseTaskDelegationPlan(args.delegation);
+                    }
+                    catch (error) {
+                        return { ok: false, operation, error: { code: 'invalid_input', message: error.message } };
+                    }
+                }
                 const task = await teamCreateTask(teamName, {
                     subject, description, status: 'pending', owner: owner || undefined, blocked_by: blockedBy, requires_code_change: requiresCodeChange,
+                    ...(delegation ? { delegation } : {}),
                 }, cwd);
                 return { ok: true, operation, data: { task } };
             }
@@ -543,6 +633,14 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                         return { ok: false, operation, error: { code: 'invalid_input', message: error.message } };
                     }
                 }
+                if ('delegation' in args) {
+                    try {
+                        updates.delegation = parseTaskDelegationPlan(args.delegation);
+                    }
+                    catch (error) {
+                        return { ok: false, operation, error: { code: 'invalid_input', message: error.message } };
+                    }
+                }
                 const task = await teamUpdateTask(teamName, taskId, updates, cwd);
                 return task
                     ? { ok: true, operation, data: { task } }
@@ -568,6 +666,8 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                 const from = String(args.from || '').trim();
                 const to = String(args.to || '').trim();
                 const claimToken = String(args.claim_token || '').trim();
+                const transitionResult = args.result;
+                const transitionError = args.error;
                 if (!teamName || !taskId || !from || !to || !claimToken) {
                     return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name, task_id, from, to, claim_token are required' } };
                 }
@@ -575,7 +675,16 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                 if (!allowed.has(from) || !allowed.has(to)) {
                     return { ok: false, operation, error: { code: 'invalid_input', message: 'from and to must be valid task statuses' } };
                 }
-                const result = await teamTransitionTaskStatus(teamName, taskId, from, to, claimToken, cwd);
+                if (transitionResult !== undefined && typeof transitionResult !== 'string') {
+                    return { ok: false, operation, error: { code: 'invalid_input', message: 'result must be a string when provided' } };
+                }
+                if (transitionError !== undefined && typeof transitionError !== 'string') {
+                    return { ok: false, operation, error: { code: 'invalid_input', message: 'error must be a string when provided' } };
+                }
+                const result = await teamTransitionTaskStatus(teamName, taskId, from, to, claimToken, cwd, {
+                    result: typeof transitionResult === 'string' ? transitionResult : undefined,
+                    error: typeof transitionError === 'string' ? transitionError : undefined,
+                });
                 return { ok: true, operation, data: result };
             }
             case 'release-task-claim': {
@@ -661,9 +770,11 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                     pid: args.pid,
                     pane_id: args.pane_id,
                     working_dir: args.working_dir,
+                    worktree_repo_root: args.worktree_repo_root,
                     worktree_path: args.worktree_path,
                     worktree_branch: args.worktree_branch,
                     worktree_detached: args.worktree_detached,
+                    worktree_created: args.worktree_created,
                     team_state_root: args.team_state_root,
                 }, cwd);
                 return { ok: true, operation, data: { worker } };
@@ -704,10 +815,23 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                 return { ok: true, operation, data: { team_name: teamName } };
             }
             case 'orphan-cleanup': {
-                // Destructive escape hatch: always calls teamCleanup directly, bypasses shutdown orchestration
+                // Destructive escape hatch: calls teamCleanup directly, bypassing shutdown orchestration.
+                // Native worktree recovery metadata/root AGENTS backups are protected unless callers
+                // explicitly acknowledge that this force path may delete those recovery records.
                 const teamName = String(args.team_name || '').trim();
                 if (!teamName)
                     return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name is required' } };
+                const safety = inspectTeamWorktreeCleanupSafety(teamName, cwd);
+                if (safety.hasEvidence && args.acknowledge_lost_worktree_recovery !== true) {
+                    return {
+                        ok: false,
+                        operation,
+                        error: {
+                            code: 'invalid_input',
+                            message: 'orphan_cleanup_blocked:worktree_recovery_evidence_present; pass acknowledge_lost_worktree_recovery=true only after manually preserving or intentionally discarding worker worktrees and root AGENTS backups',
+                        },
+                    };
+                }
                 await teamCleanup(teamName, cwd);
                 return { ok: true, operation, data: { team_name: teamName } };
             }

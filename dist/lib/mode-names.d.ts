@@ -8,11 +8,14 @@
 /** All supported execution mode identifiers. */
 export declare const MODE_NAMES: {
     readonly AUTOPILOT: "autopilot";
+    readonly AUTORESEARCH: "autoresearch";
     readonly TEAM: "team";
     readonly RALPH: "ralph";
     readonly ULTRAWORK: "ultrawork";
     readonly ULTRAQA: "ultraqa";
     readonly RALPLAN: "ralplan";
+    readonly DEEP_INTERVIEW: "deep-interview";
+    readonly SELF_IMPROVE: "self-improve";
 };
 /**
  * Deprecated mode names removed in #1131 (pipeline unification).

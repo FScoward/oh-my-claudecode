@@ -167,10 +167,25 @@ describe('Installer Constants', () => {
     });
   });
 
-  describe('Commands directory removed (#582)', () => {
-    it('should NOT have a commands/ directory in the package root', () => {
-      const commandsDir = join(getPackageDir(), 'commands');
-      expect(existsSync(commandsDir)).toBe(false);
+  describe('Claude Code plugin command wrappers', () => {
+    it('should ship package-root commands/*.md wrappers through plugin.json', () => {
+      const packageDir = getPackageDir();
+      const commandsDir = join(packageDir, 'commands');
+      const pluginJson = JSON.parse(
+        readFileSync(join(packageDir, '.claude-plugin', 'plugin.json'), 'utf-8')
+      ) as { commands?: unknown };
+
+      expect(pluginJson.commands).toBe('./commands/');
+      expect(existsSync(commandsDir)).toBe(true);
+
+      const files = readdirSync(commandsDir).filter(f => f.endsWith('.md'));
+      expect(files.length).toBeGreaterThan(0);
+
+      for (const file of files) {
+        const content = readFileSync(join(commandsDir, file), 'utf-8');
+        expect(content, `${file} should dispatch to a bundled skill`).toContain('SKILL.md');
+        expect(content, `${file} should pass through user arguments`).toContain('$ARGUMENTS');
+      }
     });
   });
 
@@ -179,14 +194,7 @@ describe('Installer Constants', () => {
       const packageDir = getPackageDir();
       const commandsDir = join(packageDir, 'commands');
 
-      // commands/ directory should not exist at all
-      if (!existsSync(commandsDir)) {
-        // This is the expected state - no commands directory
-        expect(true).toBe(true);
-        return;
-      }
-
-      // If commands/ somehow gets re-added, ensure no self-referential stubs
+      // commands/ now intentionally contains Claude Code plugin wrappers.
       const files = readdirSync(commandsDir).filter(f => f.endsWith('.md'));
       const selfReferentialStubs: string[] = [];
 

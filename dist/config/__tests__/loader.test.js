@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compactOmcStartupGuidance, loadConfig, loadContextFromFiles, } from "../loader.js";
+import { compactOmcStartupGuidance, generateConfigSchema, loadConfig, loadContextFromFiles, } from "../loader.js";
 import { saveAndClear, restore } from "./test-helpers.js";
 const ALL_KEYS = [
     "CLAUDE_CODE_USE_BEDROCK",
@@ -59,6 +59,36 @@ describe("loadConfig() — auto-forceInherit for non-standard providers", () => 
         process.env.CLAUDE_CODE_USE_VERTEX = "1";
         const config = loadConfig();
         expect(config.routing?.forceInherit).toBe(true);
+    });
+    it("does NOT auto-enable forceInherit for non-Claude Anthropic family-default tier env vars", () => {
+        process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = "kimi-k2.6:cloud";
+        const config = loadConfig();
+        expect(config.routing?.forceInherit).toBe(false);
+        expect(config.agents?.executor?.model).toBe("kimi-k2.6:cloud");
+    });
+    it("does NOT auto-enable forceInherit for non-Claude OMC tier env vars", () => {
+        process.env.OMC_MODEL_MEDIUM = "glm-5.1:cloud";
+        const config = loadConfig();
+        expect(config.routing?.forceInherit).toBe(false);
+        expect(config.agents?.executor?.model).toBe("glm-5.1:cloud");
+    });
+    it("does NOT auto-enable forceInherit when direct Claude CLAUDE_MODEL beats stale ANTHROPIC_MODEL", () => {
+        process.env.CLAUDE_MODEL = "claude-sonnet-4-6";
+        process.env.ANTHROPIC_MODEL = "kimi-k2.6:cloud";
+        const config = loadConfig();
+        expect(config.routing?.forceInherit).toBe(false);
+    });
+    it("does NOT auto-enable forceInherit when direct Claude CLAUDE_MODEL beats stale OMC tier env vars", () => {
+        process.env.CLAUDE_MODEL = "claude-sonnet-4-6";
+        process.env.OMC_MODEL_MEDIUM = "glm-5.1:cloud";
+        const config = loadConfig();
+        expect(config.routing?.forceInherit).toBe(false);
+    });
+    it("does NOT auto-enable forceInherit when direct Claude ANTHROPIC_MODEL beats stale OMC tier env vars", () => {
+        process.env.ANTHROPIC_MODEL = "claude-sonnet-4-6";
+        process.env.OMC_MODEL_MEDIUM = "glm-5.1:cloud";
+        const config = loadConfig();
+        expect(config.routing?.forceInherit).toBe(false);
     });
     it("does NOT auto-enable forceInherit for standard Anthropic API usage", () => {
         process.env.ANTHROPIC_MODEL = "claude-sonnet-4-6";
@@ -148,6 +178,58 @@ schema
             rmSync(tempDir, { recursive: true, force: true });
         }
     });
+    it("caps aggregated context across multiple files", () => {
+        const tempDir = mkdtempSync(join(tmpdir(), "omc-loader-context-aggregate-"));
+        try {
+            const fileA = join(tempDir, "AGENTS.md");
+            const fileB = join(tempDir, "nested", "CLAUDE.md");
+            require("node:fs").mkdirSync(join(tempDir, "nested"), { recursive: true });
+            const largeSection = `# oh-my-claudecode - Intelligent Multi-Agent Orchestration
+
+<guidance_schema_contract>schema</guidance_schema_contract>
+
+<operating_principles>
+${"- keep this\n".repeat(900)}
+</operating_principles>
+
+<verification>
+- verify
+</verification>`;
+            writeFileSync(fileA, largeSection);
+            writeFileSync(fileB, largeSection);
+            const loaded = loadContextFromFiles([fileA, fileB]);
+            expect(loaded.length).toBeLessThanOrEqual(12000);
+            expect(loaded).toContain(`## Context from ${fileA}`);
+            expect(loaded).toContain('startup context budget');
+        }
+        finally {
+            rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+    it("caps very large OMC guidance after preserving high-value sections", () => {
+        const largeOmc = `# oh-my-claudecode - Intelligent Multi-Agent Orchestration
+
+<guidance_schema_contract>
+schema
+</guidance_schema_contract>
+
+<operating_principles>
+${"- keep this principle\n".repeat(1200)}
+</operating_principles>
+
+<agent_catalog>
+${"- drop catalog\n".repeat(1000)}
+</agent_catalog>
+
+<verification>
+- verify this stays before truncation
+</verification>`;
+        const compacted = compactOmcStartupGuidance(largeOmc);
+        expect(compacted.length).toBeLessThanOrEqual(8000);
+        expect(compacted).toContain("<operating_principles>");
+        expect(compacted).not.toContain("<agent_catalog>");
+        expect(compacted).toContain("OMC startup guidance truncated");
+    });
     it("leaves non-OMC guidance unchanged even if it uses similar tags", () => {
         const nonOmc = `# Project guide
 
@@ -202,6 +284,52 @@ describe("plan output configuration", () => {
         finally {
             rmSync(tempDir, { recursive: true, force: true });
         }
+    });
+});
+describe("company context configuration", () => {
+    let saved;
+    let originalCwd;
+    beforeEach(() => {
+        saved = saveAndClear(ALL_KEYS);
+        originalCwd = process.cwd();
+    });
+    afterEach(() => {
+        process.chdir(originalCwd);
+        restore(saved);
+    });
+    it("includes the default prompt-level fallback", () => {
+        const config = loadConfig();
+        expect(config.companyContext).toEqual({
+            onError: "warn",
+        });
+    });
+    it("loads company context overrides from project config", () => {
+        const tempDir = mkdtempSync(join(tmpdir(), "omc-company-context-"));
+        try {
+            const claudeDir = join(tempDir, ".claude");
+            require("node:fs").mkdirSync(claudeDir, { recursive: true });
+            writeFileSync(join(claudeDir, "omc.jsonc"), JSON.stringify({
+                companyContext: {
+                    tool: "mcp__vendor__get_company_context",
+                    onError: "fail",
+                },
+            }));
+            process.chdir(tempDir);
+            const config = loadConfig();
+            expect(config.companyContext).toEqual({
+                tool: "mcp__vendor__get_company_context",
+                onError: "fail",
+            });
+        }
+        finally {
+            rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+    it("exposes companyContext in the generated config schema", () => {
+        const schema = generateConfigSchema();
+        expect(schema.properties?.companyContext).toBeDefined();
+        expect(schema.properties?.companyContext?.properties?.tool).toBeDefined();
+        expect(schema.properties?.companyContext?.properties?.onError).toBeDefined();
     });
 });
 describe("team.roleRouting (Option E)", () => {

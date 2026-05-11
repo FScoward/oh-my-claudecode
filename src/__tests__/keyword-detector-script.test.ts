@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -70,7 +70,8 @@ describe('keyword-detector.mjs mode-message dispatch', () => {
     const context = output.hookSpecificOutput?.additionalContext ?? '';
 
     expect(context).toContain('[MAGIC KEYWORD: RALPLAN]');
-    expect(context).toContain('name: ralplan');
+    expect(context).toContain('Preferred invocation: /oh-my-claudecode:ralplan');
+    expect(context).not.toContain('name: ralplan');
   });
 
   it('does not emit or activate ralplan for informational/question mentions', () => {
@@ -106,6 +107,86 @@ describe('keyword-detector.mjs mode-message dispatch', () => {
     };
     expect(state.active).toBe(true);
     expect(state.awaiting_confirmation).toBe(true);
+  });
+
+  it('launches the approved Team follow-up instead of re-entering ralplan when OMX planning artifacts already exist', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'keyword-detector-ralplan-followup-'));
+    const sessionId = 'session-2714-followup';
+    const sessionStateDir = join(cwd, '.omc', 'state', 'sessions', sessionId);
+    const omxPlansDir = join(cwd, '.omx', 'plans');
+
+    mkdirSync(sessionStateDir, { recursive: true });
+    mkdirSync(omxPlansDir, { recursive: true });
+
+    writeFileSync(
+      join(sessionStateDir, 'ralplan-state.json'),
+      JSON.stringify(
+        {
+          active: false,
+          session_id: sessionId,
+          current_phase: 'complete',
+          completed_at: new Date().toISOString(),
+        },
+        null,
+        2,
+      ),
+    );
+
+    writeFileSync(
+      join(omxPlansDir, 'prd-capture-page-ui-draft.md'),
+      [
+        '# PRD',
+        '',
+        '## Acceptance criteria',
+        '- done',
+        '',
+        '## Requirement coverage map',
+        '- req -> impl',
+        '',
+        'omx team ".omx/plans/ralplan-capture-page-ui-draft-v7.md"',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(omxPlansDir, 'test-spec-capture-page-ui-draft.md'),
+      [
+        '# Test Spec',
+        '',
+        '## Unit coverage',
+        '- unit',
+        '',
+        '## Verification mapping',
+        '- verify',
+        '',
+      ].join('\n'),
+    );
+
+    const output = runKeywordDetector('team', cwd, sessionId);
+    const context = output.hookSpecificOutput?.additionalContext ?? '';
+
+    expect(output.continue).toBe(true);
+    expect(context).toContain('TEAM');
+    expect(context).not.toContain('[MAGIC KEYWORD: RALPLAN]');
+  });
+
+  it('does not activate ralplan from a delegated /ask codex payload', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'keyword-detector-ask-codex-'));
+
+    try {
+      const sessionId = 'ask-codex-session';
+      const output = runKeywordDetector(
+        '/ask codex 지금까지 논의한걸 ralplan으로 계획서 작성해줘',
+        tempDir,
+        sessionId,
+      );
+
+      expect(output.continue).toBe(true);
+      expect(output.suppressOutput).toBe(true);
+      expect(output.hookSpecificOutput).toBeUndefined();
+      expect(existsSync(join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ralplan-state.json'))).toBe(false);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('initializes ralplan startup state and init context for explicit /ralplan slash invoke', () => {
@@ -275,5 +356,38 @@ diff --git a/a b/b
     expect(output.continue).toBe(true);
     expect(context).toContain('<code-review-mode>');
     expect(context).not.toContain('[MAGIC KEYWORD: CODE-REVIEW]');
+  });
+
+  // Regression: "autonomous" appearing in technical / research prose must not
+  // trigger autopilot (false positive previously created spurious
+  // autopilot-state.json and a stop-hook loop). The TS source and the
+  // templates/hooks mjs already exclude the word; this test guards the
+  // deployed scripts/keyword-detector.mjs against drift.
+  it('does not activate autopilot when "autonomous" appears in technical prose', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'keyword-detector-autonomous-'));
+    const sessionId = 'session-autonomous-regression';
+    const output = runKeywordDetector(
+      'DriveVLA-W0: World Models Amplify Data Scaling Law in Autonomous Driving — please summarize this paper.',
+      cwd,
+      sessionId,
+    );
+    const context = output.hookSpecificOutput?.additionalContext ?? '';
+    const autopilotStatePath = join(cwd, '.omc', 'state', 'sessions', sessionId, 'autopilot-state.json');
+
+    expect(output.continue).toBe(true);
+    expect(context).not.toContain('[MAGIC KEYWORD: AUTOPILOT]');
+    expect(existsSync(autopilotStatePath)).toBe(false);
+  });
+
+  it('still activates autopilot for an explicit autopilot invocation (positive control)', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'keyword-detector-autopilot-positive-'));
+    const sessionId = 'session-autopilot-positive';
+    const output = runKeywordDetector('autopilot build a todo CLI', cwd, sessionId);
+    const context = output.hookSpecificOutput?.additionalContext ?? '';
+    const autopilotStatePath = join(cwd, '.omc', 'state', 'sessions', sessionId, 'autopilot-state.json');
+
+    expect(output.continue).toBe(true);
+    expect(context).toContain('[MAGIC KEYWORD: AUTOPILOT]');
+    expect(existsSync(autopilotStatePath)).toBe(true);
   });
 });

@@ -37,6 +37,7 @@ import {
   performUpdate,
   shouldBlockStandaloneUpdateInCurrentSession,
   syncPluginCache,
+  fetchLatestRelease,
 } from '../features/auto-update.js';
 
 const mockedExecSync = vi.mocked(execSync);
@@ -50,6 +51,8 @@ const mockedInstall = vi.mocked(install);
 const mockedIsProjectScopedPlugin = vi.mocked(isProjectScopedPlugin);
 const mockedCheckNodeVersion = vi.mocked(checkNodeVersion);
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+const originalGhToken = process.env.GH_TOKEN;
+const originalGithubToken = process.env.GITHUB_TOKEN;
 
 function mockPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', {
@@ -61,6 +64,8 @@ function mockPlatform(platform: NodeJS.Platform): void {
 describe('auto-update reconciliation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
     mockedCpSync.mockImplementation(() => undefined);
     mockedExistsSync.mockReturnValue(true);
     mockedIsProjectScopedPlugin.mockReturnValue(false);
@@ -95,9 +100,144 @@ describe('auto-update reconciliation', () => {
     vi.unstubAllGlobals();
     delete process.env.OMC_UPDATE_RECONCILE;
     delete process.env.CLAUDE_PLUGIN_ROOT;
+    if (originalGhToken === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = originalGhToken;
+    }
+    if (originalGithubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = originalGithubToken;
+    }
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
     }
+  });
+
+  it('fetches latest release without Authorization when no GitHub token is configured', async () => {
+    const release = {
+      tag_name: 'v4.1.5',
+      name: '4.1.5',
+      published_at: '2026-02-09T00:00:00.000Z',
+      html_url: 'https://example.com/release',
+      body: 'notes',
+      prerelease: false,
+      draft: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => release,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchLatestRelease()).resolves.toEqual(release);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/releases/latest'),
+      {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'oh-my-claudecode-updater',
+        },
+      },
+    );
+  });
+
+  it('uses GITHUB_TOKEN for latest release requests when GH_TOKEN is absent', async () => {
+    process.env.GITHUB_TOKEN = 'github-token-value';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({
+        tag_name: 'v4.1.5',
+        name: '4.1.5',
+        published_at: '2026-02-09T00:00:00.000Z',
+        html_url: 'https://example.com/release',
+        body: 'notes',
+        prerelease: false,
+        draft: false,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchLatestRelease();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/releases/latest'),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer github-token-value',
+        }),
+      }),
+    );
+  });
+
+  it('prefers GH_TOKEN over GITHUB_TOKEN for latest release requests', async () => {
+    process.env.GH_TOKEN = 'gh-token-value';
+    process.env.GITHUB_TOKEN = 'github-token-value';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({
+        tag_name: 'v4.1.5',
+        name: '4.1.5',
+        published_at: '2026-02-09T00:00:00.000Z',
+        html_url: 'https://example.com/release',
+        body: 'notes',
+        prerelease: false,
+        draft: false,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchLatestRelease();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/releases/latest'),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer gh-token-value',
+        }),
+      }),
+    );
+  });
+
+  it('adds a helpful rate-limit hint for unauthenticated 403 release responses', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      headers: new Headers({
+        'x-ratelimit-remaining': '0',
+        'x-ratelimit-reset': '1893456000',
+      }),
+      text: async () => JSON.stringify({ message: 'API rate limit exceeded' }),
+    }));
+
+    await expect(fetchLatestRelease()).rejects.toThrow(
+      /GitHub API rate limit exceeded.*Set GH_TOKEN or GITHUB_TOKEN.*2030-01-01T00:00:00.000Z/,
+    );
+  });
+
+  it('does not leak a configured token in token-authenticated 403 errors', async () => {
+    process.env.GH_TOKEN = 'super-secret-token';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      headers: new Headers({
+        'x-ratelimit-remaining': '0',
+      }),
+      text: async () => JSON.stringify({ message: 'API rate limit exceeded' }),
+    }));
+
+    await expect(fetchLatestRelease()).rejects.toThrow(/configured GitHub token appears to be rate limited/);
+    await expect(fetchLatestRelease()).rejects.not.toThrow(/super-secret-token/);
   });
 
   it('reconciles runtime state without re-injecting settings hooks', () => {
@@ -156,7 +296,7 @@ describe('auto-update reconciliation', () => {
 
   it('syncs active plugin cache roots and logs when copy occurs', () => {
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const activeRoot = '/tmp/.claude/plugins/cache/omc/oh-my-claudecode/4.1.5';
+    const activeRoot = join(CLAUDE_CONFIG_DIR, 'plugins', 'cache', 'omc', 'oh-my-claudecode', '4.1.5');
 
     mockedReadFileSync.mockImplementation((path: Parameters<typeof readFileSync>[0]) => {
       const normalized = String(path).replace(/\\/g, '/');
@@ -382,8 +522,8 @@ describe('auto-update reconciliation', () => {
 
   it('dedupes plugin roots and ignores missing targets during sync', () => {
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const activeRoot = '/tmp/.claude/plugins/cache/omc/oh-my-claudecode/4.1.5';
-    const staleRoot = '/tmp/.claude/plugins/cache/omc/oh-my-claudecode/4.1.4';
+    const activeRoot = join(CLAUDE_CONFIG_DIR, 'plugins', 'cache', 'omc', 'oh-my-claudecode', '4.1.5');
+    const staleRoot = join(CLAUDE_CONFIG_DIR, 'plugins', 'cache', 'omc', 'oh-my-claudecode', '4.1.4');
     process.env.CLAUDE_PLUGIN_ROOT = activeRoot;
 
     mockedReadFileSync.mockImplementation((path: Parameters<typeof readFileSync>[0]) => {

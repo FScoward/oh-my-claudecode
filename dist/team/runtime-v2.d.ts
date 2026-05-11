@@ -15,11 +15,12 @@
  * Architecture mirrors runtime.ts: startTeam, monitorTeam, shutdownTeam,
  * assignTask, resumeTeam as discrete operations driven by the caller.
  */
-import type { TeamConfig, TeamTask, WorkerStatus, WorkerHeartbeat } from './types.js';
+import type { TeamConfig, TeamTask, TeamTaskDelegationPlan, WorkerStatus, WorkerHeartbeat } from './types.js';
 import type { TeamPhase } from './phase-controller.js';
+import { type WorkerPaneLiveness } from './tmux-session.js';
 import type { PluginConfig } from '../shared/types.js';
 import { type CliWorkerOutputPayload } from './cli-worker-contract.js';
-export declare function isRuntimeV2Enabled(env?: NodeJS.ProcessEnv): boolean;
+export { isRuntimeV2Enabled } from './runtime-flags.js';
 export interface TeamRuntimeV2 {
     teamName: string;
     sanitizedName: string;
@@ -34,9 +35,17 @@ export interface TeamSnapshotV2 {
     workers: Array<{
         name: string;
         alive: boolean;
+        liveness: WorkerPaneLiveness;
         status: WorkerStatus;
         heartbeat: WorkerHeartbeat | null;
         assignedTasks: string[];
+        working_dir?: string;
+        worktree_repo_root?: string;
+        worktree_path?: string;
+        worktree_branch?: string;
+        worktree_detached?: boolean;
+        worktree_created?: boolean;
+        team_state_root?: string;
         turnsWithoutProgress: number;
     }>;
     tasks: {
@@ -74,6 +83,7 @@ export interface StartTeamV2Config {
         owner?: string;
         blocked_by?: string[];
         role?: string;
+        delegation?: TeamTaskDelegationPlan;
     }>;
     cwd: string;
     newWindow?: boolean;
@@ -89,6 +99,12 @@ export interface StartTeamV2Config {
      * team (stickiness guarantee per plan AC-10 / R11).
      */
     pluginConfig?: PluginConfig;
+    /**
+     * v2-only: when true, start the merge orchestrator. Forces worktreeMode to
+     * 'named' (worker branches must exist) and rejects 'main'/'master' leader
+     * branch. See merge-orchestrator.ts.
+     */
+    autoMerge?: boolean;
 }
 /**
  * Start a team with the v2 event-driven runtime.

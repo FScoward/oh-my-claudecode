@@ -10,22 +10,22 @@ import { join } from 'path';
 import { resolveStatePath, ensureOmcDir, validateWorkingDirectory, resolveSessionStatePath, ensureSessionStateDir, listSessionIds, validateSessionId, getOmcRoot, } from '../lib/worktree-paths.js';
 import { atomicWriteJsonSync } from '../lib/atomic-write.js';
 import { validatePayload } from '../lib/payload-limits.js';
-import { canClearStateForSession, findSessionOwnedStateFiles } from '../lib/mode-state-io.js';
+import { canClearStateForSession, findCompletedSessionStateFiles, findSessionOwnedStateFiles, } from '../lib/mode-state-io.js';
 import { isModeActive, getActiveModes, getAllModeStatuses, clearModeState, getStateFilePath, MODE_CONFIGS, getActiveSessionsForMode } from '../hooks/mode-registry/index.js';
-// ExecutionMode from mode-registry (5 modes)
+// Canonical execution modes from mode-registry (deep-interview and self-improve
+// are first-class modes with dedicated MODE_CONFIGS entries; ralplan remains an
+// extra state-only mode handled via the registry-fallback path).
 const EXECUTION_MODES = [
-    'autopilot', 'team', 'ralph', 'ultrawork', 'ultraqa'
+    'autopilot', 'autoresearch', 'team', 'ralph', 'ultrawork', 'ultraqa', 'deep-interview', 'self-improve'
 ];
 // Extended type for state tools - includes state-bearing modes outside mode-registry
 const STATE_TOOL_MODES = [
     ...EXECUTION_MODES,
     'ralplan',
     'omc-teams',
-    'deep-interview',
-    'self-improve',
     'skill-active'
 ];
-const EXTRA_STATE_ONLY_MODES = ['ralplan', 'omc-teams', 'deep-interview', 'self-improve', 'skill-active'];
+const EXTRA_STATE_ONLY_MODES = ['ralplan', 'omc-teams', 'skill-active'];
 const CANCEL_SIGNAL_TTL_MS = 30_000;
 function readTeamNamesFromStateFile(statePath) {
     if (!existsSync(statePath))
@@ -168,6 +168,89 @@ function clearSessionOwnedStateCandidates(mode, root, sessionId) {
     }
     return { cleared, hadFailure, paths };
 }
+function clearCompletedSessionStateCandidates(mode, root, requesterSessionId) {
+    let cleared = 0;
+    let hadFailure = false;
+    const paths = findCompletedSessionStateFiles(mode, root, requesterSessionId);
+    for (const statePath of paths) {
+        try {
+            unlinkSync(statePath);
+            cleared++;
+        }
+        catch {
+            hadFailure = true;
+        }
+    }
+    return { cleared, hadFailure, paths };
+}
+function getModeRuntimeArtifactNames(mode) {
+    return [
+        `${mode}-stop-breaker.json`,
+        `${mode}-last-steer-at`,
+        `${mode}-continue-steer.lock`,
+    ];
+}
+function clearModeRuntimeArtifacts(mode, root, sessionId) {
+    let cleared = 0;
+    let hadFailure = false;
+    const stateRoot = join(getOmcRoot(root), 'state');
+    const candidateDirs = new Set([stateRoot]);
+    if (sessionId) {
+        candidateDirs.add(join(stateRoot, 'sessions', sessionId));
+    }
+    else {
+        for (const sid of listSessionIds(root)) {
+            candidateDirs.add(join(stateRoot, 'sessions', sid));
+        }
+    }
+    for (const dir of candidateDirs) {
+        for (const artifactName of getModeRuntimeArtifactNames(mode)) {
+            const artifactPath = join(dir, artifactName);
+            if (!existsSync(artifactPath)) {
+                continue;
+            }
+            try {
+                unlinkSync(artifactPath);
+                cleared++;
+            }
+            catch {
+                hadFailure = true;
+            }
+        }
+    }
+    return { cleared, hadFailure };
+}
+function writeSessionCancelSignal(root, sessionId, mode) {
+    const now = Date.now();
+    const cancelSignalPath = resolveSessionStatePath('cancel-signal', sessionId, root);
+    atomicWriteJsonSync(cancelSignalPath, {
+        active: true,
+        requested_at: new Date(now).toISOString(),
+        expires_at: new Date(now + CANCEL_SIGNAL_TTL_MS).toISOString(),
+        mode,
+        source: 'state_clear'
+    });
+}
+function isSessionModeActive(mode, root, sessionId) {
+    if (MODE_CONFIGS[mode]) {
+        return isModeActive(mode, root, sessionId);
+    }
+    const statePath = resolveSessionStatePath(mode, sessionId, root);
+    if (!existsSync(statePath)) {
+        return false;
+    }
+    try {
+        const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+        return state.active === true;
+    }
+    catch {
+        return false;
+    }
+}
+function findSingleOwningSessionForMode(mode, root, requesterSessionId) {
+    const owningSessions = listSessionIds(root).filter((sid) => (sid !== requesterSessionId && isSessionModeActive(mode, root, sid)));
+    return owningSessions.length === 1 ? owningSessions[0] : undefined;
+}
 // ============================================================================
 // state_read - Read state for a mode
 // ============================================================================
@@ -192,6 +275,26 @@ export const stateReadTool = {
                     ? getStateFilePath(root, mode, sessionId)
                     : resolveSessionStatePath(mode, sessionId, root);
                 if (!existsSync(statePath)) {
+                    const completedSessionPaths = findCompletedSessionStateFiles(mode, root, sessionId);
+                    if (completedSessionPaths.length > 0) {
+                        const orphanList = completedSessionPaths
+                            .map((orphanPath) => {
+                            const sessionMarker = `${join('state', 'sessions')}/`;
+                            const markerIndex = orphanPath.indexOf(sessionMarker);
+                            if (markerIndex === -1)
+                                return `- ${orphanPath}`;
+                            const rest = orphanPath.slice(markerIndex + sessionMarker.length);
+                            const orphanSessionId = rest.split(/[\\/]/)[0] || 'unknown';
+                            return `- session: ${orphanSessionId}\n  path: ${orphanPath}`;
+                        })
+                            .join('\n');
+                        return {
+                            content: [{
+                                    type: 'text',
+                                    text: `No state found for mode: ${mode} in session: ${sessionId}\nExpected path: ${statePath}\n\nDiscovered ${completedSessionPaths.length} completed-session orphan state file${completedSessionPaths.length === 1 ? '' : 's'} for this mode:\n${orphanList}\n\nRun state_clear(mode="${mode}", session_id="${sessionId}") to clear the current session plus these completed-session orphan files.`
+                                }]
+                        };
+                    }
                     return {
                         content: [{
                                 type: 'text',
@@ -417,28 +520,60 @@ export const stateClearTool = {
             // If session_id provided, clear only session-specific state
             if (sessionId) {
                 validateSessionId(sessionId);
+                const requestedSessionOwnedPaths = findSessionOwnedStateFiles(mode, sessionId, root);
                 for (const teamStatePath of findSessionOwnedStateFiles('team', sessionId, root)) {
                     collectTeamNamesForCleanup(teamStatePath);
                 }
-                const now = Date.now();
-                const cancelSignalPath = resolveSessionStatePath('cancel-signal', sessionId, root);
-                atomicWriteJsonSync(cancelSignalPath, {
-                    active: true,
-                    requested_at: new Date(now).toISOString(),
-                    expires_at: new Date(now + CANCEL_SIGNAL_TTL_MS).toISOString(),
-                    mode,
-                    source: 'state_clear'
-                });
+                if (mode === 'team') {
+                    for (const teamStatePath of findCompletedSessionStateFiles('team', root, sessionId)) {
+                        collectTeamNamesForCleanup(teamStatePath);
+                    }
+                }
+                const completedSessionCleanup = clearCompletedSessionStateCandidates(mode, root, sessionId);
+                const runtimeCleanup = clearModeRuntimeArtifacts(mode, root, sessionId);
+                writeSessionCancelSignal(root, sessionId, mode);
                 if (MODE_CONFIGS[mode]) {
                     const success = clearModeState(mode, root, sessionId);
                     const sessionCleanup = clearSessionOwnedStateCandidates(mode, root, sessionId);
                     const legacyCleanup = clearLegacyStateCandidates(mode, root, sessionId);
+                    let ownerSessionId;
+                    let ownerSessionCleanup = { cleared: 0, hadFailure: false, paths: [] };
+                    let ownerLegacyCleanup = { cleared: 0, hadFailure: false };
+                    if (requestedSessionOwnedPaths.length === 0 &&
+                        completedSessionCleanup.cleared === 0 &&
+                        sessionCleanup.cleared === 0 &&
+                        legacyCleanup.cleared === 0) {
+                        ownerSessionId = findSingleOwningSessionForMode(mode, root, sessionId);
+                        if (ownerSessionId) {
+                            if (mode === 'team') {
+                                for (const teamStatePath of findSessionOwnedStateFiles('team', ownerSessionId, root)) {
+                                    collectTeamNamesForCleanup(teamStatePath);
+                                }
+                            }
+                            writeSessionCancelSignal(root, ownerSessionId, mode);
+                            const ownerRuntimeCleanup = clearModeRuntimeArtifacts(mode, root, ownerSessionId);
+                            runtimeCleanup.cleared += ownerRuntimeCleanup.cleared;
+                            runtimeCleanup.hadFailure ||= ownerRuntimeCleanup.hadFailure;
+                            clearModeState(mode, root, ownerSessionId);
+                            ownerSessionCleanup = clearSessionOwnedStateCandidates(mode, root, ownerSessionId);
+                            ownerLegacyCleanup = clearLegacyStateCandidates(mode, root, ownerSessionId);
+                        }
+                    }
                     const ghostNoteParts = [];
                     if (legacyCleanup.cleared > 0) {
                         ghostNoteParts.push('ghost legacy file also removed');
                     }
+                    if (completedSessionCleanup.cleared > 0) {
+                        ghostNoteParts.push(`removed ${completedSessionCleanup.cleared} completed-session orphan file${completedSessionCleanup.cleared === 1 ? '' : 's'}`);
+                    }
                     if (sessionCleanup.cleared > 0) {
                         ghostNoteParts.push(`removed ${sessionCleanup.cleared} recovered session file${sessionCleanup.cleared === 1 ? '' : 's'}`);
+                    }
+                    if (runtimeCleanup.cleared > 0) {
+                        ghostNoteParts.push(`removed ${runtimeCleanup.cleared} runtime artifact${runtimeCleanup.cleared === 1 ? '' : 's'}`);
+                    }
+                    if (ownerSessionId) {
+                        ghostNoteParts.push(`cleared owning session: ${ownerSessionId}`);
                     }
                     const ghostNote = ghostNoteParts.length > 0 ? ` (${ghostNoteParts.join(', ')})` : '';
                     const runtimeCleanupNote = (() => {
@@ -454,7 +589,13 @@ export const stateClearTool = {
                             details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
                         return details.length > 0 ? ` (${details.join(', ')})` : '';
                     })();
-                    if (success && !legacyCleanup.hadFailure && !sessionCleanup.hadFailure) {
+                    if (success &&
+                        !legacyCleanup.hadFailure &&
+                        !sessionCleanup.hadFailure &&
+                        !completedSessionCleanup.hadFailure &&
+                        !ownerSessionCleanup.hadFailure &&
+                        !ownerLegacyCleanup.hadFailure &&
+                        !runtimeCleanup.hadFailure) {
                         return {
                             content: [{
                                     type: 'text',
@@ -474,12 +615,43 @@ export const stateClearTool = {
                 // Fallback for modes not in registry (e.g., ralplan)
                 const sessionCleanup = clearSessionOwnedStateCandidates(mode, root, sessionId);
                 const legacyCleanup = clearLegacyStateCandidates(mode, root, sessionId);
+                let ownerSessionId;
+                let ownerSessionCleanup = { cleared: 0, hadFailure: false, paths: [] };
+                let ownerLegacyCleanup = { cleared: 0, hadFailure: false };
+                if (requestedSessionOwnedPaths.length === 0 &&
+                    completedSessionCleanup.cleared === 0 &&
+                    sessionCleanup.cleared === 0 &&
+                    legacyCleanup.cleared === 0) {
+                    ownerSessionId = findSingleOwningSessionForMode(mode, root, sessionId);
+                    if (ownerSessionId) {
+                        if (mode === 'team') {
+                            for (const teamStatePath of findSessionOwnedStateFiles('team', ownerSessionId, root)) {
+                                collectTeamNamesForCleanup(teamStatePath);
+                            }
+                        }
+                        writeSessionCancelSignal(root, ownerSessionId, mode);
+                        const ownerRuntimeCleanup = clearModeRuntimeArtifacts(mode, root, ownerSessionId);
+                        runtimeCleanup.cleared += ownerRuntimeCleanup.cleared;
+                        runtimeCleanup.hadFailure ||= ownerRuntimeCleanup.hadFailure;
+                        ownerSessionCleanup = clearSessionOwnedStateCandidates(mode, root, ownerSessionId);
+                        ownerLegacyCleanup = clearLegacyStateCandidates(mode, root, ownerSessionId);
+                    }
+                }
                 const ghostNoteParts = [];
                 if (legacyCleanup.cleared > 0) {
                     ghostNoteParts.push('ghost legacy file also removed');
                 }
+                if (completedSessionCleanup.cleared > 0) {
+                    ghostNoteParts.push(`removed ${completedSessionCleanup.cleared} completed-session orphan file${completedSessionCleanup.cleared === 1 ? '' : 's'}`);
+                }
                 if (sessionCleanup.cleared > 0) {
                     ghostNoteParts.push(`removed ${sessionCleanup.cleared} recovered session file${sessionCleanup.cleared === 1 ? '' : 's'}`);
+                }
+                if (runtimeCleanup.cleared > 0) {
+                    ghostNoteParts.push(`removed ${runtimeCleanup.cleared} runtime artifact${runtimeCleanup.cleared === 1 ? '' : 's'}`);
+                }
+                if (ownerSessionId) {
+                    ghostNoteParts.push(`cleared owning session: ${ownerSessionId}`);
                 }
                 const ghostNote = ghostNoteParts.length > 0 ? ` (${ghostNoteParts.join(', ')})` : '';
                 const runtimeCleanupNote = (() => {
@@ -498,7 +670,7 @@ export const stateClearTool = {
                 return {
                     content: [{
                             type: 'text',
-                            text: `${legacyCleanup.hadFailure || sessionCleanup.hadFailure ? 'Warning: Some files could not be removed' : 'Successfully cleared state'} for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
+                            text: `${legacyCleanup.hadFailure || sessionCleanup.hadFailure || completedSessionCleanup.hadFailure || ownerSessionCleanup.hadFailure || ownerLegacyCleanup.hadFailure || runtimeCleanup.hadFailure ? 'Warning: Some files could not be removed' : 'Successfully cleared state'} for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
                         }]
                 };
             }
@@ -530,6 +702,7 @@ export const stateClearTool = {
                     catch { /* best-effort */ }
                 }
             }
+            const runtimeCleanup = clearModeRuntimeArtifacts(mode, root);
             let clearedCount = 0;
             const errors = [];
             if (mode === 'team') {
@@ -551,6 +724,10 @@ export const stateClearTool = {
             clearedCount += extraLegacyCleanup.cleared;
             if (extraLegacyCleanup.hadFailure) {
                 errors.push('legacy path');
+            }
+            clearedCount += runtimeCleanup.cleared;
+            if (runtimeCleanup.hadFailure) {
+                errors.push('runtime artifacts');
             }
             // Clear all session-scoped state files
             const sessionIds = listSessionIds(root);

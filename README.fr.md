@@ -13,7 +13,7 @@
 
 _N'apprenez pas Claude Code. Utilisez simplement OMC._
 
-[Démarrer](#démarrage-rapide) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Guide de migration](docs/MIGRATION.md)
+[Démarrer](#démarrage-rapide) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Guide de migration](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -111,7 +111,7 @@ Si vous rencontrez des problèmes après la mise à jour, videz l'ancien cache d
 
 ### Modes d'orchestration
 
-Plusieurs stratégies pour différents cas d'utilisation — de l'orchestration Team au refactoring économe en tokens. [En savoir plus →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Plusieurs stratégies pour différents cas d'utilisation — de l'orchestration Team au refactoring économe en tokens. [En savoir plus →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Mode                            | Description                                                                                 | Utilisation                                                                      |
 | ------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -167,7 +167,7 @@ Enveloppez le handler à server.py:42 dans try/except ClientDisconnectedError...
 ```
 
 **Gestion des compétences :** `/skill list | add | remove | edit | search`
-**Auto-apprentissage :** `/learner` extrait des patterns réutilisables avec des critères de qualité stricts
+**Auto-apprentissage :** `/skillify` extrait des patterns réutilisables avec des critères de qualité stricts
 **Auto-injection :** Les compétences correspondantes se chargent automatiquement dans le contexte — aucun rappel manuel nécessaire
 
 [Liste complète des fonctionnalités →](docs/REFERENCE.md)

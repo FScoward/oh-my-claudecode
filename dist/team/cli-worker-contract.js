@@ -2,16 +2,17 @@
  * CLI-worker output contract (Option E, plan AC-7).
  *
  * When a /team critic/reviewer stage is routed to an external CLI worker
- * (codex or gemini), the worker is a one-shot process that cannot call
- * TaskUpdate directly. To surface a structured verdict back to the team
- * leader, the worker writes a JSON payload to a pre-agreed file path
- * before exit. The leader's worker-completion handler in runtime-v2 reads
- * the file and calls TaskUpdate with verdict metadata.
+ * (codex or gemini), the worker may not call TaskUpdate directly. To surface
+ * a structured verdict back to the team leader, the worker writes a JSON
+ * payload to a pre-agreed file path. The leader's worker-completion handler
+ * in runtime-v2 reads the file and calls TaskUpdate with verdict metadata.
  *
  * Applies to roles in CONTRACT_ROLES (critic, code-reviewer,
  * security-reviewer, test-engineer) when the resolved provider is
  * `codex` or `gemini`. Claude workers participate in team messaging
- * directly and do not use this contract.
+ * directly and do not use this contract. Codex team workers are launched as
+ * persistent `codex` panes, not `codex exec`; they still receive this verdict
+ * contract in their inbox when assigned reviewer-style roles.
  */
 /** Roles that emit a structured verdict and therefore use the output-file contract. */
 export const CONTRACT_ROLES = new Set([
@@ -30,7 +31,14 @@ const VALID_SEVERITIES = new Set(['critical', 'major', 'minor', 'nit']);
 export function shouldInjectContract(role, provider) {
     if (!role || !provider)
         return false;
-    if (provider === 'claude')
+    // Claude workers speak through the team messaging API directly.
+    // Cursor workers run as interactive REPLs — they cannot perform the
+    // write-verdict-and-exit dance the contract requires, so reviewer
+    // roles must not be assigned to cursor in the first place. The
+    // role-router and worker-bootstrap guidance both flag this; here we
+    // simply skip contract injection if a cursor worker somehow lands on
+    // a CONTRACT_ROLES role rather than emit instructions it cannot follow.
+    if (provider === 'claude' || provider === 'cursor')
         return false;
     return CONTRACT_ROLES.has(role);
 }

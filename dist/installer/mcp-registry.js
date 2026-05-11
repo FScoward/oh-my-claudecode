@@ -6,6 +6,7 @@ import { getGlobalOmcConfigPath, getGlobalOmcConfigCandidates, getGlobalOmcState
 const MANAGED_START = '# BEGIN OMC MANAGED MCP REGISTRY';
 const MANAGED_END = '# END OMC MANAGED MCP REGISTRY';
 const DEFAULT_LAUNCHER_MCP_STARTUP_TIMEOUT_SEC = 15;
+const CODEX_MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 export function getUnifiedMcpRegistryPath() {
     return process.env.OMC_MCP_REGISTRY_PATH?.trim() || getGlobalOmcConfigPath('mcp-registry.json');
 }
@@ -72,6 +73,9 @@ function normalizeRegistryEntry(value) {
     const url = typeof raw.url === 'string' && raw.url.trim().length > 0
         ? raw.url.trim()
         : undefined;
+    const type = typeof raw.type === 'string' && raw.type.trim().length > 0
+        ? raw.type.trim()
+        : undefined;
     if (!command && !url) {
         return null;
     }
@@ -88,6 +92,7 @@ function normalizeRegistryEntry(value) {
         ...(args.length > 0 ? { args } : {}),
         ...(env && Object.keys(env).length > 0 ? { env } : {}),
         ...(url ? { url } : {}),
+        ...(type ? { type } : {}),
         ...(effectiveTimeout ? { timeout: effectiveTimeout } : {}),
     };
 }
@@ -294,6 +299,9 @@ function renderCodexServerBlock(name, entry) {
     if (entry.url) {
         lines.push(`url = ${renderTomlString(entry.url)}`);
     }
+    if (entry.type) {
+        lines.push(`type = ${renderTomlString(entry.type)}`);
+    }
     if (entry.env && Object.keys(entry.env).length > 0) {
         lines.push(`env = ${renderTomlEnvTable(entry.env)}`);
     }
@@ -306,6 +314,23 @@ function stripManagedCodexBlock(content) {
     const managedBlockPattern = new RegExp(`${MANAGED_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${MANAGED_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`, 'g');
     return content.replace(managedBlockPattern, '').trimEnd();
 }
+function parseCodexMcpServerNames(content) {
+    const names = new Set();
+    for (const rawLine of content.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) {
+            continue;
+        }
+        const sectionMatch = line.match(/^\[mcp_servers\.([^\]]+)\]$/);
+        if (sectionMatch) {
+            const name = sectionMatch[1].trim();
+            if (name && CODEX_MCP_SERVER_NAME_PATTERN.test(name)) {
+                names.add(name);
+            }
+        }
+    }
+    return names;
+}
 export function renderManagedCodexMcpBlock(registry) {
     const names = Object.keys(registry);
     if (names.length === 0) {
@@ -316,7 +341,9 @@ export function renderManagedCodexMcpBlock(registry) {
 }
 export function syncCodexConfigToml(existingContent, registry) {
     const base = stripManagedCodexBlock(existingContent);
-    const managedBlock = renderManagedCodexMcpBlock(registry);
+    const existingServerNames = parseCodexMcpServerNames(base);
+    const managedRegistry = Object.fromEntries(Object.entries(registry).filter(([name]) => (CODEX_MCP_SERVER_NAME_PATTERN.test(name) && !existingServerNames.has(name))));
+    const managedBlock = renderManagedCodexMcpBlock(managedRegistry);
     const nextContent = managedBlock
         ? `${base ? `${base}\n\n` : ''}${managedBlock}\n`
         : (base ? `${base}\n` : '');
@@ -375,6 +402,11 @@ function parseCodexMcpRegistryEntries(content) {
             const parsed = parseTomlQuotedString(value);
             if (parsed)
                 currentEntry.url = parsed;
+        }
+        else if (key === 'type') {
+            const parsed = parseTomlQuotedString(value);
+            if (parsed)
+                currentEntry.type = parsed;
         }
         else if (key === 'env') {
             const parsed = parseTomlEnvTable(value);

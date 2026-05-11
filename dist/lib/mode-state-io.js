@@ -7,7 +7,7 @@
  */
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { getOmcRoot, resolveStatePath, resolveSessionStatePath, ensureSessionStateDir, ensureOmcDir, listSessionIds, } from './worktree-paths.js';
+import { getOmcRoot, resolveStatePath, resolveSessionStatePath, ensureSessionStateDir, ensureOmcDir, listSessionIds, getWorktreeRoot, } from './worktree-paths.js';
 import { atomicWriteJsonSync } from './atomic-write.js';
 export function getStateSessionOwner(state) {
     if (!state || typeof state !== 'object') {
@@ -32,25 +32,51 @@ export function canClearStateForSession(state, sessionId) {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+function resolveStateRoot(directory) {
+    const baseDir = directory || process.cwd();
+    return getWorktreeRoot(baseDir) || baseDir;
+}
 /**
  * Resolve the state file path for a given mode.
  * When sessionId is provided, returns the session-scoped path.
  * Otherwise returns the legacy (global) path.
  */
 function resolveFile(mode, directory, sessionId) {
-    const baseDir = directory || process.cwd();
+    const baseDir = resolveStateRoot(directory);
     if (sessionId) {
         return resolveSessionStatePath(mode, sessionId, baseDir);
     }
     return resolveStatePath(mode, baseDir);
 }
 function getLegacyStateCandidates(mode, directory) {
-    const baseDir = directory || process.cwd();
+    const baseDir = resolveStateRoot(directory);
     const normalizedName = mode.endsWith('-state') ? mode : `${mode}-state`;
     return [
         resolveStatePath(mode, baseDir),
         join(getOmcRoot(baseDir), `${normalizedName}.json`),
     ];
+}
+function getRuntimeArtifactCandidates(mode, directory, sessionId) {
+    const baseDir = resolveStateRoot(directory);
+    const stateRoot = join(getOmcRoot(baseDir), 'state');
+    const artifactNames = [
+        `${mode}-stop-breaker.json`,
+        `${mode}-last-steer-at`,
+        `${mode}-continue-steer.lock`,
+    ];
+    const candidateDirs = new Set([stateRoot]);
+    if (sessionId) {
+        candidateDirs.add(join(stateRoot, 'sessions', sessionId));
+    }
+    else {
+        for (const sid of listSessionIds(baseDir)) {
+            candidateDirs.add(join(stateRoot, 'sessions', sid));
+        }
+    }
+    return [...candidateDirs].flatMap((dir) => artifactNames.map((name) => join(dir, name)));
+}
+function hasSessionEndSummary(baseDir, sessionId) {
+    return existsSync(join(getOmcRoot(baseDir), 'sessions', `${sessionId}.json`));
 }
 /**
  * Find session-scoped state files that belong to the requested session.
@@ -63,18 +89,55 @@ function getLegacyStateCandidates(mode, directory) {
  */
 export function findSessionOwnedStateFiles(mode, sessionId, directory) {
     const matches = new Set();
-    const expectedPath = resolveSessionStatePath(mode, sessionId, directory);
+    const baseDir = resolveStateRoot(directory);
+    const expectedPath = resolveSessionStatePath(mode, sessionId, baseDir);
     if (existsSync(expectedPath)) {
         matches.add(expectedPath);
     }
-    for (const sid of listSessionIds(directory)) {
-        const candidatePath = resolveSessionStatePath(mode, sid, directory);
+    for (const sid of listSessionIds(baseDir)) {
+        const candidatePath = resolveSessionStatePath(mode, sid, baseDir);
         if (!existsSync(candidatePath)) {
             continue;
         }
         try {
             const raw = JSON.parse(readFileSync(candidatePath, 'utf-8'));
             if (getStateSessionOwner(raw) === sessionId) {
+                matches.add(candidatePath);
+            }
+        }
+        catch {
+            // Ignore unreadable files and keep scanning.
+        }
+    }
+    return [...matches];
+}
+/**
+ * Find active session-scoped state files that are safe to treat as orphaned.
+ *
+ * A fresh `/cancel` invocation may run in a new Claude session id while the
+ * state files that keep the Stop hook alive still live under the completed
+ * session's directory.  We intentionally require durable completion evidence
+ * (`.omc/sessions/{sessionId}.json`) before returning a sibling session's file
+ * so active parallel sessions are not cleared just because their ids differ
+ * from the caller's fresh cancel session.
+ */
+export function findCompletedSessionStateFiles(mode, directory, requesterSessionId) {
+    const matches = new Set();
+    const baseDir = resolveStateRoot(directory);
+    for (const sid of listSessionIds(baseDir)) {
+        if (requesterSessionId && sid === requesterSessionId) {
+            continue;
+        }
+        if (!hasSessionEndSummary(baseDir, sid)) {
+            continue;
+        }
+        const candidatePath = resolveSessionStatePath(mode, sid, baseDir);
+        if (!existsSync(candidatePath)) {
+            continue;
+        }
+        try {
+            const raw = JSON.parse(readFileSync(candidatePath, 'utf-8'));
+            if (raw.active === true) {
                 matches.add(candidatePath);
             }
         }
@@ -98,7 +161,7 @@ export function findSessionOwnedStateFiles(mode, sessionId, directory) {
  */
 export function writeModeState(mode, state, directory, sessionId) {
     try {
-        const baseDir = directory || process.cwd();
+        const baseDir = resolveStateRoot(directory);
         if (sessionId) {
             ensureSessionStateDir(sessionId, baseDir);
         }
@@ -159,6 +222,7 @@ export function readModeState(mode, directory, sessionId) {
  */
 export function clearModeStateFile(mode, directory, sessionId) {
     let success = true;
+    const baseDir = resolveStateRoot(directory);
     const unlinkIfPresent = (filePath) => {
         if (!existsSync(filePath)) {
             return;
@@ -172,18 +236,24 @@ export function clearModeStateFile(mode, directory, sessionId) {
     };
     if (sessionId) {
         unlinkIfPresent(resolveFile(mode, directory, sessionId));
+        for (const artifactPath of getRuntimeArtifactCandidates(mode, baseDir, sessionId)) {
+            unlinkIfPresent(artifactPath);
+        }
     }
     else {
-        for (const legacyPath of getLegacyStateCandidates(mode, directory)) {
+        for (const legacyPath of getLegacyStateCandidates(mode, baseDir)) {
             unlinkIfPresent(legacyPath);
         }
-        for (const sid of listSessionIds(directory)) {
-            unlinkIfPresent(resolveSessionStatePath(mode, sid, directory));
+        for (const sid of listSessionIds(baseDir)) {
+            unlinkIfPresent(resolveSessionStatePath(mode, sid, baseDir));
+        }
+        for (const artifactPath of getRuntimeArtifactCandidates(mode, baseDir)) {
+            unlinkIfPresent(artifactPath);
         }
     }
     // Ghost-legacy cleanup: if sessionId provided, also check legacy path
     if (sessionId) {
-        for (const legacyPath of getLegacyStateCandidates(mode, directory)) {
+        for (const legacyPath of getLegacyStateCandidates(mode, baseDir)) {
             if (!existsSync(legacyPath)) {
                 continue;
             }

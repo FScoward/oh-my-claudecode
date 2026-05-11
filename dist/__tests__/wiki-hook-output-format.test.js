@@ -49,14 +49,11 @@ describe('wiki hook wrapper output', () => {
             additionalContext: expect.stringContaining('[LLM Wiki: 1 pages at .omc/wiki/]'),
         });
     });
-    it('wraps PreCompact wiki context under hookSpecificOutput', () => {
+    it('emits PreCompact wiki context as top-level systemMessage', () => {
         const output = runHook(PRE_COMPACT_SCRIPT);
         expect(output.continue).toBe(true);
-        expect(output.additionalContext).toBeUndefined();
-        expect(output.hookSpecificOutput).toEqual({
-            hookEventName: 'PreCompact',
-            additionalContext: '[Wiki: 1 pages | categories: reference | last updated: 2026-04-13T00:00:00.000Z]',
-        });
+        expect(output.hookSpecificOutput).toBeUndefined();
+        expect(output.systemMessage).toBe('[Wiki: 1 pages | categories: reference | last updated: 2026-04-13T00:00:00.000Z]');
     });
 });
 //# sourceMappingURL=wiki-hook-output-format.test.js.map

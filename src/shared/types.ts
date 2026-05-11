@@ -56,6 +56,12 @@ export interface PluginConfig {
     context7?: { enabled?: boolean };
   };
 
+  // Prompt-level company context MCP contract
+  companyContext?: {
+    tool?: string;
+    onError?: "warn" | "silent" | "fail";
+  };
+
   // Permission settings
   permissions?: {
     allowBash?: boolean;
@@ -237,7 +243,7 @@ export interface BackgroundTask {
 
 export interface MagicKeyword {
   triggers: string[];
-  action: (prompt: string, agentName?: string) => string;
+  action: (prompt: string, agentName?: string, modelId?: string) => string;
   description: string;
 }
 
@@ -460,6 +466,8 @@ export interface TeamOpsConfig {
   monitorIntervalMs?: number;
   shutdownTimeoutMs?: number;
   costMode?: TeamCostMode;
+  /** Opt-in native team worker worktrees. Disabled unless explicitly set. */
+  worktreeMode?: 'disabled' | 'off' | 'detached' | 'branch' | 'named';
 }
 
 /** `team` config block in PluginConfig. */

@@ -12,12 +12,22 @@ export function tmuxEnv() {
 function resolveEnv(opts) {
     return opts?.stripTmux ? tmuxEnv() : process.env;
 }
+function isUnixLikeOnWindows() {
+    return process.platform === 'win32' &&
+        !!(process.env.MSYSTEM || process.env.MINGW_PREFIX);
+}
+export function isNativeWindowsShell() {
+    return process.platform === 'win32' && !isUnixLikeOnWindows();
+}
 function quoteForCmd(arg) {
     if (arg.length === 0)
         return '""';
     if (!/[\s"%^&|<>()]/.test(arg))
         return arg;
     return `"${arg.replace(/(["%])/g, '$1$1')}"`;
+}
+function escapeForCmdSet(value) {
+    return value.replace(/"/g, '""');
 }
 function resolveTmuxInvocation(args) {
     const resolvedBinary = resolveTmuxBinaryPath();
@@ -122,7 +132,10 @@ export function isTmuxAvailable() {
  */
 export function isClaudeAvailable() {
     try {
-        execFileSync('claude', ['--version'], { stdio: 'ignore' });
+        execFileSync('claude', ['--version'], {
+            stdio: 'ignore',
+            shell: process.platform === 'win32',
+        });
         return true;
     }
     catch {
@@ -136,18 +149,18 @@ export function isClaudeAvailable() {
  * - direct: tmux not available, run directly
  * - direct: print mode requested so stdout can flow to parent process
  */
-export function resolveLaunchPolicy(env = process.env, args = []) {
+export function resolveLaunchPolicy(env = process.env, args = [], options = {}) {
     if (args.some((arg) => arg === '--print' || arg === '-p')) {
         return 'direct';
     }
     if (env.TMUX)
         return 'inside-tmux';
     // Terminal emulators that embed their own multiplexer (e.g. cmux, a
-    // Ghostty-based terminal) set CMUX_SURFACE_ID but not TMUX.  tmux
+    // Ghostty-based terminal) set CMUX_SURFACE_ID but not TMUX. tmux
     // attach-session fails in these environments because the host PTY is
     // not directly compatible, leaving orphaned detached sessions.
-    // Fall back to direct mode so Claude launches without tmux wrapping.
-    if (env.CMUX_SURFACE_ID)
+    // Demote to direct unless the caller explicitly requires tmux.
+    if (env.CMUX_SURFACE_ID && !options.requireTmux)
         return 'direct';
     if (!isTmuxAvailable()) {
         return 'direct';
@@ -201,7 +214,23 @@ export function sanitizeTmuxToken(value) {
  * Build shell command string for tmux with proper quoting
  */
 export function buildTmuxShellCommand(command, args) {
+    if (isNativeWindowsShell()) {
+        return [command, ...args].map(quoteForCmd).join(' ');
+    }
     return [quoteShellArg(command), ...args.map(quoteShellArg)].join(' ');
+}
+export function buildTmuxShellCommandWithEnv(command, args, envVars) {
+    const envEntries = Object.entries(envVars);
+    if (envEntries.length === 0) {
+        return buildTmuxShellCommand(command, args);
+    }
+    if (isNativeWindowsShell()) {
+        const envPrefix = envEntries
+            .map(([key, value]) => `set "${key}=${escapeForCmdSet(value)}"`)
+            .join(' && ');
+        return `${envPrefix} && ${buildTmuxShellCommand(command, args)}`;
+    }
+    return buildTmuxShellCommand('env', [...envEntries.map(([key, value]) => `${key}=${value}`), command, ...args]);
 }
 /**
  * Wrap a command string in the user's login shell with RC file sourcing.
@@ -213,7 +242,11 @@ export function buildTmuxShellCommand(command, args) {
  * This wrapper starts a login shell (`-lc`) and explicitly sources the RC file.
  */
 export function wrapWithLoginShell(command) {
-    const shell = process.env.SHELL || '/bin/bash';
+    if (isNativeWindowsShell()) {
+        const comspec = process.env.COMSPEC || 'cmd.exe';
+        return `${quoteForCmd(comspec)} /d /s /c ${quoteForCmd(command)}`;
+    }
+    const shell = process.env.SHELL || '/bin/sh';
     const shellName = basename(shell).replace(/\.(exe|cmd|bat)$/i, '');
     const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
     const sourcePrefix = rcFile

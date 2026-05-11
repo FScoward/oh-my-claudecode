@@ -40,10 +40,23 @@ interface TmuxCommandInvocation {
   args: string[];
 }
 
+function isUnixLikeOnWindows(): boolean {
+  return process.platform === 'win32' &&
+    !!(process.env.MSYSTEM || process.env.MINGW_PREFIX);
+}
+
+export function isNativeWindowsShell(): boolean {
+  return process.platform === 'win32' && !isUnixLikeOnWindows();
+}
+
 function quoteForCmd(arg: string): string {
   if (arg.length === 0) return '""';
   if (!/[\s"%^&|<>()]/.test(arg)) return arg;
   return `"${arg.replace(/(["%])/g, '$1$1')}"`;
+}
+
+function escapeForCmdSet(value: string): string {
+  return value.replace(/"/g, '""');
 }
 
 function resolveTmuxInvocation(args: string[]): TmuxCommandInvocation {
@@ -187,11 +200,23 @@ export function isTmuxAvailable(): boolean {
  */
 export function isClaudeAvailable(): boolean {
   try {
-    execFileSync('claude', ['--version'], { stdio: 'ignore' });
+    execFileSync('claude', ['--version'], {
+      stdio: 'ignore',
+      shell: process.platform === 'win32',
+    });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Options for `resolveLaunchPolicy`. `requireTmux=true` makes
+ * CMUX_SURFACE_ID stop demoting to 'direct'. The caller is responsible for
+ * gating on platform/flag combinations (e.g. macOS + --madmax).
+ */
+export interface ResolveLaunchPolicyOptions {
+  requireTmux?: boolean;
 }
 
 /**
@@ -204,17 +229,18 @@ export function isClaudeAvailable(): boolean {
 export function resolveLaunchPolicy(
   env: NodeJS.ProcessEnv = process.env,
   args: string[] = [],
+  options: ResolveLaunchPolicyOptions = {},
 ): ClaudeLaunchPolicy {
   if (args.some((arg) => arg === '--print' || arg === '-p')) {
     return 'direct';
   }
   if (env.TMUX) return 'inside-tmux';
   // Terminal emulators that embed their own multiplexer (e.g. cmux, a
-  // Ghostty-based terminal) set CMUX_SURFACE_ID but not TMUX.  tmux
+  // Ghostty-based terminal) set CMUX_SURFACE_ID but not TMUX. tmux
   // attach-session fails in these environments because the host PTY is
   // not directly compatible, leaving orphaned detached sessions.
-  // Fall back to direct mode so Claude launches without tmux wrapping.
-  if (env.CMUX_SURFACE_ID) return 'direct';
+  // Demote to direct unless the caller explicitly requires tmux.
+  if (env.CMUX_SURFACE_ID && !options.requireTmux) return 'direct';
   if (!isTmuxAvailable()) {
     return 'direct';
   }
@@ -273,7 +299,33 @@ export function sanitizeTmuxToken(value: string): string {
  * Build shell command string for tmux with proper quoting
  */
 export function buildTmuxShellCommand(command: string, args: string[]): string {
+  if (isNativeWindowsShell()) {
+    return [command, ...args].map(quoteForCmd).join(' ');
+  }
   return [quoteShellArg(command), ...args.map(quoteShellArg)].join(' ');
+}
+
+export function buildTmuxShellCommandWithEnv(
+  command: string,
+  args: string[],
+  envVars: Record<string, string>,
+): string {
+  const envEntries = Object.entries(envVars);
+  if (envEntries.length === 0) {
+    return buildTmuxShellCommand(command, args);
+  }
+
+  if (isNativeWindowsShell()) {
+    const envPrefix = envEntries
+      .map(([key, value]) => `set "${key}=${escapeForCmdSet(value)}"`)
+      .join(' && ');
+    return `${envPrefix} && ${buildTmuxShellCommand(command, args)}`;
+  }
+
+  return buildTmuxShellCommand(
+    'env',
+    [...envEntries.map(([key, value]) => `${key}=${value}`), command, ...args],
+  );
 }
 
 /**
@@ -286,7 +338,12 @@ export function buildTmuxShellCommand(command: string, args: string[]): string {
  * This wrapper starts a login shell (`-lc`) and explicitly sources the RC file.
  */
 export function wrapWithLoginShell(command: string): string {
-  const shell = process.env.SHELL || '/bin/bash';
+  if (isNativeWindowsShell()) {
+    const comspec = process.env.COMSPEC || 'cmd.exe';
+    return `${quoteForCmd(comspec)} /d /s /c ${quoteForCmd(command)}`;
+  }
+
+  const shell = process.env.SHELL || '/bin/sh';
   const shellName = basename(shell).replace(/\.(exe|cmd|bat)$/i, '');
   const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
   const sourcePrefix = rcFile

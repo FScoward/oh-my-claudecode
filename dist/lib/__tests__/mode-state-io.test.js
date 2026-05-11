@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, mkdtempSync } from 'fs';
 import { join } from 'path';
+import { execSync } from 'child_process';
 import { tmpdir } from 'os';
 import { writeModeState, readModeState, clearModeStateFile } from '../mode-state-io.js';
 let tempDir;
@@ -40,6 +41,15 @@ describe('mode-state-io', () => {
             const result = writeModeState('autopilot', { phase: 'exec' }, tempDir);
             expect(result).toBe(true);
             expect(existsSync(join(tempDir, '.omc', 'state'))).toBe(true);
+        });
+        it('should resolve writes to the git worktree root when called from a subdirectory', () => {
+            const nestedDir = join(tempDir, 'nested', 'cwd');
+            mkdirSync(nestedDir, { recursive: true });
+            execSync('git init', { cwd: tempDir, stdio: 'pipe' });
+            const result = writeModeState('autopilot', { phase: 'exec' }, nestedDir);
+            expect(result).toBe(true);
+            expect(existsSync(join(tempDir, '.omc', 'state', 'autopilot-state.json'))).toBe(true);
+            expect(existsSync(join(nestedDir, '.omc', 'state', 'autopilot-state.json'))).toBe(false);
         });
         it('should write file with 0o600 permissions', () => {
             writeModeState('ralph', { active: true }, tempDir);
@@ -112,6 +122,17 @@ describe('mode-state-io', () => {
             expect(result.active).toBe(true);
             expect(result.phase).toBe('running');
         });
+        it('should read state from the git worktree root when given a subdirectory', () => {
+            const nestedDir = join(tempDir, 'nested', 'cwd');
+            mkdirSync(nestedDir, { recursive: true });
+            execSync('git init', { cwd: tempDir, stdio: 'pipe' });
+            const stateDir = join(tempDir, '.omc', 'state');
+            mkdirSync(stateDir, { recursive: true });
+            writeFileSync(join(stateDir, 'ralph-state.json'), JSON.stringify({ active: true, _meta: { mode: 'ralph', written_at: '2026-01-01T00:00:00Z' } }));
+            const result = readModeState('ralph', nestedDir);
+            expect(result).not.toBeNull();
+            expect(result.active).toBe(true);
+        });
         it('should read from session path when sessionId is provided', () => {
             const sessionDir = join(tempDir, '.omc', 'state', 'sessions', 'pid-999-2000');
             mkdirSync(sessionDir, { recursive: true });
@@ -146,6 +167,19 @@ describe('mode-state-io', () => {
     // clearModeStateFile
     // -----------------------------------------------------------------------
     describe('clearModeStateFile', () => {
+        it('should clear state from the git worktree root when given a subdirectory', () => {
+            const nestedDir = join(tempDir, 'nested', 'cwd');
+            mkdirSync(nestedDir, { recursive: true });
+            execSync('git init', { cwd: tempDir, stdio: 'pipe' });
+            const stateDir = join(tempDir, '.omc', 'state');
+            mkdirSync(stateDir, { recursive: true });
+            const filePath = join(stateDir, 'ralph-state.json');
+            writeFileSync(filePath, JSON.stringify({ active: true }));
+            const result = clearModeStateFile('ralph', nestedDir);
+            expect(result).toBe(true);
+            expect(existsSync(filePath)).toBe(false);
+            expect(existsSync(join(nestedDir, '.omc', 'state', 'ralph-state.json'))).toBe(false);
+        });
         it('should delete the legacy state file', () => {
             const stateDir = join(tempDir, '.omc', 'state');
             mkdirSync(stateDir, { recursive: true });
@@ -234,6 +268,23 @@ describe('mode-state-io', () => {
             expect(result).toBe(true);
             expect(existsSync(sessionAPath)).toBe(false);
             expect(existsSync(sessionBPath)).toBe(false);
+        });
+        it('should remove mode runtime artifacts during session-scoped clear', () => {
+            const stateDir = join(tempDir, '.omc', 'state');
+            const sessionDir = join(stateDir, 'sessions', 'session-runtime-cleanup');
+            mkdirSync(sessionDir, { recursive: true });
+            writeFileSync(join(sessionDir, 'ralph-state.json'), JSON.stringify({ active: true }));
+            writeFileSync(join(sessionDir, 'ralph-stop-breaker.json'), JSON.stringify({ count: 2 }));
+            writeFileSync(join(stateDir, 'ralph-stop-breaker.json'), JSON.stringify({ count: 2 }));
+            writeFileSync(join(stateDir, 'ralph-last-steer-at'), new Date().toISOString());
+            writeFileSync(join(stateDir, 'ralph-continue-steer.lock'), `${process.pid}`);
+            const result = clearModeStateFile('ralph', tempDir, 'session-runtime-cleanup');
+            expect(result).toBe(true);
+            expect(existsSync(join(sessionDir, 'ralph-state.json'))).toBe(false);
+            expect(existsSync(join(sessionDir, 'ralph-stop-breaker.json'))).toBe(false);
+            expect(existsSync(join(stateDir, 'ralph-stop-breaker.json'))).toBe(false);
+            expect(existsSync(join(stateDir, 'ralph-last-steer-at'))).toBe(false);
+            expect(existsSync(join(stateDir, 'ralph-continue-steer.lock'))).toBe(false);
         });
         it('should return true when file does not exist (already absent)', () => {
             const result = clearModeStateFile('ralph', tempDir);

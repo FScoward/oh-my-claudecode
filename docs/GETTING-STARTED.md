@@ -28,7 +28,7 @@ OMC ships two surfaces and they are designed to coexist:
 | Surface | What you get | Recommended install |
 |---|---|---|
 | **Claude Code plugin** (`oh-my-claudecode@omc`) | In-session skills, agents, hooks, statusline, MCP servers — the `/autopilot`, `/ralph`, `/ultrawork`, `/team` slash commands | Marketplace plugin install (Step 1–2 below) |
-| **Terminal CLI** (`omc` binary, package `oh-my-claude-sisyphus`) | Shell commands: `omc setup`, `omc update`, `omc team`, `omc ask`, `omc autoresearch`, etc. | `npm i -g oh-my-claude-sisyphus@latest` |
+| **Terminal CLI** (`omc` binary, package `oh-my-claude-sisyphus`) | Shell commands: `omc setup`, `omc update`, `omc team`, `omc ask`, and a hard-deprecated `omc autoresearch` shim | `npm i -g oh-my-claude-sisyphus@latest` |
 
 Most users want **both**: the plugin for the in-session experience, and the npm CLI for shell-side automation and updates. Running them in parallel is fully supported — `omc update` and `omc setup` are idempotent and detect the plugin install to avoid duplicating in-session skills (#2252).
 
@@ -57,6 +57,13 @@ If you want `omc setup`, `omc update`, `omc team`, `omc ask`, etc. on your shell
 ```bash
 npm i -g oh-my-claude-sisyphus@latest
 ```
+
+> **Known npm warning:** npm may print `deprecated prebuild-install@7.1.3` during this CLI install.
+> The warning currently comes from the upstream `better-sqlite3` native-addon dependency
+> (`better-sqlite3 -> prebuild-install`); `prebuild-install@7.1.3` is still the latest
+> published version, so there is no safe repo-side dependency bump or override to remove it
+> yet. The warning is tracked in [#2913](https://github.com/Yeachan-Heo/oh-my-claudecode/issues/2913)
+> and does not by itself mean the OMC CLI install failed.
 
 Both can be installed at the same time. The CLI auto-detects the plugin install and will not double-register skills under `~/.claude/skills/` (if you previously hit the duplicate-skill bug, run `omc update` once on 4.11.2+ — it self-heals leftover standalone skills that the plugin now provides via `prunePluginDuplicateSkills`).
 
@@ -231,7 +238,7 @@ These keywords invoke a single appropriate agent directly, without running the f
 ### Next steps
 
 - [Configuration](#configuration) - Adjust agent models and features for your project
-- [Concepts](/docs/concepts) - Understand the relationship between agents, skills, and hooks
+- [Architecture](./ARCHITECTURE.md) - Understand the relationship between agents, skills, and hooks
 
 ---
 
@@ -280,9 +287,34 @@ Defaults → User config (~/.config/claude-omc/config.jsonc)
     "search": ["search", "find", "locate"],
     "analyze": ["analyze", "investigate", "examine"],
     "ultrathink": ["ultrathink", "think", "reason"]
+  },
+
+  // Optional prompt-level company context contract
+  "companyContext": {
+    "tool": "mcp__vendor__get_company_context",
+    "onError": "warn"
   }
 }
 ```
+
+### Company context via MCP
+
+If your organization exposes internal guidance through a custom MCP server, configure the selected tool in OMC's standard config files:
+
+```jsonc
+{
+  "companyContext": {
+    "tool": "mcp__vendor__get_company_context",
+    "onError": "warn"
+  }
+}
+```
+
+- Register the MCP server itself through the normal Claude/OMC MCP setup flow.
+- `tool` is the full MCP tool name.
+- `onError` controls prompt-level fallback: `warn` (default), `silent`, or `fail`.
+
+This is an advisory workflow contract, not runtime enforcement. See [company-context-interface.md](./company-context-interface.md) for the full contract.
 
 ### Overriding agent models
 

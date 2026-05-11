@@ -29,9 +29,85 @@ function hasExtendedContextSuffix(modelId) {
 function isSubagentSafeModelId(modelId) {
   return isProviderSpecificModelId(modelId) && !hasExtendedContextSuffix(modelId);
 }
+function isBedrockProviderEnv() {
+  if (process.env.CLAUDE_CODE_USE_BEDROCK === '1') return true;
+  const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || '';
+  if (/^((us|eu|ap|global)\.anthropic\.|anthropic\.claude)/i.test(modelId)) return true;
+  if (
+    /^arn:aws(-[^:]+)?:bedrock:/i.test(modelId)
+    && /:(inference-profile|application-inference-profile)\//i.test(modelId)
+    && modelId.toLowerCase().includes('claude')
+  ) {
+    return true;
+  }
+  return false;
+}
+function isVertexProviderEnv() {
+  if (process.env.CLAUDE_CODE_USE_VERTEX === '1') return true;
+  const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || '';
+  return !!modelId && modelId.toLowerCase().startsWith('vertex_ai/');
+}
+function getActiveModelIds() {
+  return [process.env.CLAUDE_MODEL || '', process.env.ANTHROPIC_MODEL || ''].filter(Boolean);
+}
+function isNormalClaudeModelId(modelId) {
+  const lower = (modelId || '').toLowerCase();
+  return Boolean(lower) && lower.includes('claude') && !isProviderSpecificModelId(modelId);
+}
+function hasNormalClaudeActiveModel() {
+  return getActiveModelIds().some(isNormalClaudeModelId);
+}
+function isConfigForceInheritProxyEnv() {
+  const config = loadOmcConfig();
+  return config.routing?.forceInherit === true && !hasNormalClaudeActiveModel();
+}
+function isNonClaudeProviderEnv() {
+  if (isBedrockProviderEnv() || isVertexProviderEnv()) return true;
+  const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || '';
+  if (modelId && !modelId.toLowerCase().includes('claude')) return true;
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+  if (baseUrl && !baseUrl.includes('anthropic.com')) return true;
+  return isConfigForceInheritProxyEnv();
+}
+function acceptsProxyAnthropicDefaultTierValue(key, value) {
+  return key.startsWith('ANTHROPIC_DEFAULT_')
+    && Boolean(value)
+    && isNonClaudeProviderEnv()
+    && !isBedrockProviderEnv()
+    && !isVertexProviderEnv();
+}
 const TIER_ALIASES = new Set(['sonnet', 'opus', 'haiku']);
 function isTierAlias(modelId) {
   return TIER_ALIASES.has((modelId || '').toLowerCase());
+}
+// Resolution chain for tier alias → subagent-safe model ID.
+// Order mirrors src/config/models.ts:TIER_ENV_KEYS with OMC_SUBAGENT_MODEL as top-priority override.
+// OMC_SUBAGENT_MODEL at position 0 wins for ALL tiers — tier-specific vars are only
+// reached when it is unset or fails isSubagentSafeModelId validation.
+// OMC_MODEL_* is intentionally excluded: those are OMC-internal vars that the OMC bridge
+// reads for its own routing, but CC itself does not read them when resolving tier aliases
+// (sonnet/haiku/opus). Allowing OMC_MODEL_* as proof would let the hook pass while CC
+// still fails to route the alias, reintroducing the downstream deadlock this gate prevents.
+const TIER_TO_DEFAULT_ENV_KEYS = {
+  haiku:  ['OMC_SUBAGENT_MODEL', 'CLAUDE_CODE_BEDROCK_HAIKU_MODEL',  'ANTHROPIC_DEFAULT_HAIKU_MODEL'],
+  sonnet: ['OMC_SUBAGENT_MODEL', 'CLAUDE_CODE_BEDROCK_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL'],
+  opus:   ['OMC_SUBAGENT_MODEL', 'CLAUDE_CODE_BEDROCK_OPUS_MODEL',   'ANTHROPIC_DEFAULT_OPUS_MODEL'],
+};
+function resolveTierAliasToSafeModel(tierAlias) {
+  const keys = TIER_TO_DEFAULT_ENV_KEYS[(tierAlias || '').toLowerCase()];
+  if (!keys) return '';
+  for (const key of keys) {
+    const value = (process.env[key] || '').trim();
+    // CC-native vars (ANTHROPIC_DEFAULT_* and CLAUDE_CODE_BEDROCK_*) are read by CC's own
+    // model resolution, which handles [1m] suffixes correctly for explicit model= calls.
+    // OMC-internal vars (OMC_SUBAGENT_MODEL, OMC_MODEL_*) are not read by CC, so a [1m]
+    // value there is not a valid routing proof — keep the stricter isSubagentSafeModelId check.
+    const isAnthropicDefaultTierVar = key.startsWith('ANTHROPIC_DEFAULT_');
+    const isNativeCcVar = isAnthropicDefaultTierVar || key.startsWith('CLAUDE_CODE_BEDROCK_');
+    const validator = isNativeCcVar ? isProviderSpecificModelId : isSubagentSafeModelId;
+    if (value && (validator(value) || acceptsProxyAnthropicDefaultTierValue(key, value))) return value;
+  }
+  return '';
 }
 /** Map a bare Anthropic model ID to its CC tier alias (sonnet/opus/haiku), or null if unrecognised. */
 function normalizeToCcAlias(model) {
@@ -81,6 +157,152 @@ function readAgentDefinitionModel(subagentType) {
   }
 }
 
+
+const SLOP_RISK_TOOL_NAMES = new Set([
+  'Task',
+  'TaskCreate',
+  'TaskUpdate',
+  'Agent',
+  'Bash',
+  'Edit',
+  'MultiEdit',
+  'Write',
+  'NotebookEdit',
+]);
+const SLOP_FALLBACK_LANGUAGE_PATTERN = /\b(?:fallback|fall\s+back|workaround|work\s+around)\b/i;
+const SLOP_FALLBACK_ACTION_PATTERNS = [
+  /\b(?:add|build|create|implement|introduce|make|patch|use|using|write)\s+(?:an?\s+|the\s+)?(?:fallback|workaround)\b/i,
+  /\b(?:fallback|workaround)\s+(?:layer|path|handler|shim|patch|implementation|mechanism|mode)\b/i,
+  /\bworkaround\s+(?:it|this|that|the|a|an)\b/i,
+  /\b(?:fall\s+back|fallback)\s+(?:to|on|onto)\b/i,
+  /\bwork\s+around\s+(?:it|this|that|the|a|an)\b/i,
+  /\bwork\s+around\s+(?!(?:it|this|that|the|a|an)\b)(?:[a-z0-9][\w-]*\s+){0,5}[a-z0-9][\w-]*\b/i,
+  /(?:^|[\s"'`=:/\\])[\w.-]*(?:fallback|workaround)[\w.-]*\.(?:cjs|js|mjs|py|sh|ts|tsx)\b/i,
+];
+const SLOP_BENIGN_TECHNICAL_PATTERNS = [
+  /\bfail[-\s]?soft\s+fallback(?:\s+(?:value|behavior|behaviour|result|semantics?))?\b/i,
+  /\bfallback\s+(?:value|variable|parameter|argument|option|setting|config(?:uration)?|default)\b/i,
+  /\bfallback\s+to\s+(?:the\s+)?default(?:\s+(?:config(?:uration)?|settings?|value|behavior|behaviour|option))?\b/i,
+  /\b(?:workaround|work\s+around)\s+for\s+(?:commit|change|issue|bug|regression|version|release|pr|pull\s+request|#[0-9]+|[a-f0-9]{7,40}\b)/i,
+  /\b(?:memory|sql|sqlite|mysql|postgres(?:ql)?|typescript|node|browser|runtime)\s+workaround\b/i,
+];
+const SLOP_DOC_CONTEXT_PATTERN = /(?:^|[/\\])(?:docs?|documentation|guides?|instructions?|prompts?|\.om[ctx])(?:[/\\]|$)|\.(?:md|mdx|txt|rst)$/i;
+const SLOP_SELF_REFERENCE_PATH_PATTERN = /(?:^|[/\\])(?:pre-tool-enforcer(?:\.mjs)?|pre-tool-enforcer\.test\.ts)(?:$|[/\\])/i;
+
+function collectStringValues(value, output = [], depth = 0) {
+  if (depth > 5 || output.length > 100) return output;
+  if (typeof value === 'string') {
+    output.push(value);
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringValues(item, output, depth + 1);
+    return output;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      // Skip hook/runtime metadata so warnings are driven by user-authored tool intent.
+      if (/^(cwd|directory|session_?id|transcript_?path|hook_event_name)$/i.test(key)) continue;
+      collectStringValues(child, output, depth + 1);
+    }
+  }
+  return output;
+}
+
+function collectLikelyPathValues(value, output = [], depth = 0) {
+  if (depth > 5 || output.length > 100 || !value || typeof value !== 'object') return output;
+  if (Array.isArray(value)) {
+    for (const item of value) collectLikelyPathValues(item, output, depth + 1);
+    return output;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (typeof child === 'string' && /(?:^|_)(?:file_?path|path|filename|target|command)$/i.test(key)) {
+      output.push(child);
+      continue;
+    }
+    collectLikelyPathValues(child, output, depth + 1);
+  }
+  return output;
+}
+
+function stripSlopQuotedAndCodeContexts(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, '\n')
+    .replace(/`[^`\r\n]*`/g, ' ')
+    .replace(/(["'])(?:\\.|(?!\1)[^\\\r\n])*\1/g, ' ');
+}
+
+function splitSlopInspectionSegments(text) {
+  return text
+    .split(/[\r\n!?;]+/)
+    .map(segment => segment.trim())
+    .filter(Boolean);
+}
+
+function removeBenignTechnicalSlopFallbackSpans(text) {
+  return SLOP_BENIGN_TECHNICAL_PATTERNS.reduce(
+    (result, pattern) => {
+      const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+      return result.replace(new RegExp(pattern.source, flags), ' ');
+    },
+    text,
+  );
+}
+
+function hasSlopFallbackActionShape(text) {
+  const strippedText = stripSlopQuotedAndCodeContexts(text);
+  return splitSlopInspectionSegments(strippedText).some(segment => (
+    SLOP_FALLBACK_ACTION_PATTERNS.some(pattern => (
+      pattern.test(removeBenignTechnicalSlopFallbackSpans(segment))
+    ))
+  ));
+}
+
+function isSelfReferentialSlopContext(toolInput) {
+  return collectLikelyPathValues(toolInput).some(value => SLOP_SELF_REFERENCE_PATH_PATTERN.test(value));
+}
+
+function isDocumentationSlopContext(toolInput) {
+  const pathLikeValues = collectLikelyPathValues(toolInput);
+  return pathLikeValues.some(value => SLOP_DOC_CONTEXT_PATTERN.test(value));
+}
+
+function shouldWarnForSlopFallbackLanguage(data, toolName, inspectedText) {
+  if (!SLOP_RISK_TOOL_NAMES.has(toolName)) return false;
+  if (!SLOP_FALLBACK_LANGUAGE_PATTERN.test(inspectedText)) return false;
+
+  const toolInput = data.toolInput || data.tool_input || {};
+  if (isSelfReferentialSlopContext(toolInput)) return false;
+  if (isDocumentationSlopContext(toolInput)) {
+    return false;
+  }
+
+  return hasSlopFallbackActionShape(inspectedText);
+}
+
+function generateSlopWarning(data, toolName) {
+  const toolInput = data.toolInput || data.tool_input || {};
+  const promptLikeFields = {
+    prompt: data.prompt,
+    userPrompt: data.userPrompt,
+    user_prompt: data.user_prompt,
+    message: data.message,
+  };
+  const inspectedText = collectStringValues(toolInput)
+    .concat(collectStringValues(promptLikeFields))
+    .join('\n');
+  if (!shouldWarnForSlopFallbackLanguage(data, toolName, inspectedText)) return '';
+
+  return '[SLOP WARNING] Detected fallback/workaround language in this tool input. ' +
+    'Do not make potential slop: avoid ad-hoc fallback layers, workaround shims, or environment-specific patches unless explicitly justified. ' +
+    'For architecture concerns, consult the architect for a concrete design first. ' +
+    'If this seems environment-specific, ask the user to confirm constraints before proceeding.';
+}
+
+function combineHookMessages(...messages) {
+  return messages.filter(Boolean).join('\n\n');
+}
+
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
 const MODE_STATE_FILES = [
   'autopilot-state.json',
@@ -93,6 +315,14 @@ const MODE_STATE_FILES = [
   'omc-teams-state.json',
 ];
 const QUIET_LEVEL = getQuietLevel();
+const BUILT_IN_TASK_LIST_TOOL_NAMES = new Set([
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
+  'TaskOutput',
+  'TaskStop',
+]);
 
 function getQuietLevel() {
   const parsed = Number.parseInt(process.env.OMC_QUIET || '0', 10);
@@ -715,18 +945,17 @@ async function main() {
             : claudeModel || anthropicModel;
 
         if (toolModel) {
-          // Allow tier aliases (sonnet/opus/haiku) when OMC_SUBAGENT_MODEL is a valid
-          // provider-specific ID. The Agent tool schema only accepts these short aliases —
-          // full Bedrock/Vertex IDs are rejected by the tool schema, so tier aliases + routing
-          // via OMC_SUBAGENT_MODEL is the only viable explicit-model escape hatch.
-          const subagentModelForAlias = process.env.OMC_SUBAGENT_MODEL || '';
-          if (isTierAlias(toolModel) && isSubagentSafeModelId(subagentModelForAlias)) {
-            // fall through to continue — tier alias is safe when OMC_SUBAGENT_MODEL is a valid provider-specific ID
+          // Allow tier aliases (sonnet/opus/haiku) when a subagent-safe model can be
+          // resolved for that tier. Resolution chain: OMC_SUBAGENT_MODEL (global override)
+          // → CLAUDE_CODE_BEDROCK_*_MODEL → ANTHROPIC_DEFAULT_*_MODEL.
+          if (isTierAlias(toolModel) && resolveTierAliasToSafeModel(toolModel)) {
+            // fall through to continue — tier alias resolves to a safe provider-specific ID
           } else if (!isSubagentSafeModelId(toolModel)) {
-            const subagentModel = process.env.OMC_SUBAGENT_MODEL || '';
-            const guidance = subagentModel
-              ? `Pass model="${subagentModel}" (your configured OMC_SUBAGENT_MODEL value).`
-              : `Remove the \`model\` parameter, or set OMC_SUBAGENT_MODEL=<valid-bedrock-id> and pass that value explicitly.`;
+            const tierUpper = isTierAlias(toolModel) ? toolModel.toUpperCase() : '';
+            const derivedTier = tierUpper || (normalizeToCcAlias(toolModel) || '').toUpperCase();
+            const guidance = derivedTier
+              ? `Set ANTHROPIC_DEFAULT_${derivedTier}_MODEL=<valid-bedrock-id> in settings.json env, or set OMC_SUBAGENT_MODEL as a global override.`
+              : `Remove the \`model\` parameter, or set ANTHROPIC_DEFAULT_SONNET_MODEL=<valid-bedrock-id> in settings.json env.`;
             console.log(JSON.stringify({
               continue: true,
               hookSpecificOutput: {
@@ -744,10 +973,11 @@ async function main() {
           // Anthropic model ID (e.g. claude-sonnet-4-6) which is invalid on Bedrock.
           // Fix: pass a tier alias (sonnet/haiku/opus). The Agent tool schema only accepts
           // tier aliases for the model param — full Bedrock IDs are rejected by the schema.
-          // OMC_SUBAGENT_MODEL is used only for guidance; derive the tier alias from it.
-          const subagentModel = process.env.OMC_SUBAGENT_MODEL || '';
-          const tierAlias = normalizeToCcAlias(subagentModel) || normalizeToCcAlias(sessionModel) || 'sonnet';
-          const suggestion = `Pass model="${tierAlias}" explicitly on this ${toolName} call — tier aliases resolve cleanly on Bedrock.`;
+          const tierAlias = normalizeToCcAlias(sessionModel) || 'sonnet';
+          const resolvedSafe = resolveTierAliasToSafeModel(tierAlias);
+          const suggestion = resolvedSafe
+            ? `Pass model="${tierAlias}" explicitly on this ${toolName} call — tier aliases resolve cleanly on Bedrock.`
+            : `Pass model="${tierAlias}" explicitly on this ${toolName} call, and set ANTHROPIC_DEFAULT_${tierAlias.toUpperCase()}_MODEL=<valid-bedrock-id> in settings.json env.`;
           console.log(JSON.stringify({
             continue: true,
             hookSpecificOutput: {
@@ -765,20 +995,15 @@ async function main() {
         // with 400. Detect it here and deny with guidance to retry with an explicit tier alias.
         if (!toolModel && toolInput.subagent_type) {
           const agentDefModel = readAgentDefinitionModel(toolInput.subagent_type);
-          const subagentModel = process.env.OMC_SUBAGENT_MODEL || '';
-          // Only deny when OMC_SUBAGENT_MODEL is configured as a valid provider-specific ID.
+          // Only deny when a safe routing target exists for the derived tier alias.
           // Without a routing target the tier-alias escape hatch doesn't exist, so blocking
           // would strand Claude in a retry loop with no viable path forward.
+          const defTierAlias = agentDefModel ? normalizeToCcAlias(agentDefModel) : null;
+          const resolvedModel = defTierAlias ? resolveTierAliasToSafeModel(defTierAlias) : '';
+          const hasSafeRouting = !!resolvedModel;
           if (agentDefModel && !isSubagentSafeModelId(agentDefModel) && !isTierAlias(agentDefModel)
-              && isSubagentSafeModelId(subagentModel)) {
-            const tierAlias = normalizeToCcAlias(agentDefModel);
-            const guidance = tierAlias
-              ? (subagentModel
-                  ? `Add model="${tierAlias}" to this ${toolName} call — OMC will route it through OMC_SUBAGENT_MODEL (${subagentModel}).`
-                  : `Add model="${tierAlias}" to this ${toolName} call and set OMC_SUBAGENT_MODEL=<valid-bedrock-id>.`)
-              : (subagentModel
-                  ? `Add model="${subagentModel}" (your configured OMC_SUBAGENT_MODEL) explicitly to this ${toolName} call.`
-                  : `Set OMC_SUBAGENT_MODEL=<valid-bedrock-id> and add it as the model parameter on this ${toolName} call.`);
+              && hasSafeRouting) {
+            const guidance = `Add model="${defTierAlias}" to this ${toolName} call — tier aliases resolve to configured provider models (${resolvedModel}).`;
             const agentType = (toolInput.subagent_type).replace(/^oh-my-claudecode:/, '');
             console.log(JSON.stringify({
               continue: true,
@@ -823,7 +1048,7 @@ async function main() {
 
     const todoStatus = getTodoStatus(directory);
 
-    if (toolName === 'Task' || toolName === 'TaskCreate' || toolName === 'TaskUpdate') {
+    if (toolName === 'Task' || toolName === 'Agent') {
       const rawTranscriptPath = data.transcript_path || data.transcriptPath || '';
       const transcriptPath = resolveTranscriptPath(rawTranscriptPath, directory);
       const preflightBlock = evaluateAgentHeavyPreflight({
@@ -836,13 +1061,20 @@ async function main() {
       }
     }
 
+    const slopWarning = generateSlopWarning(data, toolName);
     let message;
-    if (toolName === 'Task' || toolName === 'TaskCreate' || toolName === 'TaskUpdate') {
+    if (BUILT_IN_TASK_LIST_TOOL_NAMES.has(toolName)) {
+      console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+      return;
+    }
+
+    if (toolName === 'Task' || toolName === 'Agent') {
       const toolInput = data.toolInput || data.tool_input || null;
       message = generateAgentSpawnMessage(toolInput, stateDir, todoStatus, sessionId);
     } else {
       message = generateMessage(toolName, todoStatus, modeActive);
     }
+    message = combineHookMessages(slopWarning, message);
 
     if (!message) {
       console.log(JSON.stringify({ continue: true, suppressOutput: true }));

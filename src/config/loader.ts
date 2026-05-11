@@ -24,7 +24,7 @@ import { parseJsonc } from "../utils/jsonc.js";
 import {
   getDefaultTierModels,
   BUILTIN_EXTERNAL_MODEL_DEFAULTS,
-  isNonClaudeProvider,
+  shouldAutoForceInherit,
 } from "./models.js";
 import { normalizeDelegationRole } from "../features/delegation-routing/types.js";
 
@@ -75,6 +75,9 @@ export function buildDefaultConfig(): PluginConfig {
     mcpServers: {
       exa: { enabled: true },
       context7: { enabled: true },
+    },
+    companyContext: {
+      onError: "warn",
     },
     permissions: {
       allowBash: true,
@@ -493,6 +496,14 @@ export function validateTeamConfig(config: PluginConfig): void {
         );
       }
     }
+    if (ops.worktreeMode !== undefined) {
+      const allowed = new Set(["disabled", "off", "detached", "branch", "named"]);
+      if (typeof ops.worktreeMode !== "string" || !allowed.has(ops.worktreeMode)) {
+        throw new Error(
+          `[OMC] team.ops.worktreeMode: invalid value "${String(ops.worktreeMode)}". Allowed: ${[...allowed].join(", ")}`,
+        );
+      }
+    }
   }
 
   const roleRouting = team.roleRouting as Record<string, unknown> | undefined;
@@ -613,7 +624,7 @@ export function loadConfig(): PluginConfig {
   if (
     config.routing?.forceInherit !== true &&
     process.env.OMC_ROUTING_FORCE_INHERIT === undefined &&
-    isNonClaudeProvider()
+    shouldAutoForceInherit()
   ) {
     config.routing = {
       ...config.routing,
@@ -635,6 +646,16 @@ const OMC_STARTUP_COMPACTABLE_SECTIONS = [
   "skills",
   "team_compositions",
 ] as const;
+const OMC_STARTUP_GUIDANCE_MAX_CHARS = 8000;
+const OMC_CONTEXT_FILES_MAX_CHARS = 12000;
+
+function compactBudgetedText(text: string, maxChars: number): string {
+  if (!text || maxChars <= 0) return "";
+  const notice = "\n...[truncated to preserve startup context budget]";
+  if (text.length <= maxChars) return text;
+  if (maxChars <= notice.length) return notice.slice(0, maxChars);
+  return `${text.slice(0, maxChars - notice.length).trimEnd()}${notice}`;
+}
 
 function looksLikeOmcGuidance(content: string): boolean {
   return (
@@ -657,7 +678,7 @@ export function compactOmcStartupGuidance(content: string): string {
 
   for (const section of OMC_STARTUP_COMPACTABLE_SECTIONS) {
     const pattern = new RegExp(
-      `\n*<${section}>[\\s\\S]*?<\/${section}>\n*`,
+      `\n*<${section}>[\\s\\S]*?</${section}>\n*`,
       "g",
     );
     const next = compacted.replace(pattern, "\n\n");
@@ -665,14 +686,17 @@ export function compactOmcStartupGuidance(content: string): string {
     compacted = next;
   }
 
-  if (!removedAny) {
-    return content;
-  }
-
-  return compacted
+  const normalized = compacted
     .replace(/\n{3,}/g, "\n\n")
     .replace(/\n\n---\n\n---\n\n/g, "\n\n---\n\n")
     .trim();
+
+  if (normalized.length <= OMC_STARTUP_GUIDANCE_MAX_CHARS) {
+    return removedAny ? normalized : content;
+  }
+
+  const notice = "\n\n[OMC startup guidance truncated to preserve an 8000-character budget. Read the source file directly for the full document.]";
+  return `${normalized.slice(0, OMC_STARTUP_GUIDANCE_MAX_CHARS - notice.length).trimEnd()}${notice}`;
 }
 
 /**
@@ -717,17 +741,30 @@ export function findContextFiles(startDir?: string): string[] {
  */
 export function loadContextFromFiles(files: string[]): string {
   const contexts: string[] = [];
+  let used = 0;
+  const separator = "\n\n---\n\n";
 
   for (const file of files) {
     try {
       const content = compactOmcStartupGuidance(readFileSync(file, "utf-8"));
-      contexts.push(`## Context from ${file}\n\n${content}`);
+      const contextBlock = `## Context from ${file}\n\n${content}`;
+      const separatorLength = contexts.length > 0 ? separator.length : 0;
+      const remainingBudget = OMC_CONTEXT_FILES_MAX_CHARS - used - separatorLength;
+
+      if (remainingBudget <= 0) break;
+      if (contextBlock.length > remainingBudget) {
+        contexts.push(compactBudgetedText(contextBlock, remainingBudget));
+        break;
+      }
+
+      contexts.push(contextBlock);
+      used += separatorLength + contextBlock.length;
     } catch (error) {
       console.warn(`Warning: Could not read context file ${file}:`, error);
     }
   }
 
-  return contexts.join("\n\n---\n\n");
+  return contexts.join(separator);
 }
 
 /**
@@ -855,6 +892,22 @@ export function generateConfigSchema(): object {
           context7: {
             type: "object",
             properties: { enabled: { type: "boolean" } },
+          },
+        },
+      },
+      companyContext: {
+        type: "object",
+        description: "Prompt-level company-context MCP contract for workflow skills",
+        properties: {
+          tool: {
+            type: "string",
+            description: "Full MCP tool name to call, for example mcp__vendor__get_company_context",
+          },
+          onError: {
+            type: "string",
+            enum: ["warn", "silent", "fail"],
+            default: "warn",
+            description: "How prompt workflows should react when the configured company-context tool call fails",
           },
         },
       },

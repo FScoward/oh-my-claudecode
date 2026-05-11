@@ -12,6 +12,7 @@ import {
   readStdinCache,
   getContextPercent,
   getModelName,
+  getRateLimitsFromStdin,
   stabilizeContextPercent,
 } from "./stdin.js";
 import { parseTranscript } from "./transcript.js";
@@ -28,7 +29,7 @@ import {
   readPrdStateForHud,
   readAutopilotStateForHud,
 } from "./omc-state.js";
-import { getUsage } from "./usage-api.js";
+import { getUsage, getSubscriptionInfo } from "./usage-api.js";
 import { executeCustomProvider } from "./custom-rate-provider.js";
 import { render } from "./render.js";
 import { detectApiKeySource } from "./elements/api-key-source.js";
@@ -36,8 +37,10 @@ import { refreshMissionBoardState } from "./mission-board.js";
 import { sanitizeOutput } from "./sanitize.js";
 import type {
   HudRenderContext,
+  RateLimits,
   SessionHealth,
   SessionSummaryState,
+  UsageResult,
 } from "./types.js";
 import { getRuntimePackageVersion } from "../lib/version.js";
 import { compareVersions } from "../features/auto-update.js";
@@ -61,6 +64,23 @@ function extractSessionIdFromPath(transcriptPath: string): string | null {
   if (!transcriptPath) return null;
   const match = transcriptPath.match(/([0-9a-f-]{36})(?:\.jsonl)?$/i);
   return match ? match[1] : null;
+}
+
+function mergeStdinRateLimits(
+  stdinRateLimits: RateLimits | null,
+  usageResult: UsageResult | null,
+): UsageResult | null {
+  if (!stdinRateLimits) {
+    return usageResult;
+  }
+
+  return {
+    ...(usageResult ?? {}),
+    rateLimits: {
+      ...(usageResult?.rateLimits ?? {}),
+      ...stdinRateLimits,
+    },
+  };
 }
 
 /**
@@ -339,9 +359,15 @@ async function main(watchMode = false, skipInit = false): Promise<void> {
       writeHudState(stateToWrite, cwd, currentSessionId ?? undefined);
     }
 
-    // Fetch rate limits from OAuth API (if available)
+    // Merge Claude Code stdin generic buckets with API/cache-specific fields.
+    // Stdin owns fresher five-hour/seven-day values, while getUsage() may provide
+    // Sonnet/Opus weekly, monthly, extra, stale, and error metadata.
+    const stdinRateLimits = getRateLimitsFromStdin(stdin);
+    const usageResult = config.elements.rateLimits === false ? null : await getUsage();
     const rateLimitsResult =
-      config.elements.rateLimits !== false ? await getUsage() : null;
+      config.elements.rateLimits === false
+        ? null
+        : mergeStdinRateLimits(stdinRateLimits, usageResult);
 
     // Fetch custom rate limit buckets (if configured)
     const customBuckets =
@@ -417,6 +443,16 @@ async function main(watchMode = false, skipInit = false): Promise<void> {
       : null;
     const contextPercent = getContextPercent(stdin);
 
+    // Read subscription info for enterprise detection (best-effort).
+    // Rate-limit rendering must not depend on this metadata being present.
+    const subscriptionInfo = (() => {
+      try {
+        return getSubscriptionInfo() ?? { subscriptionType: null, rateLimitTier: null };
+      } catch {
+        return { subscriptionType: null, rateLimitTier: null };
+      }
+    })();
+
     // Build render context
     const context: HudRenderContext = {
       contextPercent,
@@ -450,6 +486,8 @@ async function main(watchMode = false, skipInit = false): Promise<void> {
       apiKeySource: config.elements.apiKeySource
         ? detectApiKeySource(cwd)
         : null,
+      subscriptionType: subscriptionInfo.subscriptionType,
+      rateLimitTier: subscriptionInfo.rateLimitTier,
       profileName: process.env.CLAUDE_CONFIG_DIR
         ? basename(process.env.CLAUDE_CONFIG_DIR).replace(/^\./, "")
         : null,

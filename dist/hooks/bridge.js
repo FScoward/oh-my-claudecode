@@ -13,12 +13,14 @@
  * ```
  */
 import { pathToFileURL } from "url";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync, } from "fs";
 import { dirname, join } from "path";
 import { resolveToWorktreeRoot, getOmcRoot } from "../lib/worktree-paths.js";
 import { readModeState, writeModeState } from "../lib/mode-state-io.js";
+import { SESSION_END_MODE_STATE_FILES } from "../lib/mode-names.js";
 import { formatOmcCliInvocation } from "../utils/omc-cli-rendering.js";
 import { createSwallowedErrorLogger } from "../lib/swallowed-error.js";
+import { dispatchNotificationInBackground } from "./background-notifications.js";
 import { readCanonicalTeamStateCandidate } from "./team-canonical-state.js";
 // Hot-path imports: needed on every/most hook invocations (keyword-detector, pre/post-tool-use)
 import { removeCodeBlocks, getAllKeywordsWithSizeCheck, applyRalplanGate, sanitizeForKeywordDetection, NON_LATIN_SCRIPT_PATTERN, } from "./keyword-detector/index.js";
@@ -30,8 +32,10 @@ import { compactOmcStartupGuidance, loadConfig } from "../config/loader.js";
 import { activatePromptPrerequisiteState, buildPromptPrerequisiteDenyReason, buildPromptPrerequisiteReminder, clearPromptPrerequisiteState, getPromptPrerequisiteConfig, isPromptPrerequisiteBlockingTool, parsePromptPrerequisiteSections, readPromptPrerequisiteState, recordPromptPrerequisiteProgress, shouldEnforcePromptPrerequisites, } from "./prompt-prerequisites/index.js";
 import { resolveAutopilotPlanPath, resolveOpenQuestionsPlanPath, } from "../config/plan-output.js";
 import { formatAutopilotRuntimeInsight } from "./autopilot/runtime-insight.js";
-import { writeSkillActiveState } from "./skill-state/index.js";
-import { ULTRAWORK_MESSAGE, ULTRATHINK_MESSAGE, SEARCH_MESSAGE, ANALYZE_MESSAGE, TDD_MESSAGE, CODE_REVIEW_MESSAGE, SECURITY_REVIEW_MESSAGE, RALPH_MESSAGE, PROMPT_TRANSLATION_MESSAGE, } from "../installer/hooks.js";
+import { writeSkillActiveState, isCanonicalWorkflowSkill, upsertWorkflowSkillSlot, markWorkflowSkillCompleted, pruneExpiredWorkflowSkillTombstones, readSkillActiveStateNormalized, writeSkillActiveStateCopies, } from "./skill-state/index.js";
+import { parseExplicitWorkflowSlashInvocation } from "./keyword-detector/index.js";
+import { ULTRATHINK_MESSAGE, SEARCH_MESSAGE, ANALYZE_MESSAGE, TDD_MESSAGE, CODE_REVIEW_MESSAGE, SECURITY_REVIEW_MESSAGE, RALPH_MESSAGE, PROMPT_TRANSLATION_MESSAGE, } from "../installer/hooks.js";
+import { getUltraworkMessage } from "./keyword-detector/ultrawork/index.js";
 // Agent dashboard is used in pre/post-tool-use hot path
 import { getAgentDashboard } from "./subagent-tracker/index.js";
 // Session replay recordFileTouch is used in pre-tool-use hot path
@@ -75,6 +79,7 @@ const TEAM_STAGE_ALIASES = {
     fixing: "team-fix",
 };
 const BACKGROUND_AGENT_ID_PATTERN = /agentId:\s*([a-zA-Z0-9_-]+)/;
+const BACKGROUND_BASH_ID_PATTERN = /(?:background (?:bash )?(?:command|process|task).*?(?:id|ID)|bash_id|task_id)[:=]\s*([a-zA-Z0-9_-]+)/i;
 const TASK_OUTPUT_ID_PATTERN = /<task_id>([^<]+)<\/task_id>/i;
 const TASK_OUTPUT_STATUS_PATTERN = /<status>([^<]+)<\/status>/i;
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
@@ -84,6 +89,233 @@ const MODE_CONFIRMATION_SKILL_MAP = {
     autopilot: ["autopilot"],
     ralplan: ["ralplan"],
 };
+const SESSION_START_CONTEXT_BUDGET = 6000;
+const SESSION_START_OMISSION_NOTICE = '[Additional SessionStart context omitted to preserve the 6000-character aggregate budget.]';
+const SESSION_STARTED_MARKER_FILE = "session-started.json";
+const LINUX_BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+function compactBudgetedText(text, maxChars) {
+    const notice = "\n...[truncated to preserve SessionStart context budget]";
+    if (!text || text.length <= maxChars)
+        return text || "";
+    if (maxChars <= notice.length)
+        return notice.slice(0, Math.max(0, maxChars));
+    return `${text.slice(0, maxChars - notice.length).trimEnd()}${notice}`;
+}
+function buildSessionStartAdditionalContext(messages) {
+    if (messages.length === 0)
+        return "";
+    const priorityOrder = [
+        /\[MODEL ROUTING OVERRIDE/,
+        /\[AUTOPILOT MODE RESTORED\]/,
+        /\[ULTRAWORK MODE RESTORED\]/,
+        /\[RALPLAN MODE RESTORED\]/,
+        /\[TEAM MODE RESTORED\]/,
+        /\[ROOT AGENTS\.md LOADED\]/,
+        /\[PENDING TASKS DETECTED\]/,
+    ];
+    const ordered = messages
+        .map((message, index) => {
+        const priority = priorityOrder.findIndex((pattern) => pattern.test(message));
+        return { message, index, priority: priority === -1 ? priorityOrder.length + index : priority };
+    })
+        .sort((a, b) => a.priority - b.priority || a.index - b.index)
+        .map((entry) => entry.message);
+    let used = 0;
+    const selected = [];
+    for (const message of ordered) {
+        const separatorLength = selected.length > 0 ? 1 : 0;
+        if (used + separatorLength + message.length > SESSION_START_CONTEXT_BUDGET) {
+            const remainingBudget = SESSION_START_CONTEXT_BUDGET - used - separatorLength;
+            if (remainingBudget > 0) {
+                selected.push(remainingBudget > 120
+                    ? compactBudgetedText(message, remainingBudget)
+                    : compactBudgetedText(SESSION_START_OMISSION_NOTICE, remainingBudget));
+            }
+            break;
+        }
+        selected.push(message);
+        used += separatorLength + message.length;
+    }
+    return selected.join("\n");
+}
+function readLinuxBootId() {
+    try {
+        if (!existsSync(LINUX_BOOT_ID_PATH))
+            return undefined;
+        const bootId = readFileSync(LINUX_BOOT_ID_PATH, "utf-8").trim();
+        return bootId.length > 0 ? bootId : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+function sessionStateDir(directory, sessionId) {
+    return join(getOmcRoot(directory), "state", "sessions", sessionId);
+}
+function sessionStartedMarkerPath(directory, sessionId) {
+    return join(sessionStateDir(directory, sessionId), SESSION_STARTED_MARKER_FILE);
+}
+function readJsonObject(filePath) {
+    try {
+        if (!existsSync(filePath))
+            return null;
+        const parsed = JSON.parse(readFileSync(filePath, "utf-8"));
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? parsed
+            : null;
+    }
+    catch {
+        return null;
+    }
+}
+function writeSessionStartedMarker(directory, sessionId) {
+    if (!sessionId || !SAFE_SESSION_ID_PATTERN.test(sessionId))
+        return;
+    try {
+        const dir = sessionStateDir(directory, sessionId);
+        mkdirSync(dir, { recursive: true });
+        const marker = {
+            session_id: sessionId,
+            started_at: new Date().toISOString(),
+            cwd: directory,
+            pid: process.pid,
+            // Do not persist process.ppid here: installed hooks run through
+            // scripts/run.cjs, whose short-lived process exits as soon as this
+            // hook returns. Treating that runner PID as owner liveness caused
+            // later SessionStart hooks to falsely clean live session state.
+            boot_id: readLinuxBootId(),
+        };
+        writeFileSync(sessionStartedMarkerPath(directory, sessionId), JSON.stringify(marker, null, 2), {
+            encoding: "utf-8",
+            mode: 0o600,
+        });
+    }
+    catch {
+        // SessionStart markers are best-effort and must never block startup.
+    }
+}
+function removeSessionStartedMarker(directory, sessionId) {
+    if (!sessionId || !SAFE_SESSION_ID_PATTERN.test(sessionId))
+        return;
+    try {
+        const markerPath = sessionStartedMarkerPath(directory, sessionId);
+        if (existsSync(markerPath)) {
+            unlinkSync(markerPath);
+        }
+    }
+    catch {
+        // Best-effort marker cleanup only.
+    }
+}
+function hasSessionEndSummary(directory, sessionId) {
+    return existsSync(join(getOmcRoot(directory), "sessions", `${sessionId}.json`));
+}
+function cleanupSessionModeStateFiles(directory, sessionId) {
+    const dir = sessionStateDir(directory, sessionId);
+    for (const { file } of SESSION_END_MODE_STATE_FILES) {
+        const filePath = join(dir, file);
+        const state = readJsonObject(filePath);
+        // SessionStart reconciliation is intentionally narrower than SessionEnd:
+        // only remove files inside the explicit stale session directory. Do not
+        // touch legacy/global state, even if it is unowned or shares a mode name.
+        if (state?.active === true || file === "skill-active-state.json") {
+            try {
+                unlinkSync(filePath);
+            }
+            catch {
+                // Leave files in place when deletion fails.
+            }
+        }
+    }
+}
+function cleanupMissionStateForSession(directory, sessionId) {
+    const missionStatePath = join(getOmcRoot(directory), "state", "mission-state.json");
+    const parsed = readJsonObject(missionStatePath);
+    if (!Array.isArray(parsed?.missions))
+        return;
+    const before = parsed.missions.length;
+    parsed.missions = parsed.missions.filter((mission) => {
+        if (mission.source !== "session")
+            return true;
+        const missionId = typeof mission.id === "string" ? mission.id : "";
+        return !missionId.includes(sessionId);
+    });
+    if (parsed.missions.length === before)
+        return;
+    try {
+        parsed.updatedAt = new Date().toISOString();
+        writeFileSync(missionStatePath, JSON.stringify(parsed, null, 2));
+    }
+    catch {
+        // Best-effort cleanup only.
+    }
+}
+/**
+ * Return true only when SessionStart has durable abandonment evidence.
+ *
+ * Claude Code SessionStart input currently provides session metadata such as
+ * session_id, transcript_path, cwd, source, model, and agent_type, but no
+ * stable owner process for the interactive session. In installed OMC hooks the
+ * immediate hook parent belongs to scripts/run.cjs and is intentionally
+ * short-lived, so same-boot PID liveness checks are not reliable here. SessionEnd
+ * remains the primary same-boot cleanup path; SessionStart only reconciles
+ * durable leftovers, such as markers from a previous OS boot.
+ */
+function hasDurableAbandonmentEvidence(marker) {
+    const storedBootId = typeof marker.boot_id === "string" ? marker.boot_id : undefined;
+    const currentBootId = readLinuxBootId();
+    if (storedBootId && currentBootId && storedBootId !== currentBootId) {
+        return true;
+    }
+    // Same-boot hard-kill cleanup requires a durable owner signal. Claude Code
+    // does not currently provide one to hooks, so keep active state rather than
+    // guessing from hook-runner process ancestry or transcript metadata.
+    return false;
+}
+async function reconcileAbandonedSessionStarts(directory, currentSessionId) {
+    const sessionsDir = join(getOmcRoot(directory), "state", "sessions");
+    if (!existsSync(sessionsDir))
+        return;
+    let entries;
+    try {
+        entries = readdirSync(sessionsDir);
+    }
+    catch {
+        return;
+    }
+    for (const sessionId of entries) {
+        if (!SAFE_SESSION_ID_PATTERN.test(sessionId) || sessionId === currentSessionId)
+            continue;
+        const markerPath = sessionStartedMarkerPath(directory, sessionId);
+        const marker = readJsonObject(markerPath);
+        if (!marker)
+            continue;
+        // Explicit ownership only: the marker must belong to the session directory.
+        if (marker.session_id !== sessionId)
+            continue;
+        // If SessionEnd already wrote its summary, only remove the leftover marker.
+        if (hasSessionEndSummary(directory, sessionId)) {
+            removeSessionStartedMarker(directory, sessionId);
+            continue;
+        }
+        if (!hasDurableAbandonmentEvidence(marker))
+            continue;
+        // Deliberately narrow: clear only OMC session-scoped mode/mission state.
+        // Do not call team runtime shutdown here; SessionStart must not kill tmux PIDs.
+        cleanupSessionModeStateFiles(directory, sessionId);
+        cleanupMissionStateForSession(directory, sessionId);
+        removeSessionStartedMarker(directory, sessionId);
+        try {
+            const remaining = readdirSync(sessionStateDir(directory, sessionId));
+            if (remaining.length === 0) {
+                rmdirSync(sessionStateDir(directory, sessionId));
+            }
+        }
+        catch {
+            // Leave non-empty/unreadable directories untouched.
+        }
+    }
+}
 function getExtraField(input, key) {
     return input[key];
 }
@@ -91,11 +323,37 @@ function getHookToolUseId(input) {
     const value = getExtraField(input, "tool_use_id");
     return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
+function getHookContextString(input, ...keys) {
+    for (const key of keys) {
+        const value = getExtraField(input, key);
+        if (typeof value === "string" && value.trim().length > 0) {
+            return value.trim();
+        }
+    }
+    return undefined;
+}
 function extractAsyncAgentId(toolOutput) {
     if (typeof toolOutput !== "string") {
         return undefined;
     }
     return toolOutput.match(BACKGROUND_AGENT_ID_PATTERN)?.[1];
+}
+function extractBackgroundBashId(toolOutput) {
+    if (typeof toolOutput !== "string") {
+        return undefined;
+    }
+    return toolOutput.match(BACKGROUND_BASH_ID_PATTERN)?.[1];
+}
+function bashLaunchIsBackgroundPending(toolOutput) {
+    if (typeof toolOutput !== "string") {
+        return false;
+    }
+    const normalized = toolOutput.toLowerCase();
+    return normalized.includes("running in the background")
+        || normalized.includes("started in the background")
+        || normalized.includes("background command")
+        || normalized.includes("background process")
+        || Boolean(extractBackgroundBashId(toolOutput));
 }
 function parseTaskOutputLifecycle(toolOutput) {
     if (typeof toolOutput !== "string") {
@@ -117,6 +375,58 @@ function taskLaunchDidFail(toolOutput) {
     }
     const normalized = toolOutput.toLowerCase();
     return normalized.includes("error") || normalized.includes("failed");
+}
+function getSessionStateDir(directory, sessionId) {
+    const stateDir = join(getOmcRoot(directory), "state");
+    if (sessionId && SAFE_SESSION_ID_PATTERN.test(sessionId)) {
+        return join(stateDir, "sessions", sessionId);
+    }
+    return stateDir;
+}
+function getScheduledWakeupStatePath(directory, sessionId) {
+    return join(getSessionStateDir(directory, sessionId), "scheduled-wakeup-state.json");
+}
+function parseWakeupDueAt(toolInput) {
+    if (!toolInput || typeof toolInput !== "object") {
+        return undefined;
+    }
+    const input = toolInput;
+    const absolute = input.due_at ?? input.wakeup_at ?? input.scheduled_for ?? input.deadline_at ?? input.at;
+    if (typeof absolute === "string") {
+        const parsed = new Date(absolute).getTime();
+        if (Number.isFinite(parsed))
+            return new Date(parsed).toISOString();
+    }
+    const delaySeconds = input.seconds ?? input.delay_seconds ?? input.delaySeconds;
+    if (typeof delaySeconds === "number" && Number.isFinite(delaySeconds)) {
+        return new Date(Date.now() + Math.max(0, delaySeconds) * 1000).toISOString();
+    }
+    const delayMs = input.milliseconds ?? input.delay_ms ?? input.delayMs;
+    if (typeof delayMs === "number" && Number.isFinite(delayMs)) {
+        return new Date(Date.now() + Math.max(0, delayMs)).toISOString();
+    }
+    const delayMinutes = input.minutes ?? input.delay_minutes ?? input.delayMinutes;
+    if (typeof delayMinutes === "number" && Number.isFinite(delayMinutes)) {
+        return new Date(Date.now() + Math.max(0, delayMinutes) * 60_000).toISOString();
+    }
+    return undefined;
+}
+function recordScheduledWakeup(directory, sessionId, toolInput) {
+    try {
+        const statePath = getScheduledWakeupStatePath(directory, sessionId);
+        mkdirSync(dirname(statePath), { recursive: true });
+        writeFileSync(statePath, JSON.stringify({
+            active: true,
+            pending: true,
+            status: "pending",
+            session_id: sessionId,
+            created_at: new Date().toISOString(),
+            due_at: parseWakeupDueAt(toolInput),
+        }, null, 2));
+    }
+    catch {
+        // Wakeup state is best-effort; never fail the hook.
+    }
 }
 function getModeStatePaths(directory, modeName, sessionId) {
     const stateDir = join(getOmcRoot(directory), "state");
@@ -571,8 +881,8 @@ function getPromptText(input) {
     }
     return "";
 }
-function isExplicitRalplanSlashInvocation(promptText) {
-    return /^\s*\/(?:oh-my-claudecode:)?ralplan(?:\s|$)/i.test(promptText);
+function isExplicitAskSlashInvocation(promptText) {
+    return /^\s*\/(?:oh-my-claudecode:)?ask\s+(?:claude|codex|gemini)\b/i.test(promptText);
 }
 function activateRalplanStartupState(directory, sessionId) {
     const now = new Date().toISOString();
@@ -585,6 +895,136 @@ function activateRalplanStartupState(directory, sessionId) {
         awaiting_confirmation_set_at: now,
         last_checked_at: now,
     }, directory, sessionId);
+}
+/**
+ * Resolve the on-disk path of the mode-specific state file for a workflow
+ * skill. Returns the session-scoped path when a session id is available, else
+ * the root path. Used to persist `mode_state_path` on the workflow slot so
+ * downstream consumers can locate the mode payload.
+ */
+function resolveWorkflowSlotModeStatePath(directory, skillName, sessionId) {
+    const paths = getModeStatePaths(directory, skillName, sessionId);
+    return paths[0] ?? "";
+}
+/**
+ * Seed (or refresh) a canonical workflow-slot entry in the dual-copy ledger
+ * via the only sanctioned helper, `writeSkillActiveStateCopies()`. Returns
+ * `true` when at least one copy was written, `false` on best-effort failure.
+ */
+function seedWorkflowSlotForSkill(directory, skillName, sessionId, source, parentSkill) {
+    if (!isCanonicalWorkflowSkill(skillName))
+        return false;
+    const normalized = skillName.toLowerCase().replace(/^oh-my-claudecode:/, "");
+    try {
+        const current = readSkillActiveStateNormalized(directory, sessionId);
+        const pruned = pruneExpiredWorkflowSkillTombstones(current);
+        // Resolve mode-state file pointers eagerly so downstream readers can
+        // locate the mode payload without re-deriving the path.
+        const rootStatePath = resolveStatePathSafe("skill-active", directory);
+        const sessionStatePath = sessionId
+            ? resolveSessionStatePathSafe("skill-active", sessionId, directory)
+            : "";
+        const modeStatePath = resolveWorkflowSlotModeStatePath(directory, normalized, sessionId);
+        const slotData = {
+            session_id: sessionId ?? "",
+            mode_state_path: modeStatePath,
+            initialized_mode: normalized,
+            initialized_state_path: rootStatePath,
+            initialized_session_state_path: sessionStatePath,
+            source,
+        };
+        if (parentSkill !== undefined) {
+            slotData.parent_skill = parentSkill;
+        }
+        const next = upsertWorkflowSkillSlot(pruned, normalized, slotData);
+        return writeSkillActiveStateCopies(directory, next, sessionId);
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Idempotently confirm a workflow slot — refreshes `last_confirmed_at` when
+ * the slot is live. No-op when the slot is missing or already tombstoned.
+ */
+function confirmWorkflowSlot(directory, skillName, sessionId) {
+    if (!isCanonicalWorkflowSkill(skillName))
+        return false;
+    const normalized = skillName.toLowerCase().replace(/^oh-my-claudecode:/, "");
+    try {
+        const current = readSkillActiveStateNormalized(directory, sessionId);
+        const slot = current.active_skills[normalized];
+        if (!slot || slot.completed_at)
+            return false;
+        const next = upsertWorkflowSkillSlot(current, normalized, {
+            last_confirmed_at: new Date().toISOString(),
+        });
+        return writeSkillActiveStateCopies(directory, next, sessionId);
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Soft-tombstone a workflow slot on completion. The slot is retained until
+ * the TTL pruner removes it, so late-arriving stop hooks see consistent
+ * state.
+ */
+function tombstoneWorkflowSlot(directory, skillName, sessionId) {
+    if (!isCanonicalWorkflowSkill(skillName))
+        return false;
+    const normalized = skillName.toLowerCase().replace(/^oh-my-claudecode:/, "");
+    try {
+        const current = readSkillActiveStateNormalized(directory, sessionId);
+        if (!current.active_skills[normalized])
+            return false;
+        const next = markWorkflowSkillCompleted(current, normalized);
+        return writeSkillActiveStateCopies(directory, next, sessionId);
+    }
+    catch {
+        return false;
+    }
+}
+function resolveStatePathSafe(stateName, directory) {
+    try {
+        // Lazy resolve to avoid a circular import; same module is imported in
+        // skill-state via the mode-paths registry.
+        return join(getOmcRoot(directory), "state", `${stateName}-state.json`);
+    }
+    catch {
+        return "";
+    }
+}
+function resolveSessionStatePathSafe(stateName, sessionId, directory) {
+    try {
+        return join(getOmcRoot(directory), "state", "sessions", sessionId, `${stateName}-state.json`);
+    }
+    catch {
+        return "";
+    }
+}
+/**
+ * Mode-specific seeding entrypoints invoked alongside the workflow slot when
+ * the user issues an explicit slash command. Each branch is a no-op when the
+ * mode does not require pre-skill state (e.g. `team`, where the team skill
+ * itself owns initial state via worker spawning).
+ */
+async function seedModeStateForExplicitWorkflowSlash(skill, directory, promptText, sessionId) {
+    switch (skill) {
+        case "ralplan":
+            activateRalplanStartupState(directory, sessionId);
+            return;
+        case "autopilot":
+            await seedAutopilotStartupState(directory, promptText, sessionId);
+            return;
+        default:
+            // ralph / ultrawork / team / ultraqa / deep-interview / self-improve
+            // own their state activation inside their own Skill PostToolUse handlers.
+            // Pre-Skill seeding for these would clobber existing in-flight state
+            // (e.g. nested `autopilot → ralph`); the workflow slot alone is enough
+            // to keep stop-hook enforcement from premature termination.
+            return;
+    }
 }
 /**
  * Process keyword detection hook
@@ -601,23 +1041,43 @@ async function processKeywordDetector(input) {
     if (!promptText) {
         return { continue: true };
     }
+    // `/ask <provider> ...` delegates the remainder of the prompt to an
+    // external advisor. Do not interpret magic keywords inside that payload as
+    // instructions for the current Claude Code session.
+    if (isExplicitAskSlashInvocation(promptText)) {
+        return { continue: true };
+    }
     // Remove code blocks to prevent false positives
     const cleanedText = removeCodeBlocks(promptText);
     const sessionId = input.sessionId;
     const directory = resolveToWorktreeRoot(input.directory);
     const messages = [];
-    const explicitRalplanSlashInvocation = isExplicitRalplanSlashInvocation(promptText);
-    if (explicitRalplanSlashInvocation) {
-        activateRalplanStartupState(directory, sessionId);
-        return {
-            continue: true,
-            hookSpecificOutput: {
-                hookEventName: "UserPromptSubmit",
-                additionalContext: `[RALPLAN INIT] Explicit /ralplan invoke detected during UserPromptSubmit.\n` +
-                    `ralplan state is armed for startup and marked awaiting confirmation, so the stop hook will not block this initialization path.\n` +
-                    `Proceed immediately with the consensus planning workflow for:\n${promptText}`,
-            },
-        };
+    // Unified explicit slash invocation handler — covers all 8 canonical
+    // workflow skills (autopilot, ralph, team, ultrawork, ultraqa,
+    // deep-interview, ralplan, self-improve). Seeds the workflow slot via the
+    // sanctioned dual-copy helper BEFORE the Skill tool fires, and seeds the
+    // mode-specific state file when the mode requires pre-Skill state. The
+    // ralplan path additionally returns the legacy [RALPLAN INIT] context
+    // injection so existing routing tests remain green.
+    const explicitSlash = parseExplicitWorkflowSlashInvocation(promptText);
+    if (explicitSlash) {
+        seedWorkflowSlotForSkill(directory, explicitSlash.skill, sessionId, "prompt-submit:explicit-slash");
+        await seedModeStateForExplicitWorkflowSlash(explicitSlash.skill, directory, promptText, sessionId);
+        if (explicitSlash.skill === "ralplan") {
+            return {
+                continue: true,
+                hookSpecificOutput: {
+                    hookEventName: "UserPromptSubmit",
+                    additionalContext: `[RALPLAN INIT] Explicit /ralplan invoke detected during UserPromptSubmit.\n` +
+                        `ralplan state is armed for startup and marked awaiting confirmation, so the stop hook will not block this initialization path.\n` +
+                        `Proceed immediately with the consensus planning workflow for:\n${promptText}`,
+                },
+            };
+        }
+        // For non-ralplan workflow slash invocations, fall through so the regular
+        // keyword pipeline still emits the mode message constants and routes
+        // through the normal activation path. The workflow slot is already armed
+        // so the stop-hook will treat the upcoming Skill invocation as authorized.
     }
     // Record prompt submission time in HUD state
     try {
@@ -734,7 +1194,7 @@ async function processKeywordDetector(input) {
                 if (activated) {
                     markModeAwaitingConfirmation(directory, sessionId, 'ultrawork');
                 }
-                messages.push(ULTRAWORK_MESSAGE);
+                messages.push(getUltraworkMessage(getHookContextString(input, "agentName", "agent_name"), getHookContextString(input, "model", "modelId", "model_id")));
                 break;
             }
             case "ultrathink":
@@ -865,14 +1325,11 @@ async function processPersistentMode(input) {
                 }
                 if (shouldSendIdleNotification(stateDir, sessionId, idleRepoState)) {
                     recordIdleNotificationSent(stateDir, sessionId, idleRepoState);
-                    const logSessionIdleNotifyFailure = createSwallowedErrorLogger('hooks.bridge session-idle notification failed');
-                    import("../notifications/index.js")
-                        .then(({ notify }) => notify("session-idle", {
+                    dispatchNotificationInBackground("session-idle", {
                         sessionId,
                         projectPath: directory,
                         profileName: process.env.OMC_NOTIFY_PROFILE,
-                    }).catch(logSessionIdleNotifyFailure))
-                        .catch(logSessionIdleNotifyFailure);
+                    });
                 }
             }
             // IMPORTANT: Do NOT clean up reply-listener/session-registry on Stop hooks.
@@ -935,6 +1392,8 @@ When team verification passes or cancel is requested, allow terminal cleanup beh
 async function processSessionStart(input) {
     const sessionId = input.sessionId;
     const directory = resolveToWorktreeRoot(input.directory);
+    writeSessionStartedMarker(directory, sessionId);
+    await reconcileAbandonedSessionStarts(directory, sessionId);
     // Lazy-load session-start dependencies
     const { initSilentAutoUpdate } = await import("../features/auto-update.js");
     const { readAutopilotState } = await import("./autopilot/index.js");
@@ -945,14 +1404,11 @@ async function processSessionStart(input) {
     initSilentAutoUpdate();
     // Send session-start notification (non-blocking, swallows errors)
     if (sessionId) {
-        const logSessionStartNotifyFailure = createSwallowedErrorLogger('hooks.bridge session-start notification failed');
-        import("../notifications/index.js")
-            .then(({ notify }) => notify("session-start", {
+        dispatchNotificationInBackground("session-start", {
             sessionId,
             projectPath: directory,
             profileName: process.env.OMC_NOTIFY_PROFILE,
-        }).catch(logSessionStartNotifyFailure))
-            .catch(logSessionStartNotifyFailure);
+        });
         // Wake OpenClaw gateway for session-start (non-blocking)
         _openclaw.wake("session-start", { sessionId, projectPath: directory });
     }
@@ -1146,9 +1602,18 @@ Please continue working on these tasks.
 
 [MODEL ROUTING OVERRIDE — NON-STANDARD PROVIDER DETECTED]
 
-This environment uses a non-standard model provider (AWS Bedrock, Google Vertex AI, or a proxy).
-Do NOT pass the \`model\` parameter on Task/Agent calls. Omit it entirely so agents inherit the parent session's model.
-The CLAUDE.md instruction "Pass model on Task calls: haiku, sonnet, opus" does NOT apply here.
+This environment uses a non-standard model provider (AWS Bedrock, Google Vertex AI, or a proxy such as CC Switch / LiteLLM).
+
+How to pass \`model\` on Task/Agent calls:
+- Prefer a tier alias: \`model: "sonnet"\`, \`model: "opus"\`, or \`model: "haiku"\`. OMC's pre-tool enforcer resolves these to provider-safe IDs when one of these env vars is set: \`ANTHROPIC_DEFAULT_SONNET_MODEL\` (and sibling \`ANTHROPIC_DEFAULT_OPUS_MODEL\` / \`ANTHROPIC_DEFAULT_HAIKU_MODEL\`), \`CLAUDE_CODE_BEDROCK_SONNET_MODEL\` (and sibling \`CLAUDE_CODE_BEDROCK_OPUS_MODEL\` / \`CLAUDE_CODE_BEDROCK_HAIKU_MODEL\`), or \`OMC_SUBAGENT_MODEL\`.
+- If none of those env vars are configured, the enforcer will deny the tier alias with an env-var configuration hint — set one of them in your \`settings.json\` env or shell profile.
+- The enforcer denies tier aliases it cannot resolve. It also denies provider-specific IDs that carry a \`[1m]\` context-window suffix or otherwise fail subagent-safe validation (sub-agents cannot inherit \`[1m]\`). Valid provider-specific IDs without extended-context suffixes are allowed.
+
+When the session model carries a \`[1m]\` suffix, passing an explicit \`model\` is REQUIRED — omitting it will be denied (sub-agents cannot inherit the \`[1m]\` suffix). Use a tier alias (requires resolver env vars above); the Agent tool schema does not accept provider-specific IDs, so tier aliases are the only valid option.
+
+When the session model has no \`[1m]\` suffix, omitting \`model\` is safe UNLESS a custom sub-agent definition pins a bare Anthropic model ID (e.g. \`model: claude-sonnet-4-6\` in agent frontmatter). When resolver env vars are configured, the enforcer will deny that call with tier-alias guidance; when they are absent, the call is not denied by the enforcer but will fail at the provider. Either way, custom sub-agents should pin tier aliases (not bare Anthropic IDs) in their frontmatter. Shipped OMC agents already do this and are unaffected.
+
+The CLAUDE.md instruction "Pass model on Task calls: haiku, sonnet, opus" applies here — subject to the resolution prerequisites above.
 
 </system-reminder>`);
         }
@@ -1159,7 +1624,7 @@ The CLAUDE.md instruction "Pass model on Task calls: haiku, sonnet, opus" does N
     if (messages.length > 0) {
         return {
             continue: true,
-            message: messages.join("\n"),
+            message: buildSessionStartAdditionalContext(messages),
         };
     }
     return { continue: true };
@@ -1176,15 +1641,12 @@ export function dispatchAskUserQuestionNotification(sessionId, directory, toolIn
         .map((q) => q.question || "")
         .filter(Boolean)
         .join("; ") || "User input requested";
-    const logAskUserQuestionNotifyFailure = createSwallowedErrorLogger('hooks.bridge ask-user-question notification failed');
-    import("../notifications/index.js")
-        .then(({ notify }) => notify("ask-user-question", {
+    dispatchNotificationInBackground("ask-user-question", {
         sessionId,
         projectPath: directory,
         question: questionText,
         profileName: process.env.OMC_NOTIFY_PROFILE,
-    }).catch(logAskUserQuestionNotifyFailure))
-        .catch(logAskUserQuestionNotifyFailure);
+    });
 }
 /** @internal Object wrapper so tests can spy on the dispatch call. */
 export const _notify = {
@@ -1282,6 +1744,14 @@ function processPreToolUse(input) {
     if (promptPrerequisiteProgress?.isComplete) {
         preToolMessages.push("[PROMPT PREREQUISITES COMPLETE] Required context tools/files were read. Editing and agent delegation are unblocked.");
     }
+    // NOTE: DEAD CODE in production — kept only for Vitest-driven regression coverage.
+    // Production PreToolUse is wired in `hooks/hooks.json` to
+    // `scripts/pre-tool-enforcer.mjs` (NOT this bridge). This block is reachable
+    // only via `processHook('pre-tool-use', ...)` which is called from tests under
+    // src/**/__tests__/. The emitted message here is kept wording-aligned with the
+    // enforcer to prevent accidental drift, but must NOT be relied on to shape LLM
+    // behavior in production. Tracked for deletion — see the Open Questions entry
+    // at `.omc/plans/open-questions.md` under the model-routing alignment section.
     // Force-inherit: deny Task/Agent calls that carry a `model` parameter when
     // forceInherit is enabled (Bedrock, Vertex, CC Switch, etc.).
     // Claude Code's hook protocol does not support modifiedInput, so we cannot
@@ -1297,7 +1767,7 @@ function processPreToolUse(input) {
                 // Use permissionDecision:"deny" — the only PreToolUse mechanism
                 // Claude Code supports for blocking a specific tool call with
                 // feedback. modifiedInput is NOT supported by the hook protocol.
-                const denyReason = `[MODEL ROUTING] This environment uses a non-standard provider (Bedrock/Vertex/proxy). Do NOT pass the \`model\` parameter on ${input.toolName} calls — remove \`model\` and retry so agents inherit the parent session's model. The model "${inputModel}" is not valid for this provider.`;
+                const denyReason = `[MODEL ROUTING] This environment uses a non-standard provider (Bedrock/Vertex/proxy). Omit the \`model\` parameter on ${input.toolName} calls so agents inherit the parent session's model. The model "${inputModel}" was rejected.`;
                 return {
                     continue: true,
                     hookSpecificOutput: {
@@ -1379,6 +1849,16 @@ function processPreToolUse(input) {
                 if (isConsensusPlanningSkillInvocation(skillName, input.toolInput)) {
                     activateRalplanState(directory, input.sessionId);
                 }
+                // Workflow-slot ledger: when the Skill tool is invoked for one of the
+                // 8 canonical workflow skills, ensure the slot is present and freshly
+                // confirmed. Seed first (idempotent — preserves existing fields when
+                // the slot was already armed during UserPromptSubmit), then refresh
+                // `last_confirmed_at` so stop-hook reconciliation can distinguish a
+                // truly idle workflow from an in-flight one.
+                if (isCanonicalWorkflowSkill(skillName)) {
+                    seedWorkflowSlotForSkill(directory, skillName, input.sessionId, "pre-tool:skill");
+                    confirmWorkflowSlot(directory, skillName, input.sessionId);
+                }
             }
             catch {
                 // Skill-state/state-sync writes are best-effort; don't fail the hook on error.
@@ -1393,16 +1873,13 @@ function processPreToolUse(input) {
         const agentName = agentType?.includes(":")
             ? agentType.split(":").pop()
             : agentType;
-        const logAgentCallNotifyFailure = createSwallowedErrorLogger('hooks.bridge agent-call notification failed');
-        import("../notifications/index.js")
-            .then(({ notify }) => notify("agent-call", {
+        dispatchNotificationInBackground("agent-call", {
             sessionId: input.sessionId,
             projectPath: directory,
             agentName,
             agentType,
             profileName: process.env.OMC_NOTIFY_PROFILE,
-        }).catch(logAgentCallNotifyFailure))
-            .catch(logAgentCallNotifyFailure);
+        });
     }
     // Warn about pkill -f self-termination risk (issue #210)
     // Matches: pkill -f, pkill -9 -f, pkill --full, etc.
@@ -1450,6 +1927,20 @@ function processPreToolUse(input) {
                 ?? `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             addBackgroundTask(taskId, toolInput.description, toolInput.subagent_type, directory, input.sessionId);
         }
+    }
+    // Track background Bash invocations too. Ralph's Stop hook uses this
+    // session-owned pending-work signal to avoid reinforcing while Claude Code is
+    // expected to notify when the background command finishes.
+    if (input.toolName === "Bash") {
+        const toolInput = (modifiedToolInput ?? input.toolInput);
+        if (toolInput?.run_in_background === true && toolInput.command) {
+            const taskId = getHookToolUseId(input)
+                ?? `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            addBackgroundTask(taskId, toolInput.command, "bash", directory, input.sessionId);
+        }
+    }
+    if ((input.toolName || "").toLowerCase() === "schedulewakeup") {
+        recordScheduledWakeup(directory, input.sessionId, input.toolInput);
     }
     // Track file ownership for Edit/Write tools
     if (input.toolName === "Edit" || input.toolName === "Write") {
@@ -1556,6 +2047,13 @@ async function processPostToolUse(input) {
         if (!currentState || !currentState.active || currentState.skill_name === completingSkill) {
             clearSkillActiveState(directory, input.sessionId);
         }
+        // Workflow-slot ledger: tombstone the canonical workflow slot when its
+        // Skill invocation completes. Soft-tombstoning (rather than hard delete)
+        // preserves the slot until the TTL pruner removes it — late-arriving
+        // stop hooks see consistent state instead of a missing slot.
+        if (skillName && isCanonicalWorkflowSkill(skillName)) {
+            tombstoneWorkflowSlot(directory, skillName, input.sessionId);
+        }
         if (isConsensusPlanningSkillInvocation(skillName, input.toolInput)) {
             deactivateRalplanState(directory, input.sessionId);
         }
@@ -1594,6 +2092,31 @@ async function processPostToolUse(input) {
             }
             else if (description) {
                 completeMostRecentMatchingBackgroundTask(description, directory, failed, agentType, input.sessionId);
+            }
+        }
+    }
+    if (input.toolName === "Bash") {
+        const toolInput = input.toolInput;
+        if (toolInput?.run_in_background === true) {
+            const toolUseId = getHookToolUseId(input);
+            const backgroundBashId = extractBackgroundBashId(input.toolOutput);
+            const command = toolInput.command;
+            if (backgroundBashId) {
+                if (toolUseId) {
+                    remapBackgroundTaskId(toolUseId, backgroundBashId, directory, input.sessionId);
+                }
+                else if (command) {
+                    remapMostRecentMatchingBackgroundTaskId(command, backgroundBashId, directory, "bash", input.sessionId);
+                }
+            }
+            else if (!bashLaunchIsBackgroundPending(input.toolOutput)) {
+                const failed = taskLaunchDidFail(input.toolOutput);
+                if (toolUseId) {
+                    completeBackgroundTask(toolUseId, directory, failed, input.sessionId);
+                }
+                else if (command) {
+                    completeMostRecentMatchingBackgroundTask(command, directory, failed, "bash", input.sessionId);
+                }
             }
         }
     }

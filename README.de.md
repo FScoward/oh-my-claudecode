@@ -13,7 +13,7 @@
 
 _Lernen Sie nicht Claude Code. Nutzen Sie einfach OMC._
 
-[Loslegen](#schnellstart) • [Dokumentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Migrationsleitfaden](docs/MIGRATION.md)
+[Loslegen](#schnellstart) • [Dokumentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Migrationsleitfaden](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -111,7 +111,7 @@ Bei Problemen nach der Aktualisierung leeren Sie den alten Plugin-Cache:
 
 ### Orchestrierungsmodi
 
-Mehrere Strategien für verschiedene Anwendungsfälle — von Team-gestützter Orchestrierung bis token-effizientem Refactoring. [Mehr erfahren →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Mehrere Strategien für verschiedene Anwendungsfälle — von Team-gestützter Orchestrierung bis token-effizientem Refactoring. [Mehr erfahren →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Modus                             | Beschreibung                                                                               | Verwendung                                                                           |
 | --------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
@@ -167,7 +167,7 @@ Umschließen Sie den Handler bei server.py:42 mit try/except ClientDisconnectedE
 ```
 
 **Skill-Verwaltung:** `/skill list | add | remove | edit | search`
-**Auto-Lernen:** `/learner` extrahiert wiederverwendbare Muster mit strengen Qualitätskriterien
+**Auto-Lernen:** `/skillify` extrahiert wiederverwendbare Muster mit strengen Qualitätskriterien
 **Auto-Injektion:** Passende Skills werden automatisch in den Kontext geladen — kein manueller Aufruf nötig
 
 [Vollständige Feature-Liste →](docs/REFERENCE.md)

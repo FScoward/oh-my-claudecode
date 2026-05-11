@@ -31,6 +31,7 @@ import {
   writeRalphState,
   incrementRalphIteration,
   clearRalphState,
+  findPrdPath,
   getPrdCompletionStatus,
   getRalphContext,
   getStory,
@@ -46,7 +47,7 @@ import {
   clearVerificationState,
   type VerificationState,
 } from '../ralph/index.js';
-import { checkIncompleteTodos, getNextPendingTodo, StopContext, isUserAbort, isContextLimitStop, isRateLimitStop, isExplicitCancelCommand, isAuthenticationError } from '../todo-continuation/index.js';
+import { checkIncompleteTodos, getNextPendingTodo, StopContext, isUserAbort, isContextLimitStop, isRateLimitStop, isExplicitCancelCommand, isAuthenticationError, isScheduledWakeupStop } from '../todo-continuation/index.js';
 import { TODO_CONTINUATION_PROMPT } from '../../installer/hooks.js';
 import {
   isAutopilotActive
@@ -57,6 +58,7 @@ import type { TeamPipelinePhase } from '../team-pipeline/types.js';
 import { getActiveAgentSnapshot } from '../subagent-tracker/index.js';
 import type { IdleNotificationRepoState } from './idle-repo-state.js';
 import { truncatePromptForEcho } from '../../lib/truncate-prompt.js';
+import { isModeActive } from '../mode-registry/index.js';
 
 export interface ToolErrorState {
   tool_name: string;
@@ -72,7 +74,7 @@ export interface PersistentModeResult {
   /** Message to inject into context */
   message: string;
   /** Which mode triggered the block */
-  mode: 'ralph' | 'ultrawork' | 'todo-continuation' | 'autopilot' | 'team' | 'ralplan' | 'none';
+  mode: 'ralph' | 'ultrawork' | 'todo-continuation' | 'autopilot' | 'autoresearch' | 'team' | 'ralplan' | 'none';
   /** Additional metadata */
   metadata?: {
     todoCount?: number;
@@ -91,6 +93,18 @@ export interface PersistentModeResult {
 const MAX_TODO_CONTINUATION_ATTEMPTS = 5;
 const CANCEL_SIGNAL_TTL_MS = 30_000;
 const STALE_STATE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+const PENDING_ASYNC_STATE_STALE_MS = 24 * 60 * 60 * 1000;
+const TERMINAL_WORKFLOW_SLOT_MODES = new Set(['autopilot', 'ralph', 'ralplan']);
+const TERMINAL_WORKFLOW_PHASES = new Set([
+  'complete',
+  'completed',
+  'failed',
+  'cancelled',
+  'canceled',
+  'cancel',
+  'done',
+  'stopped',
+]);
 
 /** Track todo-continuation attempts per session to prevent infinite loops */
 const todoContinuationAttempts = new Map<string, number>();
@@ -170,6 +184,159 @@ function isStaleState(state: unknown): boolean {
   }
 
   return Date.now() - mostRecent > STALE_STATE_THRESHOLD_MS;
+}
+
+function parseTimestamp(value: unknown): number | null {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isFreshTimestamp(value: unknown, ttlMs = PENDING_ASYNC_STATE_STALE_MS): boolean {
+  const parsed = parseTimestamp(value);
+  return parsed !== null && Date.now() - parsed <= ttlMs;
+}
+
+function hasPendingBackgroundTask(directory: string, sessionId?: string): boolean {
+  try {
+    const stateRoot = join(getOmcRoot(directory), 'state');
+    const hudPath = sessionId
+      ? join(stateRoot, 'sessions', sessionId, 'hud-state.json')
+      : join(stateRoot, 'hud-state.json');
+    if (!existsSync(hudPath)) return false;
+    const hudState = JSON.parse(readFileSync(hudPath, 'utf-8')) as {
+      backgroundTasks?: Array<{
+        status?: string;
+        startedAt?: string;
+        startTime?: string;
+      }>;
+    };
+    return Boolean(hudState?.backgroundTasks?.some((task) => {
+      if (task.status !== 'running') return false;
+      return isFreshTimestamp(task.startedAt ?? task.startTime);
+    }));
+  } catch {
+    return false;
+  }
+}
+
+function readPendingWakeupState(directory: string, sessionId?: string): Array<Record<string, unknown>> {
+  const stateRoot = join(getOmcRoot(directory), 'state');
+  const dirs = sessionId
+    ? [join(stateRoot, 'sessions', sessionId), stateRoot]
+    : [stateRoot];
+  const fileNames = [
+    'scheduled-wakeup-state.json',
+    'schedule-wakeup-state.json',
+    'wakeup-state.json',
+  ];
+  const states: Array<Record<string, unknown>> = [];
+
+  for (const dir of dirs) {
+    for (const fileName of fileNames) {
+      const filePath = join(dir, fileName);
+      try {
+        if (!existsSync(filePath)) continue;
+        const parsed = JSON.parse(readFileSync(filePath, 'utf-8'));
+        if (parsed && typeof parsed === 'object') {
+          states.push(parsed as Record<string, unknown>);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return states;
+}
+
+function hasPendingScheduledWakeup(directory: string, sessionId?: string): boolean {
+  const now = Date.now();
+  return readPendingWakeupState(directory, sessionId).some((state) => {
+    const status = typeof state.status === 'string' ? state.status.toLowerCase() : '';
+    if (['completed', 'complete', 'cancelled', 'canceled', 'failed', 'expired'].includes(status)) {
+      return false;
+    }
+
+    const dueAt = parseTimestamp(
+      state.due_at ?? state.wakeup_at ?? state.scheduled_for ?? state.deadline_at ?? state.expires_at,
+    );
+    if (dueAt !== null) {
+      return dueAt > now;
+    }
+
+    if (state.active === true || state.pending === true) {
+      return isFreshTimestamp(state.created_at ?? state.updated_at ?? state.started_at);
+    }
+
+    return false;
+  });
+}
+
+function normalizeWorkflowTerminalPhase(state: Record<string, unknown>): string | null {
+  const raw = state.current_phase ?? state.phase ?? state.status;
+  return typeof raw === 'string' && raw.trim().length > 0
+    ? raw.trim().toLowerCase()
+    : null;
+}
+
+function isTerminalWorkflowModeState(state: Record<string, unknown> | null): boolean {
+  if (!state) return false;
+  if (state.active === false) return true;
+  if (typeof state.completed_at === 'string' && state.completed_at.length > 0) return true;
+  const phase = normalizeWorkflowTerminalPhase(state);
+  return Boolean(phase && TERMINAL_WORKFLOW_PHASES.has(phase));
+}
+
+async function reconcileTerminalWorkflowSlots(
+  workingDir: string,
+  sessionId?: string,
+): Promise<void> {
+  try {
+    const {
+      readSkillActiveStateNormalized,
+      pruneExpiredWorkflowSkillTombstones,
+      markWorkflowSkillCompleted,
+      writeSkillActiveStateCopies,
+    } = await import('../skill-state/index.js');
+
+    const original = readSkillActiveStateNormalized(workingDir, sessionId);
+    let current = pruneExpiredWorkflowSkillTombstones(original);
+    let changed = current !== original;
+
+    for (const [slotName, slot] of Object.entries(current.active_skills)) {
+      if (slot.completed_at || !TERMINAL_WORKFLOW_SLOT_MODES.has(slotName)) {
+        continue;
+      }
+
+      const modeState = readModeState<Record<string, unknown>>(slotName, workingDir, sessionId);
+      if (!isTerminalWorkflowModeState(modeState)) {
+        continue;
+      }
+
+      current = markWorkflowSkillCompleted(current, slotName);
+      changed = true;
+    }
+
+    if (changed) {
+      writeSkillActiveStateCopies(workingDir, current, sessionId);
+    }
+  } catch {
+    // Best-effort reconciliation only. Stop enforcement falls back to the
+    // direct mode-state checks below if the ledger cannot be updated.
+  }
+}
+
+/**
+ * Pending owned async work (background Bash/Task or an armed wakeup) means the
+ * agent is legitimately waiting for an external notification/resume. In that
+ * window persistent modes should not inject a "stalled" reinforcement.
+ */
+export function hasPendingOwnedAsyncWork(directory: string, sessionId?: string): boolean {
+  return hasPendingBackgroundTask(directory, sessionId)
+    || hasPendingScheduledWakeup(directory, sessionId);
 }
 
 /**
@@ -861,12 +1028,12 @@ async function checkRalphLoop(
       // Check for architect approval
       if (checkArchitectApprovalInTranscript(sessionId, verificationState)) {
         if (verificationState.verification_scope === 'story' && verificationState.story_id) {
-          markStoryArchitectVerified(workingDir, verificationState.story_id);
+          markStoryArchitectVerified(workingDir, verificationState.story_id, undefined, sessionId);
           clearVerificationState(workingDir, sessionId);
 
           const refreshedState = readRalphState(workingDir, sessionId);
           if (refreshedState) {
-            const refreshedPrd = getPrdCompletionStatus(workingDir);
+            const refreshedPrd = getPrdCompletionStatus(workingDir, sessionId);
             refreshedState.current_story_id = refreshedPrd.nextStory?.id;
             writeRalphState(workingDir, refreshedState, sessionId);
           }
@@ -894,7 +1061,7 @@ async function checkRalphLoop(
       const rejection = checkArchitectRejectionInTranscript(sessionId);
       if (verificationState && rejection.rejected) {
         if (verificationState.verification_scope === 'story' && verificationState.story_id) {
-          markStoryIncomplete(workingDir, verificationState.story_id, rejection.feedback);
+          markStoryIncomplete(workingDir, verificationState.story_id, rejection.feedback, sessionId);
         }
         // Architect rejected - continue with feedback
         recordArchitectFeedback(workingDir, false, rejection.feedback, sessionId);
@@ -918,7 +1085,7 @@ async function checkRalphLoop(
 
     if (verificationState?.pending) {
       const storyUnderReview = verificationState.story_id
-        ? getStory(workingDir, verificationState.story_id) ?? undefined
+        ? getStory(workingDir, verificationState.story_id, sessionId) ?? undefined
         : undefined;
 
       // Verification still pending - remind to run the selected reviewer
@@ -935,9 +1102,9 @@ async function checkRalphLoop(
     }
   }
 
-  const prdStatus = getPrdCompletionStatus(workingDir);
+  const prdStatus = getPrdCompletionStatus(workingDir, sessionId);
   const currentStory = state.current_story_id
-    ? getStory(workingDir, state.current_story_id)
+    ? getStory(workingDir, state.current_story_id, sessionId)
     : prdStatus.nextStory;
 
   if (currentStory?.passes && currentStory.architectVerified !== true) {
@@ -1031,9 +1198,10 @@ async function checkRalphLoop(
   }
 
   // Get PRD context for injection
-  const ralphContext = getRalphContext(workingDir);
+  const ralphContext = getRalphContext(workingDir, sessionId);
+  const activePrdPath = prdStatus.hasPrd ? findPrdPath(workingDir, sessionId) : null;
   const prdInstruction = prdStatus.hasPrd
-    ? `2. Check prd.json - verify the current story's acceptance criteria are met, then mark it passes: true. Are ALL stories complete?`
+    ? `2. Check ${activePrdPath ?? 'prd.json'} - verify the current story's acceptance criteria are met, then mark it passes: true. Are ALL stories complete?`
     : `2. Check your todo list - are ALL items marked complete?`;
 
   const continuationPrompt = `<ralph-continuation>
@@ -1266,6 +1434,142 @@ interface RalplanState {
   current_phase?: string;
   phase?: string;
   status?: string;
+}
+
+interface AutoresearchStopState {
+  active: boolean;
+  session_id?: string;
+  current_phase?: string;
+  updated_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  max_runtime_ms?: number;
+  deadline_at?: string;
+  mission_slug?: string;
+  iteration?: number;
+}
+
+function getAutoresearchDeadlineMs(state: AutoresearchStopState): number | null {
+  if (typeof state.deadline_at === 'string' && state.deadline_at.trim().length > 0) {
+    const parsed = new Date(state.deadline_at).getTime();
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  if (typeof state.max_runtime_ms === 'number' && Number.isFinite(state.max_runtime_ms)
+    && typeof state.started_at === 'string' && state.started_at.trim().length > 0) {
+    const startedAt = new Date(state.started_at).getTime();
+    if (Number.isFinite(startedAt)) {
+      return startedAt + state.max_runtime_ms;
+    }
+  }
+
+  return null;
+}
+
+async function checkAutoresearch(
+  sessionId?: string,
+  directory?: string,
+  cancelInProgress?: boolean
+): Promise<PersistentModeResult | null> {
+  const workingDir = resolveToWorktreeRoot(directory);
+  let stateSourceSessionId = sessionId;
+  let state = readModeState<AutoresearchStopState>('autoresearch', workingDir, sessionId);
+
+  // Autoresearch predates session-scoped state files. Preserve strict sessioned reads
+  // first, then allow a narrow legacy/shared bridge only for matching or unbound state.
+  if (!state && sessionId) {
+    const legacyState = readModeState<AutoresearchStopState>('autoresearch', workingDir);
+    if (!legacyState?.session_id || legacyState.session_id === sessionId) {
+      state = legacyState;
+      stateSourceSessionId = undefined;
+    }
+  }
+
+  const stateRecord = state as Record<string, unknown> | null;
+  const hasTimestampFields = Boolean(
+    stateRecord
+    && ['updated_at', 'started_at'].some((key) =>
+      typeof stateRecord[key] === 'string' && String(stateRecord[key]).length > 0,
+    ),
+  );
+
+  if (!state || !state.active || (hasTimestampFields && isStaleState(state))) {
+    return null;
+  }
+
+  if (sessionId && state.session_id && state.session_id !== sessionId) {
+    return null;
+  }
+
+  if (cancelInProgress) {
+    return {
+      shouldBlock: false,
+      message: '',
+      mode: 'autoresearch',
+    };
+  }
+
+  const phase = typeof state.current_phase === 'string'
+    ? state.current_phase.trim().toLowerCase()
+    : '';
+  if (phase === 'completed' || phase === 'failed' || phase === 'stopped' || phase === 'cancelled') {
+    return {
+      shouldBlock: false,
+      message: '',
+      mode: 'autoresearch',
+    };
+  }
+
+  const deadlineMs = getAutoresearchDeadlineMs(state);
+  if (deadlineMs != null && Date.now() >= deadlineMs) {
+    writeModeState('autoresearch', {
+      ...(state as unknown as Record<string, unknown>),
+      active: false,
+      current_phase: 'stopped',
+      completed_at: new Date().toISOString(),
+      stop_reason: 'max-runtime ceiling reached',
+    }, workingDir, stateSourceSessionId);
+
+    return {
+      shouldBlock: false,
+      message: '[AUTORESEARCH COMPLETE] Max-runtime ceiling reached. Stop hook released the stateful autoresearch run.',
+      mode: 'autoresearch',
+      metadata: {
+        iteration: typeof state.iteration === 'number' ? state.iteration : undefined,
+      },
+    };
+  }
+
+  const remaining = deadlineMs == null
+    ? 'unknown'
+    : `${Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000))}s`;
+  const missionSlug = typeof state.mission_slug === 'string' && state.mission_slug
+    ? state.mission_slug
+    : 'unknown-mission';
+
+  return {
+    shouldBlock: true,
+    message: `<autoresearch-continuation>
+
+[AUTORESEARCH - STATEFUL MISSION ACTIVE]
+Mission: ${missionSlug}
+The autoresearch loop is still active and should continue iterating.
+Do not stop just because the latest evaluation did not pass.
+Strict stop boundary: explicit max-runtime ceiling.
+Remaining runtime: ${remaining}
+
+</autoresearch-continuation>
+
+---
+`,
+    mode: 'autoresearch',
+    metadata: {
+      iteration: typeof state.iteration === 'number' ? state.iteration : undefined,
+      phase: state.current_phase,
+    },
+  };
 }
 
 function getNormalizedRalplanPhase(state: Record<string, unknown> | null | undefined): string | null {
@@ -1563,6 +1867,32 @@ export async function checkPersistentModes(
 ): Promise<PersistentModeResult> {
   const workingDir = resolveToWorktreeRoot(directory);
 
+  // Hard bypass invariants: never enforce stop continuation under any of these
+  // environment-level kill switches. bridge.ts also guards DISABLE_OMC and
+  // OMC_SKIP_HOOKS at hook-entry, but we re-check here so direct callers and
+  // nested helpers (team workers, tests) observe the same contract.
+  if (
+    process.env.DISABLE_OMC === '1' ||
+    process.env.DISABLE_OMC === 'true' ||
+    process.env.OMC_TEAM_WORKER
+  ) {
+    return { shouldBlock: false, message: '', mode: 'none' };
+  }
+  const skipHooks = (process.env.OMC_SKIP_HOOKS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (skipHooks.includes('persistent-mode') || skipHooks.includes('stop-continuation')) {
+    return { shouldBlock: false, message: '', mode: 'none' };
+  }
+
+  // Best-effort: keep the workflow-slot ledger aligned with terminal mode
+  // state before using it for stop-gating authority. This both prunes old
+  // tombstones and tombstones live slots whose autopilot/Ralph/ralplan mode
+  // state already reached a terminal/inactive state through a path other than
+  // the Skill PostToolUse completion hook.
+  await reconcileTerminalWorkflowSlots(workingDir, sessionId);
+
   // CRITICAL: Never block context-limit/critical-context stops.
   // Blocking these causes a deadlock where Claude Code cannot compact or exit.
   // See: https://github.com/Yeachan-Heo/oh-my-claudecode/issues/213
@@ -1630,59 +1960,146 @@ export async function checkPersistentModes(
     };
   }
 
+  // CRITICAL: Never block scheduled wake-up resumptions.
+  // Native ScheduleWakeup-triggered `/loop` turns are resumptions, not signals
+  // to continue or clean up a prior persistent mode. Re-enforcing here can
+  // inject `/cancel` guidance from stale state and cause the scheduled turn to
+  // cancel itself before the real work runs.
+  if (isScheduledWakeupStop(stopContext)) {
+    return {
+      shouldBlock: false,
+      message: '',
+      mode: 'none'
+    };
+  }
+
+  // If this session owns pending async work, quiescence is intentional: Claude
+  // Code will notify on background completion or resume via ScheduleWakeup.
+  // Do not convert that waiting window into a Ralph/persistent-mode stall loop.
+  if (hasPendingOwnedAsyncWork(workingDir, sessionId)) {
+    return {
+      shouldBlock: false,
+      message: '',
+      mode: 'none'
+    };
+  }
+
   // First, check for incomplete todos (we need this info for ultrawork)
   // Note: stopContext already checked above, but pass it for consistency
   const todoResult = await checkIncompleteTodos(sessionId, workingDir, stopContext);
   const hasIncompleteTodos = todoResult.count > 0;
 
-  // Priority 1: Ralph (explicit loop mode)
-  const ralphResult = await checkRalphLoop(sessionId, workingDir, cancelInProgress);
-  if (ralphResult) {
-    return ralphResult;
+  // Consult the workflow ledger ONCE before direct mode-priority shortcuts.
+  // `resolveAuthoritativeWorkflowSkill()` returns the root of the live chain
+  // (autopilot in `autopilot → ralph`), so stop enforcement bubbles up to the
+  // live parent rather than the child currently executing beneath it.
+  // Tombstoned slots are tracked separately so stale mode files from crashed
+  // sessions don't re-arm priority checks until TTL prune or fresh activation.
+  const tombstonedWorkflowModes = new Set<string>();
+  let workflowAuthority: string | null = null;
+  try {
+    const { readSkillActiveStateNormalized, resolveAuthoritativeWorkflowSkill } =
+      await import('../skill-state/index.js');
+    const ledger = readSkillActiveStateNormalized(workingDir, sessionId);
+    const authority = resolveAuthoritativeWorkflowSkill(ledger);
+    workflowAuthority = authority?.skill_name ?? null;
+    for (const [name, slot] of Object.entries(ledger.active_skills)) {
+      if (slot.completed_at) tombstonedWorkflowModes.add(name);
+    }
+  } catch {
+    // Ledger unavailable — fall back to legacy mode-file detection.
   }
 
-  // Priority 1.5: Autopilot (full orchestration mode - higher than ultrawork, lower than ralph)
-  if (isAutopilotActive(workingDir, sessionId)) {
-    const autopilotResult = await checkAutopilot(sessionId, workingDir);
-    if (autopilotResult?.shouldBlock) {
-      return {
-        shouldBlock: true,
-        message: autopilotResult.message,
-        mode: 'autopilot',
-        metadata: {
-          iteration: autopilotResult.metadata?.iteration,
-          maxIterations: autopilotResult.metadata?.maxIterations,
-          phase: autopilotResult.phase,
-          tasksCompleted: autopilotResult.metadata?.tasksCompleted,
-          tasksTotal: autopilotResult.metadata?.tasksTotal,
-          toolError: autopilotResult.metadata?.toolError
-        }
-      };
+  // Authority-first ordering for nested workflow runs.
+  //
+  // `resolveAuthoritativeWorkflowSkill()` returns the root of the live chain.
+  // In `autopilot → ralph`, autopilot is the authoritative parent while ralph
+  // runs beneath it — stop enforcement must resolve to the live parent so its
+  // iteration accounting keeps advancing. The legacy ordering (ralph > autopilot)
+  // still applies whenever the ledger is silent or authority already is ralph.
+  const autopilotPriorityFirst = workflowAuthority === 'autopilot';
+
+  const runAutopilotPriority = async (): Promise<PersistentModeResult | null> => {
+    if (
+      tombstonedWorkflowModes.has('autopilot') ||
+      !isAutopilotActive(workingDir, sessionId)
+    ) {
+      return null;
     }
+    const autopilotResult = await checkAutopilot(sessionId, workingDir);
+    if (!autopilotResult?.shouldBlock) return null;
+    return {
+      shouldBlock: true,
+      message: autopilotResult.message,
+      mode: 'autopilot',
+      metadata: {
+        iteration: autopilotResult.metadata?.iteration,
+        maxIterations: autopilotResult.metadata?.maxIterations,
+        phase: autopilotResult.phase,
+        tasksCompleted: autopilotResult.metadata?.tasksCompleted,
+        tasksTotal: autopilotResult.metadata?.tasksTotal,
+        toolError: autopilotResult.metadata?.toolError,
+      },
+    };
+  };
+
+  const runRalphPriority = async (): Promise<PersistentModeResult | null> => {
+    // Skip when the authoritative registry says Ralph is inactive. This keeps
+    // Stop enforcement aligned with state_list_active and ignores stale
+    // restored/cache artifacts (including tombstoned workflow slots) after
+    // cancel/state_clear has made the registry empty.
+    if (tombstonedWorkflowModes.has('ralph') || !isModeActive('ralph', workingDir, sessionId)) return null;
+    return checkRalphLoop(sessionId, workingDir, cancelInProgress);
+  };
+
+  if (autopilotPriorityFirst) {
+    const autopilotResult = await runAutopilotPriority();
+    if (autopilotResult) return autopilotResult;
+    const ralphResult = await runRalphPriority();
+    if (ralphResult) return ralphResult;
+  } else {
+    const ralphResult = await runRalphPriority();
+    if (ralphResult) return ralphResult;
+    const autopilotResult = await runAutopilotPriority();
+    if (autopilotResult) return autopilotResult;
+  }
+
+  // Priority 1.6: Autoresearch (stateful single-mission runtime)
+  const autoresearchResult = await checkAutoresearch(sessionId, workingDir, cancelInProgress);
+  if (autoresearchResult) {
+    return autoresearchResult;
   }
 
   // Priority 1.7: Ralplan (standalone consensus planning)
   // Ralplan consensus loops (Planner/Architect/Critic) need hard-blocking.
   // When ralplan runs under ralph, checkRalphLoop() handles it (Priority 1).
   // Return ANY non-null result (including circuit breaker shouldBlock=false with message).
-  const ralplanResult = await checkRalplan(sessionId, workingDir, cancelInProgress);
-  if (ralplanResult) {
-    return ralplanResult;
+  // Suppressed when the ralplan slot is tombstoned so noisy re-handoff stops
+  // on completion until the tombstone TTL expires or a fresh slot reopens.
+  if (!tombstonedWorkflowModes.has('ralplan')) {
+    const ralplanResult = await checkRalplan(sessionId, workingDir, cancelInProgress);
+    if (ralplanResult) {
+      return ralplanResult;
+    }
   }
 
   // Priority 1.8: Team Pipeline (standalone team mode)
   // When team runs without ralph, this provides stop-hook blocking.
   // When team runs with ralph, checkRalphLoop() handles it (Priority 1).
   // Return ANY non-null result (including circuit breaker shouldBlock=false with message).
-  const teamResult = await checkTeamPipeline(sessionId, workingDir, cancelInProgress);
-  if (teamResult) {
-    return teamResult;
+  if (!tombstonedWorkflowModes.has('team')) {
+    const teamResult = await checkTeamPipeline(sessionId, workingDir, cancelInProgress);
+    if (teamResult) {
+      return teamResult;
+    }
   }
 
   // Priority 2: Ultrawork Mode (performance mode with persistence)
-  const ultraworkResult = await checkUltrawork(sessionId, workingDir, hasIncompleteTodos, cancelInProgress);
-  if (ultraworkResult) {
-    return ultraworkResult;
+  if (!tombstonedWorkflowModes.has('ultrawork') && isModeActive('ultrawork', workingDir, sessionId)) {
+    const ultraworkResult = await checkUltrawork(sessionId, workingDir, hasIncompleteTodos, cancelInProgress);
+    if (ultraworkResult) {
+      return ultraworkResult;
+    }
   }
 
   // Priority 3: Skill Active State (issue #1033)

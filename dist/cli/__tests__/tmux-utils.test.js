@@ -17,12 +17,14 @@ vi.mock('child_process', async (importOriginal) => {
         spawnSync: vi.fn(),
     };
 });
-import { createHudWatchPane, killTmuxPane, listHudWatchPaneIdsInCurrentWindow, resolveLaunchPolicy, tmuxExec, tmuxSpawn, wrapWithLoginShell, quoteShellArg, sanitizeTmuxToken, } from '../tmux-utils.js';
+import { buildTmuxShellCommand, buildTmuxShellCommandWithEnv, createHudWatchPane, isClaudeAvailable, killTmuxPane, listHudWatchPaneIdsInCurrentWindow, resolveLaunchPolicy, tmuxExec, tmuxSpawn, wrapWithLoginShell, quoteShellArg, sanitizeTmuxToken, } from '../tmux-utils.js';
 const mockedExecFileSync = vi.mocked(execFileSync);
 const mockedSpawnSync = vi.mocked(spawnSync);
+const baselinePlatform = process.platform;
 afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    Object.defineProperty(process, 'platform', { value: baselinePlatform, configurable: true });
 });
 // ---------------------------------------------------------------------------
 // resolveLaunchPolicy
@@ -67,6 +69,23 @@ describe('resolveLaunchPolicy', () => {
         });
         expect(resolveLaunchPolicy({})).toBe('direct');
     });
+    it('returns "outside-tmux" with requireTmux=true even when CMUX_SURFACE_ID is set', () => {
+        mockedExecFileSync.mockReturnValue('tmux 3.6a');
+        expect(resolveLaunchPolicy({ CMUX_SURFACE_ID: 'some-id' }, [], { requireTmux: true })).toBe('outside-tmux');
+    });
+    it('returns "direct" with requireTmux=true when tmux is not available', () => {
+        mockedExecFileSync.mockImplementation(() => {
+            throw new Error('tmux not found');
+        });
+        expect(resolveLaunchPolicy({}, [], { requireTmux: true })).toBe('direct');
+    });
+    it('still respects --print over requireTmux=true', () => {
+        mockedExecFileSync.mockReturnValue('tmux 3.6a');
+        expect(resolveLaunchPolicy({ CMUX_SURFACE_ID: 'some-id' }, ['--print'], { requireTmux: true })).toBe('direct');
+    });
+    it('still respects TMUX env (inside-tmux) over requireTmux=true', () => {
+        expect(resolveLaunchPolicy({ TMUX: '/tmp/tmux-0/default,1,0', CMUX_SURFACE_ID: 'some-id' }, [], { requireTmux: true })).toBe('inside-tmux');
+    });
     it('detects tmux.cmd via COMSPEC on win32', () => {
         const originalPlatform = process.platform;
         Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -91,6 +110,19 @@ describe('resolveLaunchPolicy', () => {
         expect(resolveLaunchPolicy({})).toBe('outside-tmux');
         expect(mockedSpawnSync).toHaveBeenNthCalledWith(1, 'where', ['tmux'], { timeout: 5000, encoding: 'utf8' });
         expect(mockedSpawnSync).toHaveBeenNthCalledWith(2, 'C:\\Windows\\System32\\cmd.exe', ['/d', '/s', '/c', '"C:\\Program Files\\psmux\\tmux.cmd" -V'], { timeout: 5000 });
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    });
+});
+describe('isClaudeAvailable', () => {
+    it('uses shell:true on win32 so npm .cmd wrappers resolve', () => {
+        const originalPlatform = process.platform;
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        mockedExecFileSync.mockReturnValue(Buffer.from('2.1.116'));
+        expect(isClaudeAvailable()).toBe(true);
+        expect(mockedExecFileSync).toHaveBeenCalledWith('claude', ['--version'], {
+            stdio: 'ignore',
+            shell: true,
+        });
         Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     });
 });
@@ -164,6 +196,45 @@ describe('tmux command execution parity on Windows', () => {
 // wrapWithLoginShell
 // ---------------------------------------------------------------------------
 describe('wrapWithLoginShell', () => {
+    it('uses COMSPEC wrapping instead of Unix exec syntax on native Windows shells', () => {
+        const originalPlatform = process.platform;
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+        vi.stubEnv('SHELL', '');
+        vi.stubEnv('HOME', 'C:\\Users\\test');
+        const result = wrapWithLoginShell('claude --print');
+        expect(result).toBe('C:\\Windows\\System32\\cmd.exe /d /s /c "claude --print"');
+        expect(result).not.toContain('exec ');
+        expect(result).not.toContain('-lc');
+        expect(result).not.toContain('.bashrc');
+        expect(result).not.toContain('.zshrc');
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    });
+    it('uses cmd-style argument quoting for Windows tmux shell commands', () => {
+        const originalPlatform = process.platform;
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        expect(buildTmuxShellCommand('claude', ['--print', 'hello world'])).toBe('claude --print "hello world"');
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    });
+    it('uses cmd-style env injection for Windows tmux shell commands', () => {
+        const originalPlatform = process.platform;
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        expect(buildTmuxShellCommandWithEnv('claude', ['--print'], { CODEX_HOME: 'C:\\Users\\me\\codex home' }))
+            .toBe('set "CODEX_HOME=C:\\Users\\me\\codex home" && claude --print');
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    });
+    it('keeps Unix login-shell wrapping on MSYS2 Windows', () => {
+        const originalPlatform = process.platform;
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        vi.stubEnv('MSYSTEM', 'MINGW64');
+        vi.stubEnv('SHELL', '/usr/bin/bash');
+        vi.stubEnv('HOME', '/home/testuser');
+        const result = wrapWithLoginShell('claude');
+        expect(result).toContain('exec ');
+        expect(result).toContain('-lc');
+        expect(result).toContain('/home/testuser/.bashrc');
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    });
     it('wraps command with login shell using $SHELL', () => {
         vi.stubEnv('SHELL', '/bin/zsh');
         const result = wrapWithLoginShell('claude --print');
@@ -172,10 +243,10 @@ describe('wrapWithLoginShell', () => {
         expect(result).toContain('claude --print');
         expect(result).toMatch(/^exec /);
     });
-    it('defaults to /bin/bash when $SHELL is not set', () => {
+    it('defaults to /bin/sh when $SHELL is not set', () => {
         vi.stubEnv('SHELL', '');
         const result = wrapWithLoginShell('codex');
-        expect(result).toContain('/bin/bash');
+        expect(result).toContain('/bin/sh');
         expect(result).toContain('-lc');
     });
     it('properly quotes the inner command containing single quotes', () => {

@@ -7,6 +7,7 @@
  */
 import { readdirSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
+import { comparePlanningArtifactPaths, selectLatestPlanningArtifactPath, selectMatchingTestSpecsForPrd, } from "./artifact-names.js";
 function readFileSafe(path) {
     try {
         return readFileSync(path, "utf-8");
@@ -32,69 +33,126 @@ function getSectionContent(markdown, heading) {
 function hasRequiredSections(markdown, headings) {
     return headings.every((heading) => getSectionContent(markdown, heading) !== null);
 }
+function getPlansDirCandidates(cwd) {
+    return [join(cwd, ".omc", "plans"), join(cwd, ".omx", "plans")];
+}
+function sortArtifactPathsDescending(paths) {
+    return [...paths].sort((a, b) => comparePlanningArtifactPaths(b, a));
+}
+function hasCompletePlanningPair(prdPath, matchingTestSpecPaths) {
+    if (matchingTestSpecPaths.length === 0) {
+        return false;
+    }
+    const prd = readFileSafe(prdPath);
+    const testSpec = readFileSafe(matchingTestSpecPaths[0]);
+    if (!prd || !testSpec) {
+        return false;
+    }
+    return (hasRequiredSections(prd, [
+        "Acceptance criteria",
+        "Requirement coverage map",
+    ]) &&
+        hasRequiredSections(testSpec, [
+            "Unit coverage",
+            "Verification mapping",
+        ]));
+}
 /**
- * Read planning artifacts from .omc/plans/ directory.
+ * Read planning artifacts from .omc/.omx plans directories.
  * Returns paths to all PRD and test-spec files found.
  */
 export function readPlanningArtifacts(cwd) {
-    const plansDir = join(cwd, ".omc", "plans");
-    if (!existsSync(plansDir)) {
-        return { prdPaths: [], testSpecPaths: [] };
-    }
     let entries;
-    try {
-        entries = readdirSync(plansDir);
-    }
-    catch {
-        return { prdPaths: [], testSpecPaths: [] };
-    }
     const prdPaths = [];
     const testSpecPaths = [];
-    for (const entry of entries) {
-        if (entry.startsWith("prd-") && entry.endsWith(".md")) {
-            prdPaths.push(join(plansDir, entry));
+    for (const plansDir of getPlansDirCandidates(cwd)) {
+        if (!existsSync(plansDir)) {
+            continue;
         }
-        else if (entry.startsWith("test-spec-") && entry.endsWith(".md")) {
-            testSpecPaths.push(join(plansDir, entry));
+        try {
+            entries = readdirSync(plansDir);
+        }
+        catch {
+            continue;
+        }
+        for (const entry of entries) {
+            if (entry.startsWith("prd-") && entry.endsWith(".md")) {
+                prdPaths.push(join(plansDir, entry));
+            }
+            else if (entry.startsWith("test-spec-") && entry.endsWith(".md")) {
+                testSpecPaths.push(join(plansDir, entry));
+            }
         }
     }
-    // Sort descending so newest (lexicographically last) is first
-    prdPaths.sort((a, b) => b.localeCompare(a));
-    testSpecPaths.sort((a, b) => b.localeCompare(a));
-    return { prdPaths, testSpecPaths };
+    return {
+        prdPaths: sortArtifactPathsDescending(prdPaths),
+        testSpecPaths: sortArtifactPathsDescending(testSpecPaths),
+    };
 }
 /**
  * Returns true when the latest PRD and latest test spec contain
  * the required non-empty quality-gate sections.
  */
 export function isPlanningComplete(artifacts) {
-    if (artifacts.prdPaths.length === 0 || artifacts.testSpecPaths.length === 0) {
+    const latestPrdPath = selectLatestPlanningArtifactPath(artifacts.prdPaths);
+    const matchingTestSpecPaths = selectMatchingTestSpecsForPrd(latestPrdPath, artifacts.testSpecPaths);
+    if (!latestPrdPath || matchingTestSpecPaths.length === 0) {
         return false;
     }
-    const latestPrd = readFileSafe(artifacts.prdPaths[0]);
-    const latestTestSpec = readFileSafe(artifacts.testSpecPaths[0]);
-    if (!latestPrd || !latestTestSpec) {
-        return false;
-    }
-    return (hasRequiredSections(latestPrd, [
-        "Acceptance criteria",
-        "Requirement coverage map",
-    ]) &&
-        hasRequiredSections(latestTestSpec, [
-            "Unit coverage",
-            "Verification mapping",
-        ]));
+    return hasCompletePlanningPair(latestPrdPath, matchingTestSpecPaths);
 }
-/**
- * Regex patterns for extracting omc team/ralph launch commands from PRD markdown.
- *
- * Matches lines like:
- *   omc team 3:claude "implement the feature"
- *   omc team 2:codex "fix the bug" --linked-ralph
- *   omc ralph "do the work"
- */
-const TEAM_LAUNCH_RE = /\bomc\s+team\s+(?:(\d+):(\w+)\s+)?"([^"]+)"((?:\s+--[\w-]+)*)/;
-const RALPH_LAUNCH_RE = /\bomc\s+ralph\s+"([^"]+)"((?:\s+--[\w-]+)*)/;
+function decodeQuotedValue(raw) {
+    const normalized = raw.trim();
+    if (!normalized)
+        return null;
+    try {
+        return JSON.parse(normalized);
+    }
+    catch {
+        if ((normalized.startsWith('"') && normalized.endsWith('"')) ||
+            (normalized.startsWith("'") && normalized.endsWith("'"))) {
+            return normalized.slice(1, -1);
+        }
+        return null;
+    }
+}
+function launchHintPattern(mode) {
+    return mode === "team"
+        ? /(?<command>(?:om[cx]\s+team|\$team)(?:\s+ralph)?(?:\s+(?<count>\d+)(?::(?<role>[a-z][a-z0-9-]*))?)?\s+(?<task>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')(?<flags>(?:\s+--[\w-]+)*))/gi
+        : /(?<command>(?:om[cx]\s+ralph|\$ralph)\s+(?<task>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')(?<flags>(?:\s+--[\w-]+)*))/gi;
+}
+function collectLaunchHintMatches(content, mode) {
+    return [...content.matchAll(launchHintPattern(mode))];
+}
+function selectLaunchHintMatch(matches, normalizedTask, normalizedCommand) {
+    const decodedMatches = matches.flatMap((match) => {
+        const command = match[0]?.trim();
+        const task = match.groups?.task ? decodeQuotedValue(match.groups.task) : null;
+        if (!command || task == null)
+            return [];
+        const flags = match.groups?.flags ?? "";
+        const workerCount = match.groups?.count
+            ? Number.parseInt(match.groups.count, 10)
+            : undefined;
+        return [{
+                command,
+                task,
+                ...(workerCount == null ? {} : { workerCount }),
+                agentType: match.groups?.role || undefined,
+                linkedRalph: /\sralph(?:\s|$)/.test(command) || parseFlags(flags).linkedRalph,
+            }];
+    });
+    const matchesToConsider = normalizedCommand
+        ? decodedMatches.filter((match) => match.command === normalizedCommand)
+        : normalizedTask
+            ? decodedMatches.filter((match) => match.task.trim() === normalizedTask)
+            : decodedMatches;
+    if (matchesToConsider.length === 0)
+        return { status: "no-match" };
+    if (matchesToConsider.length > 1)
+        return { status: "ambiguous" };
+    return { status: "unique", ...matchesToConsider[0] };
+}
 function parseFlags(flagStr) {
     return {
         linkedRalph: /--linked-ralph/.test(flagStr),
@@ -104,41 +162,60 @@ function parseFlags(flagStr) {
  * Read the latest PRD file and extract an embedded launch hint for the given mode.
  * Returns null when no hint is found.
  */
-export function readApprovedExecutionLaunchHint(cwd, mode) {
+export function readApprovedExecutionLaunchHint(cwd, mode, options = {}) {
+    const outcome = readApprovedExecutionLaunchHintOutcome(cwd, mode, options);
+    return outcome.status === "resolved" ? outcome.hint : null;
+}
+export function readApprovedExecutionLaunchHintOutcome(cwd, mode, options = {}) {
     const artifacts = readPlanningArtifacts(cwd);
     if (artifacts.prdPaths.length === 0)
-        return null;
-    const prdPath = artifacts.prdPaths[0];
+        return { status: "absent" };
+    const prdPath = options.prdPath
+        ? artifacts.prdPaths.includes(options.prdPath)
+            ? options.prdPath
+            : null
+        : selectLatestPlanningArtifactPath(artifacts.prdPaths);
+    const matchingTestSpecs = selectMatchingTestSpecsForPrd(prdPath, artifacts.testSpecPaths);
+    if (!prdPath)
+        return { status: "absent" };
+    if (artifacts.testSpecPaths.length > 0 && matchingTestSpecs.length === 0) {
+        return { status: "absent" };
+    }
     const content = readFileSafe(prdPath);
     if (!content)
-        return null;
+        return { status: "absent" };
+    const selected = selectLaunchHintMatch(collectLaunchHintMatches(content, mode), options.task?.trim(), options.command?.trim());
+    if (selected.status === "ambiguous")
+        return { status: "ambiguous" };
+    if (selected.status !== "unique")
+        return { status: "absent" };
+    if (options.requirePlanningComplete &&
+        !hasCompletePlanningPair(prdPath, matchingTestSpecs)) {
+        return { status: "incomplete" };
+    }
     if (mode === "team") {
-        const match = TEAM_LAUNCH_RE.exec(content);
-        if (!match)
-            return null;
-        const [fullMatch, workerCountStr, agentType, task, flagStr] = match;
-        const { linkedRalph } = parseFlags(flagStr ?? "");
         return {
-            mode: "team",
-            command: fullMatch.trim(),
-            task,
-            workerCount: workerCountStr ? parseInt(workerCountStr, 10) : undefined,
-            agentType: agentType || undefined,
-            linkedRalph,
-            sourcePath: prdPath,
+            status: "resolved",
+            hint: {
+                mode: "team",
+                command: selected.command,
+                task: selected.task,
+                workerCount: selected.workerCount,
+                agentType: selected.agentType,
+                linkedRalph: selected.linkedRalph,
+                sourcePath: prdPath,
+            },
         };
     }
-    const match = RALPH_LAUNCH_RE.exec(content);
-    if (!match)
-        return null;
-    const [fullMatch, task, flagStr] = match;
-    const { linkedRalph } = parseFlags(flagStr ?? "");
     return {
-        mode: "ralph",
-        command: fullMatch.trim(),
-        task,
-        linkedRalph,
-        sourcePath: prdPath,
+        status: "resolved",
+        hint: {
+            mode: "ralph",
+            command: selected.command,
+            task: selected.task,
+            linkedRalph: selected.linkedRalph,
+            sourcePath: prdPath,
+        },
     };
 }
 //# sourceMappingURL=artifacts.js.map

@@ -9,10 +9,10 @@
  * - Store version metadata for installed components
  * - Configurable update notifications
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync, execFileSync } from 'child_process';
-import { install as installOmc, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin, getInstalledOmcPluginRoots, getRuntimePackageRoot, } from '../installer/index.js';
+import { install as installOmc, HOOKS_DIR, isProjectScopedPlugin, isRunningAsPlugin, copyPluginSyncPayload, syncInstalledPluginPayload, } from '../installer/index.js';
 import { getClaudeConfigDir } from '../utils/config-dir.js';
 import { purgeStalePluginCacheVersions } from '../utils/paths.js';
 import { isAutoUpdateDisabled } from '../lib/security-config.js';
@@ -102,56 +102,8 @@ function syncMarketplaceClone(verbose = false) {
     }
     return { ok: true, message: 'Marketplace clone updated' };
 }
-const PLUGIN_SYNC_PAYLOAD = [
-    'dist',
-    'bridge',
-    'hooks',
-    'scripts',
-    'skills',
-    'agents',
-    'templates',
-    'docs',
-    '.claude-plugin',
-    '.mcp.json',
-    'README.md',
-    'LICENSE',
-    'package.json',
-];
-function copyPluginSyncPayload(sourceRoot, targetRoots) {
-    if (targetRoots.length === 0) {
-        return { synced: false, errors: [] };
-    }
-    let synced = false;
-    const errors = [];
-    for (const targetRoot of targetRoots) {
-        let copiedToTarget = false;
-        for (const entry of PLUGIN_SYNC_PAYLOAD) {
-            const sourcePath = join(sourceRoot, entry);
-            if (!existsSync(sourcePath)) {
-                continue;
-            }
-            try {
-                cpSync(sourcePath, join(targetRoot, entry), {
-                    recursive: true,
-                    force: true,
-                });
-                copiedToTarget = true;
-            }
-            catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                errors.push(`Failed to sync ${entry} to ${targetRoot}: ${message}`);
-            }
-        }
-        synced = synced || copiedToTarget;
-    }
-    return { synced, errors };
-}
 function syncActivePluginCache() {
-    const activeRoots = getInstalledOmcPluginRoots().filter(root => existsSync(root));
-    if (activeRoots.length === 0) {
-        return { synced: false, errors: [] };
-    }
-    const result = copyPluginSyncPayload(getRuntimePackageRoot(), activeRoots);
+    const result = syncInstalledPluginPayload();
     if (result.synced) {
         console.log('[omc update] Synced plugin cache');
     }
@@ -347,15 +299,63 @@ export function updateLastCheckTime() {
         saveVersionMetadata(current);
     }
 }
+function getGitHubUpdateToken() {
+    const token = process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
+    return token || null;
+}
+function getGitHubReleaseHeaders() {
+    const headers = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'oh-my-claudecode-updater'
+    };
+    const token = getGitHubUpdateToken();
+    if (token) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
+}
+function getHeader(response, name) {
+    return response.headers?.get(name) ?? response.headers?.get(name.toLowerCase()) ?? null;
+}
+function formatRateLimitReset(resetHeader) {
+    if (!resetHeader) {
+        return null;
+    }
+    const resetSeconds = Number.parseInt(resetHeader, 10);
+    if (!Number.isFinite(resetSeconds) || resetSeconds <= 0) {
+        return null;
+    }
+    return new Date(resetSeconds * 1000).toISOString();
+}
+async function formatGitHubReleaseFetchError(response, usedToken) {
+    let body = '';
+    try {
+        body = await response.text();
+    }
+    catch {
+        body = '';
+    }
+    const remaining = getHeader(response, 'x-ratelimit-remaining');
+    const resetAt = formatRateLimitReset(getHeader(response, 'x-ratelimit-reset'));
+    const bodyLooksRateLimited = /rate limit|api rate limit|secondary rate/i.test(body);
+    const isRateLimited = response.status === 429 ||
+        (response.status === 403 && (remaining === '0' || bodyLooksRateLimited));
+    if (!isRateLimited) {
+        return `Failed to fetch release info: ${response.status} ${response.statusText}`;
+    }
+    const retrySuffix = resetAt ? ` Try again after ${resetAt}.` : '';
+    const authHint = usedToken
+        ? 'The configured GitHub token appears to be rate limited; verify the token or try again later.'
+        : 'Set GH_TOKEN or GITHUB_TOKEN to use authenticated GitHub API requests and increase rate limits.';
+    return `Failed to fetch release info: GitHub API rate limit exceeded (${response.status} ${response.statusText}). ${authHint}${retrySuffix}`;
+}
 /**
  * Fetch the latest release from GitHub
  */
 export async function fetchLatestRelease() {
+    const usedToken = getGitHubUpdateToken() !== null;
     const response = await fetch(`${GITHUB_API_URL}/releases/latest`, {
-        headers: {
-            'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'oh-my-claudecode-updater'
-        }
+        headers: getGitHubReleaseHeaders()
     });
     if (response.status === 404) {
         // No releases found - try to get version from package.json in repo
@@ -379,7 +379,7 @@ export async function fetchLatestRelease() {
         throw new Error('No releases found and could not fetch package.json');
     }
     if (!response.ok) {
-        throw new Error(`Failed to fetch release info: ${response.status} ${response.statusText}`);
+        throw new Error(await formatGitHubReleaseFetchError(response, usedToken));
     }
     return await response.json();
 }

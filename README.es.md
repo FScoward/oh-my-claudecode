@@ -15,7 +15,7 @@
 
 *No aprendas Claude Code. Solo usa OMC.*
 
-[Comenzar](#inicio-rápido) • [Documentación](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Referencia CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [Flujos de Trabajo](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [Guía de Migración](docs/MIGRATION.md)
+[Comenzar](#inicio-rápido) • [Documentación](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Referencia CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [Flujos de Trabajo](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [Guía de Migración](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -146,7 +146,7 @@ Si experimentas problemas despues de actualizar, limpia la cache antigua del plu
 ## Características
 
 ### Modos de Ejecución
-Múltiples estrategias para diferentes casos de uso - desde construcciones completamente autónomas hasta refactorización eficiente en tokens. [Aprende más →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Múltiples estrategias para diferentes casos de uso - desde construcciones completamente autónomas hasta refactorización eficiente en tokens. [Aprende más →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Modo | Característica | Usar Para |
 |------|---------|---------|
@@ -194,7 +194,7 @@ Envuelve el handler en server.py:42 con try/except ClientDisconnectedError...
 ```
 
 **Gestión de habilidades:** `/skill list | add | remove | edit | search`
-**Auto-aprendizaje:** `/learner` extrae patrones reutilizables con estrictos criterios de calidad
+**Auto-aprendizaje:** `/skillify` extrae patrones reutilizables con estrictos criterios de calidad
 **Auto-inyección:** Las habilidades coincidentes se cargan en el contexto automáticamente — sin necesidad de invocación manual
 
 [Lista completa de características →](docs/REFERENCE.md)
@@ -326,10 +326,10 @@ Consulta `scripts/openclaw-gateway-demo.mjs` para un gateway de referencia que r
 ## Documentación
 
 - **[Referencia Completa](docs/REFERENCE.md)** - Documentación completa de características
-- **[Referencia CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference)** - Todos los comandos, flags y herramientas de `omc`
-- **[Guía de Notificaciones](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#notifications)** - Configuración de Discord, Telegram, Slack y webhooks
-- **[Flujos de Trabajo Recomendados](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows)** - Cadenas de habilidades probadas para tareas comunes
-- **[Notas de Versión](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#release-notes)** - Novedades en cada versión
+- **[Referencia CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference)** - Todos los comandos, flags y herramientas de `omc`
+- **[Guía de Notificaciones](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#notifications)** - Configuración de Discord, Telegram, Slack y webhooks
+- **[Flujos de Trabajo Recomendados](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows)** - Cadenas de habilidades probadas para tareas comunes
+- **[Notas de Versión](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#release-notes)** - Novedades en cada versión
 - **[Sitio Web](https://yeachan-heo.github.io/oh-my-claudecode-website)** - Guías interactivas y ejemplos
 - **[Guía de Migración](docs/MIGRATION.md)** - Actualización desde v2.x
 - **[Arquitectura](docs/ARCHITECTURE.md)** - Cómo funciona internamente

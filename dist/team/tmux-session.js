@@ -366,10 +366,15 @@ export function listActiveSessions(teamName) {
  *
  * Instead of passing JSON via tmux send-keys (brittle quoting), the caller
  * writes config to a temp file and passes --config flag:
- *   node dist/team/bridge-entry.js --config /tmp/omc-bridge-{worker}.json
+ *   <current-js-runtime> dist/team/bridge-entry.js --config /tmp/omc-bridge-{worker}.json
  */
+function quoteBridgeShellArg(value) {
+    return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
 export function spawnBridgeInSession(tmuxSession, bridgeScriptPath, configFilePath) {
-    const cmd = `node "${bridgeScriptPath}" --config "${configFilePath}"`;
+    const cmd = [process.execPath, bridgeScriptPath, '--config', configFilePath]
+        .map(quoteBridgeShellArg)
+        .join(' ');
     tmuxExec(['send-keys', '-t', tmuxSession, cmd, 'Enter'], { stripTmux: true, stdio: 'pipe', timeout: 5000 });
 }
 /**
@@ -542,7 +547,21 @@ function paneHasTrustPrompt(captured) {
     const hasChoices = tail.some(l => /Yes,\s*continue|No,\s*quit|Press enter to continue/i.test(l));
     return hasQuestion && hasChoices;
 }
+function paneHasClaudeStartupBanner(captured) {
+    const lines = captured
+        .split('\n')
+        .map((line) => line.replace(/\r/g, '').trim())
+        .filter((line) => line.length > 0)
+        .slice(-20);
+    const lastPromptIndex = lines.findLastIndex((line) => /^\s*[›>❯]\s*/u.test(line));
+    const lastStartupBannerIndex = lines.findLastIndex((line) => /bypass\s+permissions\s+on/i.test(line)
+        || /shift\+tab\s+to\s+cycle/i.test(line)
+        || /^⏵⏵\s+/.test(line));
+    return lastStartupBannerIndex >= 0 && lastStartupBannerIndex > lastPromptIndex;
+}
 function paneIsBootstrapping(captured) {
+    if (paneHasClaudeStartupBanner(captured))
+        return true;
     const lines = captured
         .split('\n')
         .map((line) => line.replace(/\r/g, '').trim())
@@ -656,6 +675,9 @@ export async function sendToWorker(_sessionName, paneId, message) {
         }
         // Check for trust prompt and auto-dismiss before sending our text
         const initialCapture = await capturePaneAsync(paneId);
+        if (paneHasClaudeStartupBanner(initialCapture)) {
+            return false;
+        }
         const paneBusy = paneHasActiveTask(initialCapture);
         if (paneHasTrustPrompt(initialCapture)) {
             await sendKey('C-m');
@@ -769,20 +791,27 @@ export async function injectToLeaderPane(sessionName, leaderPaneId, message) {
     catch { /* best-effort */ }
     return sendToWorker(sessionName, leaderPaneId, prefixed);
 }
-/**
- * Check if a worker pane is still alive.
- * Uses pane ID for stable targeting (not pane index).
- */
-export async function isWorkerAlive(paneId) {
+function isTmuxPaneNotFoundError(error) {
+    const err = error;
+    const text = [err?.stderr, err?.stdout, err?.message]
+        .filter((part) => typeof part === 'string')
+        .join('\n')
+        .toLowerCase();
+    return /can't find pane|can't find window|can't find session|no such pane|pane not found|unknown pane/.test(text);
+}
+export async function getWorkerLiveness(paneId) {
     try {
         const result = await tmuxCmdAsync([
             'display-message', '-t', paneId, '-p', '#{pane_dead}'
         ]);
-        return result.stdout.trim() === '0';
+        return result.stdout.trim() === '0' ? 'alive' : 'dead';
     }
-    catch {
-        return false;
+    catch (error) {
+        return isTmuxPaneNotFoundError(error) ? 'dead' : 'unknown';
     }
+}
+export async function isWorkerAlive(paneId) {
+    return (await getWorkerLiveness(paneId)) === 'alive';
 }
 /**
  * Graceful-then-force kill of worker panes.
