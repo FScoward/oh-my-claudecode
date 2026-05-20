@@ -18,6 +18,9 @@ import { inferDelegationPlanForTeamTask } from '../../team/delegation-evidence.j
 import type { CliAgentType } from '../../team/model-contract.js';
 import type { TeamTaskDelegationPlan } from '../../team/types.js';
 import { loadConfig } from '../../config/loader.js';
+import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 
 const HELP_TOKENS = new Set(['--help', '-h', 'help']);
 const MIN_WORKER_COUNT = 1;
@@ -26,7 +29,7 @@ const VALID_TEAM_CLI_AGENT_TYPES = new Set(['claude', 'codex', 'gemini']);
 const DEFAULT_TEAM_CLI_AGENT_TYPE: CliAgentType = 'claude';
 
 const TEAM_HELP = `
-Usage: omc team [N:agent-type[:role]] [--new-window] [--auto-merge] "<task description>"
+Usage: omc team [N:agent-type[:role]] [--new-window] [--auto-merge] [--no-decompose] "<task description>"
        omc team status <team-name>
        omc team shutdown <team-name> [--force]
        omc team api <operation> [--input <json>] [--json]
@@ -45,6 +48,7 @@ Examples:
 Worktrees (opt-in): set team.ops.worktreeMode or OMC_TEAM_WORKTREE_MODE=detached|branch to launch workers from .omc/team/<team>/worktrees/<worker>. Status includes workspace/worktree metadata.
 
 Auto-merge (v2-only):
+  --no-decompose       Treat the launch text as pre-authored/fixed worker scope; do not split by commas/lists.
   --auto-merge          Enable per-commit auto-merge to leader and auto-rebase fanout.
                         Each worker runs in a dedicated git worktree on omc-team/{team}/{worker}.
                         Bursts of rapid worker commits coalesce to a single merge of HEAD.
@@ -159,9 +163,11 @@ export function hasAtomicParallelizationSignals(task: string, _size: string): bo
 export function resolveTeamFanoutLimit(
   requestedWorkerCount: number,
   _explicitAgentType: string | undefined,
-  _explicitWorkerCount: number | undefined,
-  plan: DecompositionPlan
+  explicitWorkerCount: number | undefined,
+  plan: DecompositionPlan,
+  noDecompose = false,
 ): number {
+  if (explicitWorkerCount !== undefined || noDecompose) return requestedWorkerCount;
   if (plan.strategy === 'atomic') return requestedWorkerCount;
   const subtaskCount = plan.subtasks.length;
   if (subtaskCount > 0 && subtaskCount < requestedWorkerCount) {
@@ -229,12 +235,27 @@ export function splitTaskString(task: string): DecompositionPlan {
 // ---------------------------------------------------------------------------
 
 function slugifyTask(task: string): string {
-  return task
+  const compact = task
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 30) || 'team-task';
+    .replace(/^-|-$/g, '');
+  return compact.slice(0, 30).replace(/^-|-$/g, '') || 'team-task';
+}
+
+export function resolveAvailableTeamName(baseName: string, cwd: string): string {
+  const sanitizedBase = slugifyTask(baseName);
+  const stateRoot = join(cwd, '.omc', 'state', 'team');
+  const teamDir = (name: string) => join(stateRoot, name);
+  if (!existsSync(teamDir(sanitizedBase))) return sanitizedBase;
+
+  for (let suffix = 2; suffix <= 99; suffix++) {
+    const suffixText = `-${suffix}`;
+    const candidate = `${sanitizedBase.slice(0, 30 - suffixText.length).replace(/-$/g, '')}${suffixText}`;
+    if (!existsSync(teamDir(candidate))) return candidate;
+  }
+
+  throw new Error(`Unable to allocate a fresh team name for ${sanitizedBase}; remove stale .omc/state/team entries or choose a more specific launch task.`);
 }
 
 export interface ParsedWorkerSpec {
@@ -252,12 +273,25 @@ export interface ParsedTeamArgs {
   json: boolean;
   newWindow: boolean;
   autoMerge: boolean;
+  explicitWorkerSpec: boolean;
+  noDecompose: boolean;
 }
 
 interface NormalizedWorkerSpecSegment {
   count: number;
   agentType: string;
   role?: string;
+}
+
+function isTeamStateLive(config: { tmux_session?: string } | null): boolean {
+  const target = typeof config?.tmux_session === 'string' ? config.tmux_session.trim() : '';
+  if (!target) return false;
+  try {
+    execFileSync('tmux', ['has-session', '-t', target], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function getTeamWorkerIdentityFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -269,7 +303,7 @@ function getTeamWorkerIdentityFromEnv(env: NodeJS.ProcessEnv = process.env): str
 
 export async function assertTeamSpawnAllowed(cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const workerIdentity = getTeamWorkerIdentityFromEnv(env);
-  const { teamReadManifest } = await import('../../team/team-ops.js');
+  const { teamReadConfig, teamReadManifest } = await import('../../team/team-ops.js');
   const { findActiveTeamsV2 } = await import('../../team/runtime-v2.js');
   const { DEFAULT_TEAM_GOVERNANCE, normalizeTeamGovernance } = await import('../../team/governance.js');
 
@@ -292,6 +326,8 @@ export async function assertTeamSpawnAllowed(cwd: string, env: NodeJS.ProcessEnv
 
   const activeTeams = await findActiveTeamsV2(cwd);
   for (const activeTeam of activeTeams) {
+    const config = await teamReadConfig(activeTeam, cwd);
+    if (!isTeamStateLive(config)) continue;
     const manifest = await teamReadManifest(activeTeam, cwd);
     const governance = normalizeTeamGovernance(manifest?.governance, manifest?.policy);
     if (governance.one_team_per_leader_session ?? DEFAULT_TEAM_GOVERNANCE.one_team_per_leader_session) {
@@ -337,6 +373,7 @@ export function parseTeamArgs(tokens: string[], defaultAgentType: string = 'clau
   let json = false;
   let newWindow = false;
   let autoMerge: boolean = process.env.OMC_TEAMS_AUTO_MERGE === '1';
+  let noDecompose = false;
   const normalizedDefaultAgentType = VALID_TEAM_CLI_AGENT_TYPES.has(defaultAgentType as CliAgentType)
     ? defaultAgentType
     : DEFAULT_TEAM_CLI_AGENT_TYPE;
@@ -350,6 +387,8 @@ export function parseTeamArgs(tokens: string[], defaultAgentType: string = 'clau
       newWindow = true;
     } else if (arg === '--auto-merge') {
       autoMerge = true;
+    } else if (arg === '--no-decompose' || arg === '--fixed-workers' || arg === '--preformed-plan') {
+      noDecompose = true;
     } else {
       filteredArgs.push(arg);
     }
@@ -360,6 +399,7 @@ export function parseTeamArgs(tokens: string[], defaultAgentType: string = 'clau
   // Try comma-separated multi-type spec first (e.g. "1:codex,1:gemini" or "2:claude,1:codex:architect")
   let role: string | undefined;
   let specMatched = false;
+  let explicitWorkerSpec = false;
 
   if (first.includes(',')) {
     const segments = first.split(',');
@@ -389,6 +429,7 @@ export function parseTeamArgs(tokens: string[], defaultAgentType: string = 'clau
       const uniqueRoles = [...new Set(roles)];
       if (uniqueRoles.length === 1 && uniqueRoles[0]) role = uniqueRoles[0];
       specMatched = true;
+      explicitWorkerSpec = true;
       filteredArgs.shift();
     }
   }
@@ -405,6 +446,7 @@ export function parseTeamArgs(tokens: string[], defaultAgentType: string = 'clau
         agentType: normalized.agentType,
         ...(role ? { role } : {}),
       }));
+      explicitWorkerSpec = true;
       filteredArgs.shift();
     }
   }
@@ -421,7 +463,7 @@ export function parseTeamArgs(tokens: string[], defaultAgentType: string = 'clau
   }
 
   const teamName = slugifyTask(task);
-  return { workerCount, agentTypes, workerSpecs, role, task, teamName, json, newWindow, autoMerge };
+  return { workerCount, agentTypes, workerSpecs, role, task, teamName, json, newWindow, autoMerge, explicitWorkerSpec, noDecompose };
 }
 
 export function buildStartupTasks(parsed: ParsedTeamArgs): Array<{ subject: string; description: string; owner?: string; delegation?: TeamTaskDelegationPlan }> {
@@ -438,6 +480,59 @@ export function buildStartupTasks(parsed: ParsedTeamArgs): Array<{ subject: stri
       ...(delegation ? { delegation } : {}),
     };
   });
+}
+
+export interface TeamLaunchTask {
+  subject: string;
+  description: string;
+  owner?: string;
+  role?: string;
+  delegation?: TeamTaskDelegationPlan;
+}
+
+export function buildTeamLaunchTasks(
+  parsed: ParsedTeamArgs,
+  decomposition: DecompositionPlan,
+  effectiveWorkerCount: number,
+): TeamLaunchTask[] {
+  const tasks: TeamLaunchTask[] = [];
+  if (parsed.explicitWorkerSpec
+    && !parsed.noDecompose
+    && decomposition.strategy !== 'atomic'
+    && decomposition.subtasks.length > 1
+    && decomposition.subtasks.length !== effectiveWorkerCount) {
+    throw new Error(
+      `Pre-authored task scope count (${decomposition.subtasks.length}) must match explicit worker count (${effectiveWorkerCount}); use --no-decompose to give every worker the full launch text.`,
+    );
+  }
+
+  const canUseDecomposition = !parsed.noDecompose
+    && decomposition.strategy !== 'atomic'
+    && decomposition.subtasks.length > 1
+    && (!parsed.explicitWorkerSpec || decomposition.subtasks.length === effectiveWorkerCount);
+
+  for (let i = 0; i < effectiveWorkerCount; i++) {
+    const workerSpec = parsed.workerSpecs[i];
+    const roleLabel = workerSpec?.role ? ` (${workerSpec.role})` : '';
+    const source = canUseDecomposition
+      ? decomposition.subtasks[i]
+      : undefined;
+    const description = source?.description ?? parsed.task;
+    const subject = source?.subject
+      ?? (effectiveWorkerCount === 1
+        ? parsed.task.slice(0, 80)
+        : `Worker ${i + 1}${roleLabel}: ${parsed.task}`.slice(0, 80));
+    const delegation = inferDelegationPlanForTeamTask(description);
+    tasks.push({
+      subject,
+      description,
+      owner: `worker-${i + 1}`,
+      ...(workerSpec?.role ? { role: workerSpec.role } : {}),
+      ...(delegation ? { delegation } : {}),
+    });
+  }
+
+  return tasks;
 }
 
 
@@ -574,38 +669,13 @@ async function handleTeamStart(parsed: ParsedTeamArgs, cwd: string): Promise<voi
   const effectiveWorkerCount = resolveTeamFanoutLimit(
     parsed.workerCount,
     parsed.agentTypes[0],
-    parsed.workerCount,
-    decomposition
+    parsed.explicitWorkerSpec ? parsed.workerCount : undefined,
+    decomposition,
+    parsed.noDecompose,
   );
 
-  // Build the task list from decomposition subtasks or fall back to atomic replication
-  const tasks: Array<{ subject: string; description: string; owner?: string; delegation?: TeamTaskDelegationPlan }> = [];
-  if (decomposition.strategy !== 'atomic' && decomposition.subtasks.length > 1) {
-    // Use decomposed subtasks — one per subtask (up to effectiveWorkerCount)
-    const subtasks = decomposition.subtasks.slice(0, effectiveWorkerCount);
-    for (let i = 0; i < subtasks.length; i++) {
-      const delegation = inferDelegationPlanForTeamTask(subtasks[i].description);
-      tasks.push({
-        subject: subtasks[i].subject,
-        description: subtasks[i].description,
-        owner: `worker-${i + 1}`,
-        ...(delegation ? { delegation } : {}),
-      });
-    }
-  } else {
-    // Atomic task: replicate across all workers (backward compatible)
-    for (let i = 0; i < effectiveWorkerCount; i++) {
-      const delegation = inferDelegationPlanForTeamTask(parsed.task);
-      tasks.push({
-        subject: effectiveWorkerCount === 1
-          ? parsed.task.slice(0, 80)
-          : `Worker ${i + 1}: ${parsed.task}`.slice(0, 80),
-        description: parsed.task,
-        owner: `worker-${i + 1}`,
-        ...(delegation ? { delegation } : {}),
-      });
-    }
-  }
+  const tasks = buildTeamLaunchTasks(parsed, decomposition, effectiveWorkerCount);
+  const launchTeamName = resolveAvailableTeamName(parsed.teamName, cwd);
 
   // Load role prompt if a role was specified (e.g., 3:codex:architect)
   let rolePrompt: string | undefined;
@@ -619,7 +689,7 @@ async function handleTeamStart(parsed: ParsedTeamArgs, cwd: string): Promise<voi
   if (isRuntimeV2Enabled()) {
     const { startTeamV2, monitorTeamV2 } = await import('../../team/runtime-v2.js');
     const runtime = await startTeamV2({
-      teamName: parsed.teamName,
+      teamName: launchTeamName,
       workerCount: effectiveWorkerCount,
       agentTypes: parsed.agentTypes.slice(0, effectiveWorkerCount),
       tasks,
@@ -659,7 +729,7 @@ async function handleTeamStart(parsed: ParsedTeamArgs, cwd: string): Promise<voi
   // v1 fallback
   const { startTeam, monitorTeam } = await import('../../team/runtime.js');
   const runtime = await startTeam({
-    teamName: parsed.teamName,
+    teamName: launchTeamName,
     workerCount: effectiveWorkerCount,
     agentTypes: parsed.agentTypes.slice(0, effectiveWorkerCount) as CliAgentType[],
     tasks,

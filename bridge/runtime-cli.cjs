@@ -5402,7 +5402,7 @@ function canonicalizeTeamConfigWorkers(config) {
   return {
     ...config,
     workers,
-    worker_count: workers.length
+    worker_count: workers.length > 0 ? workers.length : config.worker_count ?? 0
   };
 }
 
@@ -7800,6 +7800,7 @@ async function startTeamV2(config) {
       status: "pending",
       owner: null,
       result: null,
+      ...config.tasks[i].role ? { role: config.tasks[i].role } : {},
       ...config.tasks[i].delegation ? { delegation: config.tasks[i].delegation } : {},
       created_at: (/* @__PURE__ */ new Date()).toISOString()
     }, null, 2), "utf-8");
@@ -7835,7 +7836,8 @@ async function startTeamV2(config) {
     const allocationTasks = unownedTaskIndices.map((idx) => ({
       id: String(idx),
       subject: config.tasks[idx].subject,
-      description: config.tasks[idx].description
+      description: config.tasks[idx].description,
+      ...config.tasks[idx].role ? { role: config.tasks[idx].role } : {}
     }));
     const allocationWorkers = workerNames.map((name, i) => ({
       name,

@@ -73,10 +73,10 @@ describe('Builtin Skills', () => {
         clearSkillsCache();
     });
     describe('createBuiltinSkills()', () => {
-        it('should return correct number of skills (34 canonical + 2 aliases)', () => {
+        it('should return correct number of skills (35 canonical + 3 aliases)', () => {
             const skills = createBuiltinSkills();
-            // 36 entries: 34 canonical skills + 2 deprecated aliases (learner, psm)
-            expect(skills).toHaveLength(36);
+            // 38 entries: 35 canonical skills + 3 deprecated aliases (cancel-ralph, learner, psm)
+            expect(skills).toHaveLength(38);
         });
         it('should return an array of BuiltinSkill objects', () => {
             const skills = createBuiltinSkills();
@@ -124,6 +124,7 @@ describe('Builtin Skills', () => {
                 'autoresearch',
                 'autopilot',
                 'cancel',
+                'cancel-ralph',
                 'ccg',
                 'configure-notifications',
                 'deep-dive',
@@ -152,6 +153,7 @@ describe('Builtin Skills', () => {
                 'trace',
                 'ultraqa',
                 'ultrawork',
+                'ultragoal',
                 'visual-verdict',
                 'wiki',
                 'writer-memory',
@@ -165,6 +167,21 @@ describe('Builtin Skills', () => {
             const skillNames = skills.map((s) => s.name);
             const uniqueNames = new Set(skillNames);
             expect(uniqueNames.size).toBe(skillNames.length);
+        });
+        it('exposes cancel-ralph as a deprecated alias for canonical cancel', () => {
+            const cancel = getBuiltinSkill('cancel');
+            const cancelRalph = getBuiltinSkill('cancel-ralph');
+            expect(cancel).toBeDefined();
+            expect(cancel.aliasOf).toBeUndefined();
+            expect(cancel.aliases).toContain('cancel-ralph');
+            expect(cancelRalph).toBeDefined();
+            expect(cancelRalph.aliasOf).toBe('cancel');
+            expect(cancelRalph.deprecatedAlias).toBe(true);
+            expect(cancelRalph.deprecationMessage).toContain('Use "cancel" instead');
+            expect(cancelRalph.template).toBe(cancel.template);
+            expect(listBuiltinSkillNames()).toContain('cancel');
+            expect(listBuiltinSkillNames()).not.toContain('cancel-ralph');
+            expect(listBuiltinSkillNames({ includeAliases: true })).toContain('cancel-ralph');
         });
         it('exposes learner as a deprecated alias for canonical skillify', () => {
             const skillify = getBuiltinSkill('skillify');
@@ -654,7 +671,7 @@ describe('Builtin Skills', () => {
     describe('listBuiltinSkillNames()', () => {
         it('should return canonical skill names by default', () => {
             const names = listBuiltinSkillNames();
-            expect(names).toHaveLength(34);
+            expect(names).toHaveLength(35);
             expect(names).toContain('ai-slop-cleaner');
             expect(names).toContain('ask');
             expect(names).toContain('autopilot');
@@ -665,6 +682,7 @@ describe('Builtin Skills', () => {
             expect(names).toContain('ralph');
             expect(names).toContain('self-improve');
             expect(names).toContain('ultrawork');
+            expect(names).toContain('ultragoal');
             expect(names).toContain('omc-plan');
             expect(names).toContain('omc-reference');
             expect(names).toContain('deepinit');
@@ -687,15 +705,17 @@ describe('Builtin Skills', () => {
         });
         it('should include aliases when explicitly requested', () => {
             const names = listBuiltinSkillNames({ includeAliases: true });
-            // swarm alias removed in #1131; psm and learner aliases still exist
-            expect(names).toHaveLength(36);
+            // swarm alias removed in #1131; cancel-ralph, psm, and learner aliases still exist
+            expect(names).toHaveLength(38);
             expect(names).toContain('ai-slop-cleaner');
             expect(names).toContain('autoresearch');
             expect(names).toContain('self-improve');
             expect(names).toContain('trace');
+            expect(names).toContain('ultragoal');
             expect(names).toContain('visual-verdict');
             expect(names).toContain('wiki');
             expect(names).not.toContain('swarm');
+            expect(names).toContain('cancel-ralph');
             expect(names).toContain('psm');
             expect(names).toContain('learner');
         });

@@ -18310,7 +18310,7 @@ function canonicalizeTeamConfigWorkers(config2) {
   return {
     ...config2,
     workers,
-    worker_count: workers.length
+    worker_count: workers.length > 0 ? workers.length : config2.worker_count ?? 0
   };
 }
 

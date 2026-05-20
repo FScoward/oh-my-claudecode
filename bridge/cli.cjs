@@ -6654,7 +6654,7 @@ async function removeFileIfExists(filePath) {
   }
 }
 function sleep2(ms) {
-  return new Promise((resolve19) => setTimeout(resolve19, ms));
+  return new Promise((resolve21) => setTimeout(resolve21, ms));
 }
 var import_child_process9, fs5, fsPromises2, path5, import_url6, import_child_process10, import_util6, execFileAsync3, BRIDGE_SPAWN_TIMEOUT_MS, DEFAULT_GRACE_PERIOD_MS, SIGTERM_GRACE_MS, ownedBridgeSessionIds, USE_TCP_FALLBACK;
 var init_bridge_manager = __esm({
@@ -7683,7 +7683,7 @@ function withFileLockSync(lockPath, fn, opts) {
   }
 }
 function sleep3(ms) {
-  return new Promise((resolve19) => setTimeout(resolve19, ms));
+  return new Promise((resolve21) => setTimeout(resolve21, ms));
 }
 async function acquireFileLock(lockPath, opts) {
   const staleLockMs = opts?.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
@@ -10102,6 +10102,104 @@ function resolveBestPluginSyncSource(targetRoots) {
   }
   return bestRoot;
 }
+function extractFrontmatterBlock(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  return match?.[1] ?? null;
+}
+function getFrontmatterStringValue(metadata, key) {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+function normalizeCompactSkillDescription(description) {
+  const normalized = description.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 240) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 237).trimEnd()}...`;
+}
+function upsertYamlStringField(frontmatter, key, value) {
+  const escaped = JSON.stringify(value);
+  const line = `${key}: ${escaped}`;
+  const pattern = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:.*$`, "m");
+  if (pattern.test(frontmatter)) {
+    return frontmatter.replace(pattern, line);
+  }
+  return `${frontmatter.trimEnd()}
+${line}`;
+}
+function renderCompactPluginSkillShim(skillDirName, content) {
+  const parsed = parseFrontmatter2(content);
+  let frontmatter = extractFrontmatterBlock(content) ?? `name: ${skillDirName}`;
+  const rawDescription = getFrontmatterStringValue(parsed.metadata, "short_description") ?? getFrontmatterStringValue(parsed.metadata, "description") ?? `Invoke the ${skillDirName} OMC skill.`;
+  const description = normalizeCompactSkillDescription(rawDescription);
+  const fullBodyRelPath = `../../${PLUGIN_FULL_SKILL_BODIES_DIR}/${skillDirName}/SKILL.md`;
+  frontmatter = upsertYamlStringField(frontmatter, "description", description);
+  frontmatter = upsertYamlStringField(frontmatter, "omc-full-body", fullBodyRelPath);
+  return `---
+${frontmatter.trim()}
+---
+
+${PLUGIN_COMPACT_SKILL_SHIM_MARKER}
+
+# ${skillDirName}
+
+This is a compact Claude Code plugin registry shim. It keeps startup skill descriptions small while preserving the full OMC skill body for on-demand invocation.
+
+When this skill is invoked, read and follow the full bundled instructions from:
+
+\`${fullBodyRelPath}\`
+
+Resolve that path relative to this SKILL.md file. If needed, locate the active plugin root via \`CLAUDE_PLUGIN_ROOT\` or \`OMC_PLUGIN_ROOT\` and open \`${PLUGIN_FULL_SKILL_BODIES_DIR}/${skillDirName}/SKILL.md\`.
+`;
+}
+function compactPluginSkillPayload(targetRoot) {
+  const skillsDir = (0, import_path49.join)(targetRoot, "skills");
+  const fullBodiesDir = (0, import_path49.join)(targetRoot, PLUGIN_FULL_SKILL_BODIES_DIR);
+  const errors = [];
+  let compacted = 0;
+  let totalBytes = 0;
+  if (!(0, import_fs37.existsSync)(skillsDir)) {
+    return { compacted, totalBytes, errors };
+  }
+  try {
+    (0, import_fs37.mkdirSync)(fullBodiesDir, { recursive: true });
+  } catch (error2) {
+    const message = error2 instanceof Error ? error2.message : String(error2);
+    return { compacted, totalBytes, errors: [`Failed to create ${fullBodiesDir}: ${message}`] };
+  }
+  const skillEntries = (() => {
+    try {
+      return (0, import_fs37.readdirSync)(skillsDir, { withFileTypes: true });
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      errors.push(`Failed to read plugin skills from ${skillsDir}: ${message}`);
+      return null;
+    }
+  })();
+  if (!skillEntries) {
+    return { compacted, totalBytes, errors };
+  }
+  for (const entry of skillEntries) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = (0, import_path49.join)(skillsDir, entry.name);
+    const skillPath = (0, import_path49.join)(skillDir, "SKILL.md");
+    if (!(0, import_fs37.existsSync)(skillPath)) continue;
+    try {
+      const content = (0, import_fs37.readFileSync)(skillPath, "utf-8");
+      const archivedSkillDir = (0, import_path49.join)(fullBodiesDir, entry.name);
+      (0, import_fs37.rmSync)(archivedSkillDir, { recursive: true, force: true });
+      (0, import_fs37.cpSync)(skillDir, archivedSkillDir, { recursive: true, force: true });
+      const shim = renderCompactPluginSkillShim(entry.name, content);
+      (0, import_fs37.writeFileSync)(skillPath, shim);
+      totalBytes += Buffer.byteLength(shim, "utf-8");
+      compacted += 1;
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      errors.push(`Failed to compact plugin skill ${entry.name}: ${message}`);
+    }
+  }
+  return { compacted, totalBytes, errors };
+}
 function copyPluginSyncPayload(sourceRoot, targetRoots) {
   if (targetRoots.length === 0) {
     return { synced: false, errors: [] };
@@ -10110,6 +10208,7 @@ function copyPluginSyncPayload(sourceRoot, targetRoots) {
   const errors = [];
   for (const targetRoot of targetRoots) {
     let copiedToTarget = false;
+    let copiedSkills = false;
     for (const entry of PLUGIN_SYNC_PAYLOAD) {
       const sourcePath = (0, import_path49.join)(sourceRoot, entry);
       if (!(0, import_fs37.existsSync)(sourcePath)) {
@@ -10121,10 +10220,15 @@ function copyPluginSyncPayload(sourceRoot, targetRoots) {
           force: true
         });
         copiedToTarget = true;
+        copiedSkills = copiedSkills || entry === "skills";
       } catch (error2) {
         const message = error2 instanceof Error ? error2.message : String(error2);
         errors.push(`Failed to sync ${entry} to ${targetRoot}: ${message}`);
       }
+    }
+    if (copiedSkills) {
+      const compactResult = compactPluginSkillPayload(targetRoot);
+      errors.push(...compactResult.errors);
     }
     synced = synced || copiedToTarget;
   }
@@ -10758,7 +10862,7 @@ function getInstallInfo() {
     return null;
   }
 }
-var import_fs37, import_path49, import_url9, import_os11, import_child_process13, CLAUDE_CONFIG_DIR, AGENTS_DIR, COMMANDS_DIR, SKILLS_DIR, HOOKS_DIR, HUD_DIR, SETTINGS_FILE, VERSION_FILE, OMC_MANAGED_SKILL_MARKER, CORE_COMMANDS, VERSION, OMC_VERSION_MARKER_PATTERN, CC_NATIVE_COMMANDS, SKININTHEGAMEBROS_ONLY_SKILLS, OMC_HOOK_FILENAMES, STANDALONE_HOOK_TEMPLATE_FILES, PLUGIN_SYNC_PAYLOAD;
+var import_fs37, import_path49, import_url9, import_os11, import_child_process13, CLAUDE_CONFIG_DIR, AGENTS_DIR, COMMANDS_DIR, SKILLS_DIR, HOOKS_DIR, HUD_DIR, SETTINGS_FILE, VERSION_FILE, OMC_MANAGED_SKILL_MARKER, PLUGIN_FULL_SKILL_BODIES_DIR, PLUGIN_COMPACT_SKILL_SHIM_MARKER, CORE_COMMANDS, VERSION, OMC_VERSION_MARKER_PATTERN, CC_NATIVE_COMMANDS, SKININTHEGAMEBROS_ONLY_SKILLS, OMC_HOOK_FILENAMES, STANDALONE_HOOK_TEMPLATE_FILES, PLUGIN_SYNC_PAYLOAD;
 var init_installer = __esm({
   "src/installer/index.ts"() {
     "use strict";
@@ -10786,6 +10890,8 @@ var init_installer = __esm({
     SETTINGS_FILE = (0, import_path49.join)(CLAUDE_CONFIG_DIR, "settings.json");
     VERSION_FILE = (0, import_path49.join)(CLAUDE_CONFIG_DIR, ".omc-version.json");
     OMC_MANAGED_SKILL_MARKER = ".omc-managed";
+    PLUGIN_FULL_SKILL_BODIES_DIR = "skill-bodies";
+    PLUGIN_COMPACT_SKILL_SHIM_MARKER = "<!-- OMC:COMPACT-PLUGIN-SKILL -->";
     CORE_COMMANDS = [];
     VERSION = getRuntimePackageVersion();
     OMC_VERSION_MARKER_PATTERN = /<!-- OMC:VERSION:([^\s]+) -->/;
@@ -10877,6 +10983,76 @@ __export(auto_update_exports, {
   syncPluginCache: () => syncPluginCache,
   updateLastCheckTime: () => updateLastCheckTime
 });
+function npmExecOptions(verbose = false) {
+  return {
+    encoding: "utf-8",
+    stdio: verbose ? "inherit" : "pipe",
+    timeout: 12e4,
+    ...process.platform === "win32" ? { windowsHide: true } : {}
+  };
+}
+function assertSafeNpmPackageSpec(packageSpec) {
+  if (!/^[A-Za-z0-9@._~+/-]+$/.test(packageSpec)) {
+    throw new Error(`Unsafe npm package spec: ${packageSpec}`);
+  }
+}
+function npmInstallGlobalPackage(packageSpec, verbose = false) {
+  assertSafeNpmPackageSpec(packageSpec);
+  if (process.platform === "win32") {
+    (0, import_child_process14.execSync)(`npm install -g ${packageSpec}`, npmExecOptions(verbose));
+    return;
+  }
+  (0, import_child_process14.execFileSync)("npm", ["install", "-g", packageSpec], npmExecOptions(verbose));
+}
+function detectGlobalClaudeCodeInstall() {
+  try {
+    const npmRoot = String((0, import_child_process14.execSync)("npm root -g", {
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 1e4,
+      ...process.platform === "win32" ? { windowsHide: true } : {}
+    }) ?? "").trim();
+    if (!npmRoot) {
+      return { status: "unknown", error: "npm root -g returned an empty path" };
+    }
+    const packageJsonPath = (0, import_path50.join)(npmRoot, "@anthropic-ai", "claude-code", "package.json");
+    if (!(0, import_fs38.existsSync)(packageJsonPath)) {
+      return { status: "absent" };
+    }
+    const packageJson = JSON.parse(String((0, import_fs38.readFileSync)(packageJsonPath, "utf-8") ?? ""));
+    return {
+      status: "present",
+      version: typeof packageJson.version === "string" && packageJson.version.trim() ? packageJson.version.trim() : void 0
+    };
+  } catch (error2) {
+    return {
+      status: "unknown",
+      error: error2 instanceof Error ? error2.message : String(error2)
+    };
+  }
+}
+function restoreGlobalClaudeCodeIfNeeded(beforeUpdate, verbose = false) {
+  if (beforeUpdate.status !== "present") {
+    return { restored: false };
+  }
+  if (detectGlobalClaudeCodeInstall().status === "present") {
+    return { restored: false };
+  }
+  const versionSuffix = beforeUpdate.version ? `@${beforeUpdate.version}` : "@latest";
+  const packageSpec = `${CLAUDE_CODE_NPM_PACKAGE}${versionSuffix}`;
+  if (verbose) {
+    console.log(`[omc update] Restoring global ${packageSpec} after npm update...`);
+  }
+  npmInstallGlobalPackage(packageSpec, verbose);
+  const afterRestore = detectGlobalClaudeCodeInstall();
+  if (afterRestore.status !== "present") {
+    throw new Error(`Global ${CLAUDE_CODE_NPM_PACKAGE} was present before update but is still missing after restore`);
+  }
+  if (verbose) {
+    console.log(`[omc update] Restored global ${CLAUDE_CODE_NPM_PACKAGE}`);
+  }
+  return { restored: true };
+}
 function syncMarketplaceClone(verbose = false) {
   const marketplacePath = (0, import_path50.join)(getClaudeConfigDir(), "plugins", "marketplaces", "omc");
   if (!(0, import_fs38.existsSync)(marketplacePath)) {
@@ -11313,14 +11489,20 @@ async function performUpdate(options) {
     }
     const release = await fetchLatestRelease();
     const newVersion = release.tag_name.replace(/^v/, "");
+    const claudeCodeBeforeUpdate = detectGlobalClaudeCodeInstall();
     try {
-      (0, import_child_process14.execSync)("npm install -g oh-my-claude-sisyphus@latest", {
-        encoding: "utf-8",
-        stdio: options?.verbose ? "inherit" : "pipe",
-        timeout: 12e4,
-        // 2 minute timeout for npm
-        ...process.platform === "win32" ? { windowsHide: true } : {}
-      });
+      (0, import_child_process14.execSync)("npm install -g oh-my-claude-sisyphus@latest", npmExecOptions(options?.verbose ?? false));
+      try {
+        restoreGlobalClaudeCodeIfNeeded(claudeCodeBeforeUpdate, options?.verbose ?? false);
+      } catch (restoreError) {
+        return {
+          success: false,
+          previousVersion,
+          newVersion,
+          message: `Updated to ${newVersion}, but failed to restore global ${CLAUDE_CODE_NPM_PACKAGE}`,
+          errors: [restoreError instanceof Error ? restoreError.message : String(restoreError)]
+        };
+      }
       const marketplaceSync = syncMarketplaceClone(options?.verbose ?? false);
       if (!marketplaceSync.ok && options?.verbose) {
         console.warn(`[omc update] ${marketplaceSync.message}`);
@@ -11597,7 +11779,7 @@ function initSilentAutoUpdate(config2 = {}) {
   silentAutoUpdate(config2).catch(() => {
   });
 }
-var import_fs38, import_path50, import_child_process14, REPO_OWNER, REPO_NAME, GITHUB_API_URL, GITHUB_RAW_URL, CLAUDE_CONFIG_DIR2, VERSION_FILE2, CONFIG_FILE, SILENT_UPDATE_STATE_FILE;
+var import_fs38, import_path50, import_child_process14, REPO_OWNER, REPO_NAME, GITHUB_API_URL, GITHUB_RAW_URL, CLAUDE_CODE_NPM_PACKAGE, CLAUDE_CONFIG_DIR2, VERSION_FILE2, CONFIG_FILE, SILENT_UPDATE_STATE_FILE;
 var init_auto_update = __esm({
   "src/features/auto-update.ts"() {
     "use strict";
@@ -11613,6 +11795,7 @@ var init_auto_update = __esm({
     REPO_NAME = "oh-my-claudecode";
     GITHUB_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
     GITHUB_RAW_URL = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}`;
+    CLAUDE_CODE_NPM_PACKAGE = "@anthropic-ai/claude-code";
     CLAUDE_CONFIG_DIR2 = getClaudeConfigDir();
     VERSION_FILE2 = (0, import_path50.join)(CLAUDE_CONFIG_DIR2, ".omc-version.json");
     CONFIG_FILE = (0, import_path50.join)(CLAUDE_CONFIG_DIR2, OMC_CONFIG_FILE_REL);
@@ -13388,6 +13571,7 @@ __export(todo_continuation_exports, {
   isAuthenticationError: () => isAuthenticationError,
   isContextLimitStop: () => isContextLimitStop,
   isExplicitCancelCommand: () => isExplicitCancelCommand,
+  isOversizeToolResultRedirectStop: () => isOversizeToolResultRedirectStop,
   isRateLimitStop: () => isRateLimitStop,
   isScheduledWakeupStop: () => isScheduledWakeupStop,
   isTaskIncomplete: () => isTaskIncomplete,
@@ -13418,6 +13602,78 @@ function getStopReasonFields(context) {
     context.endTurnReason,
     context.reason
   ].filter((value) => typeof value === "string" && value.trim().length > 0).map((value) => value.toLowerCase().replace(/[\s-]+/g, "_"));
+}
+function stringifyContextValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+function appendBoundedText(parts, value) {
+  const text = stringifyContextValue(value);
+  if (!text) return;
+  parts.push(text.length > STOP_CONTEXT_VALUE_MAX_CHARS ? text.slice(-STOP_CONTEXT_VALUE_MAX_CHARS) : text);
+}
+function readStopTranscriptTail(transcriptPath) {
+  const size = (0, import_fs46.statSync)(transcriptPath).size;
+  if (size <= STOP_CONTEXT_TAIL_BYTES) {
+    return (0, import_fs46.readFileSync)(transcriptPath, "utf-8");
+  }
+  const fd = (0, import_fs46.openSync)(transcriptPath, "r");
+  try {
+    const offset = size - STOP_CONTEXT_TAIL_BYTES;
+    const buf = Buffer.allocUnsafe(STOP_CONTEXT_TAIL_BYTES);
+    const bytesRead = (0, import_fs46.readSync)(fd, buf, 0, STOP_CONTEXT_TAIL_BYTES, offset);
+    return buf.subarray(0, bytesRead).toString("utf-8");
+  } finally {
+    (0, import_fs46.closeSync)(fd);
+  }
+}
+function extractLatestTranscriptEventText(transcriptTail) {
+  const lines = transcriptTail.split("\n").map((line) => line.trim()).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    try {
+      const parsed = JSON.parse(line);
+      const text = stringifyContextValue(parsed);
+      if (text) return text;
+    } catch {
+      if (line) return line;
+    }
+  }
+  return "";
+}
+function getOversizeStopEvidence(context) {
+  if (!context) return "";
+  const parts = [];
+  appendBoundedText(parts, context.message);
+  appendBoundedText(parts, context.output);
+  appendBoundedText(parts, context.response);
+  appendBoundedText(parts, context.text);
+  appendBoundedText(parts, context.content);
+  appendBoundedText(parts, context.tool_input ?? context.toolInput);
+  const transcriptPath = context.transcript_path ?? context.transcriptPath;
+  if (transcriptPath && (0, import_fs46.existsSync)(transcriptPath)) {
+    try {
+      appendBoundedText(parts, extractLatestTranscriptEventText(readStopTranscriptTail(transcriptPath)));
+    } catch {
+    }
+  }
+  return parts.join("\n");
+}
+function isOversizeToolResultRedirectStop(context) {
+  const evidence = getOversizeStopEvidence(context);
+  if (!evidence) return false;
+  const hasToolResultPointer = TOOL_RESULT_FILE_POINTER_PATTERN.test(evidence);
+  if (!hasToolResultPointer) return false;
+  return TOOL_RESULT_REDIRECT_MARKER_PATTERNS.some((pattern) => pattern.test(evidence));
 }
 function isUserAbort(context) {
   if (!context) return false;
@@ -13680,7 +13936,7 @@ function getNextPendingTodo(result) {
   }
   return result.todos.find((t) => t.status === "pending") ?? null;
 }
-var import_fs46, import_path56, AUTHENTICATION_ERROR_PATTERNS;
+var import_fs46, import_path56, STOP_CONTEXT_TAIL_BYTES, STOP_CONTEXT_VALUE_MAX_CHARS, TOOL_RESULT_FILE_POINTER_PATTERN, TOOL_RESULT_REDIRECT_MARKER_PATTERNS, AUTHENTICATION_ERROR_PATTERNS;
 var init_todo_continuation = __esm({
   "src/hooks/todo-continuation/index.ts"() {
     "use strict";
@@ -13688,6 +13944,15 @@ var init_todo_continuation = __esm({
     import_path56 = require("path");
     init_worktree_paths();
     init_config_dir();
+    STOP_CONTEXT_TAIL_BYTES = 32 * 1024;
+    STOP_CONTEXT_VALUE_MAX_CHARS = 8 * 1024;
+    TOOL_RESULT_FILE_POINTER_PATTERN = /(?:^|[\s"'`(\[{<])(?:\.{0,2}\/)?tool-results\/[A-Za-z0-9._-]+\.txt(?:$|[\s"'`)\]}>:,.])/i;
+    TOOL_RESULT_REDIRECT_MARKER_PATTERNS = [
+      /\btool[_ -]?result\b.{0,160}\b(?:too large|oversi[sz]e[dt]?|exceeds?|exceeded|truncated|redirect(?:ed)?|saved|written)\b/i,
+      /\b(?:too large|oversi[sz]e[dt]?|exceeds?|exceeded|truncated|redirect(?:ed)?|saved|written)\b.{0,160}\btool[_ -]?result\b/i,
+      /\b(?:output|response|result)\b.{0,160}\b(?:redirect(?:ed)?|saved|written)\b.{0,160}\btool-results\/[A-Za-z0-9._-]+\.txt\b/i,
+      /\bfull (?:tool )?(?:output|result|response)\b.{0,160}\btool-results\/[A-Za-z0-9._-]+\.txt\b/i
+    ];
     AUTHENTICATION_ERROR_PATTERNS = [
       "authentication_error",
       "authentication_failed",
@@ -13916,7 +14181,7 @@ function canonicalizeTeamConfigWorkers(config2) {
   return {
     ...config2,
     workers,
-    worker_count: workers.length
+    worker_count: workers.length > 0 ? workers.length : config2.worker_count ?? 0
   };
 }
 var init_worker_canonicalization = __esm({
@@ -17164,15 +17429,21 @@ function readAutopilotState(directory, sessionId) {
     directory,
     sessionId
   );
+  if (state && !state.phase && state.current_phase) {
+    state.phase = state.current_phase;
+  }
   if (state && sessionId && state.session_id && state.session_id !== sessionId) {
     return null;
   }
   return state;
 }
 function writeAutopilotState(directory, state, sessionId) {
+  const stateRecord = state;
+  const phase = typeof stateRecord.phase === "string" ? stateRecord.phase : typeof stateRecord.current_phase === "string" ? stateRecord.current_phase : void 0;
+  const normalizedState = phase ? { ...stateRecord, phase, current_phase: phase } : stateRecord;
   return writeModeState(
     "autopilot",
-    state,
+    normalizedState,
     directory,
     sessionId
   );
@@ -17207,6 +17478,7 @@ function initAutopilot(directory, idea, sessionId, config2) {
   const state = {
     active: true,
     phase: "expansion",
+    current_phase: "expansion",
     iteration: 1,
     max_iterations: mergedConfig.maxIterations ?? 10,
     originalIdea: idea,
@@ -17267,6 +17539,7 @@ function transitionPhase(directory, newPhase, sessionId) {
     state.phase_durations[oldPhase] = duration3;
   }
   state.phase = newPhase;
+  state.current_phase = newPhase;
   state.phase_durations[`${newPhase}_start_ms`] = Date.now();
   if (newPhase === "complete" || newPhase === "failed") {
     state.completed_at = now;
@@ -19568,6 +19841,24 @@ async function checkPersistentModes(sessionId, directory, stopContext) {
       mode: "none"
     };
   }
+  if (isOversizeToolResultRedirectStop(stopContext)) {
+    const redirectStopCount = readStopBreaker(
+      workingDir,
+      "oversize-tool-result-redirect",
+      sessionId,
+      OVERSIZE_TOOL_RESULT_REDIRECT_STOP_TTL_MS
+    ) + 1;
+    writeStopBreaker(workingDir, "oversize-tool-result-redirect", redirectStopCount, sessionId);
+    if (redirectStopCount <= OVERSIZE_TOOL_RESULT_REDIRECT_STOP_MAX) {
+      return {
+        shouldBlock: false,
+        message: "",
+        mode: "none"
+      };
+    }
+  } else {
+    writeStopBreaker(workingDir, "oversize-tool-result-redirect", 0, sessionId);
+  }
   if (hasPendingOwnedAsyncWork(workingDir, sessionId)) {
     return {
       shouldBlock: false,
@@ -19675,7 +19966,7 @@ function createHookOutput(result) {
     message: result.message || void 0
   };
 }
-var import_fs55, import_path64, CANCEL_SIGNAL_TTL_MS2, STALE_STATE_THRESHOLD_MS, PENDING_ASYNC_STATE_STALE_MS, TERMINAL_WORKFLOW_SLOT_MODES, TERMINAL_WORKFLOW_PHASES, todoContinuationAttempts, TRANSCRIPT_TAIL_BYTES, CRITICAL_CONTEXT_STOP_PERCENT, RALPLAN_TERMINAL_PHASES, REVIEWER_TASK_TOOL_NAMES, REVIEWER_COMMAND_TOOL_NAMES, AWAITING_CONFIRMATION_TTL_MS, TEAM_PIPELINE_STOP_BLOCKER_MAX, TEAM_PIPELINE_STOP_BLOCKER_TTL_MS, RALPLAN_STOP_BLOCKER_MAX, RALPLAN_STOP_BLOCKER_TTL_MS, RALPLAN_ACTIVE_AGENT_RECENCY_WINDOW_MS;
+var import_fs55, import_path64, CANCEL_SIGNAL_TTL_MS2, STALE_STATE_THRESHOLD_MS, PENDING_ASYNC_STATE_STALE_MS, OVERSIZE_TOOL_RESULT_REDIRECT_STOP_MAX, OVERSIZE_TOOL_RESULT_REDIRECT_STOP_TTL_MS, TERMINAL_WORKFLOW_SLOT_MODES, TERMINAL_WORKFLOW_PHASES, todoContinuationAttempts, TRANSCRIPT_TAIL_BYTES, CRITICAL_CONTEXT_STOP_PERCENT, RALPLAN_TERMINAL_PHASES, REVIEWER_TASK_TOOL_NAMES, REVIEWER_COMMAND_TOOL_NAMES, AWAITING_CONFIRMATION_TTL_MS, TEAM_PIPELINE_STOP_BLOCKER_MAX, TEAM_PIPELINE_STOP_BLOCKER_TTL_MS, RALPLAN_STOP_BLOCKER_MAX, RALPLAN_STOP_BLOCKER_TTL_MS, RALPLAN_ACTIVE_AGENT_RECENCY_WINDOW_MS;
 var init_persistent_mode = __esm({
   "src/hooks/persistent-mode/index.ts"() {
     "use strict";
@@ -19700,6 +19991,8 @@ var init_persistent_mode = __esm({
     CANCEL_SIGNAL_TTL_MS2 = 3e4;
     STALE_STATE_THRESHOLD_MS = 2 * 60 * 60 * 1e3;
     PENDING_ASYNC_STATE_STALE_MS = 24 * 60 * 60 * 1e3;
+    OVERSIZE_TOOL_RESULT_REDIRECT_STOP_MAX = 3;
+    OVERSIZE_TOOL_RESULT_REDIRECT_STOP_TTL_MS = 5 * 60 * 1e3;
     TERMINAL_WORKFLOW_SLOT_MODES = /* @__PURE__ */ new Set(["autopilot", "ralph", "ralplan"]);
     TERMINAL_WORKFLOW_PHASES = /* @__PURE__ */ new Set([
       "complete",
@@ -24290,7 +24583,7 @@ async function pollTelegram(config2, state, rateLimiter) {
   try {
     const offset = state.telegramLastUpdateId ? state.telegramLastUpdateId + 1 : 0;
     const path22 = `/bot${config2.telegramBotToken}/getUpdates?offset=${offset}&timeout=0`;
-    const updates = await new Promise((resolve19, reject) => {
+    const updates = await new Promise((resolve21, reject) => {
       const req = (0, import_https.request)(
         {
           hostname: "api.telegram.org",
@@ -24307,7 +24600,7 @@ async function pollTelegram(config2, state, rateLimiter) {
             try {
               const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
               if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-                resolve19(body.result || []);
+                resolve21(body.result || []);
               } else {
                 reject(new Error(`HTTP ${res.statusCode}`));
               }
@@ -24371,7 +24664,7 @@ async function pollTelegram(config2, state, rateLimiter) {
             text: "Injected into Claude Code session.",
             reply_to_message_id: msg.message_id
           });
-          await new Promise((resolve19) => {
+          await new Promise((resolve21) => {
             const replyReq = (0, import_https.request)(
               {
                 hostname: "api.telegram.org",
@@ -24386,13 +24679,13 @@ async function pollTelegram(config2, state, rateLimiter) {
               },
               (res) => {
                 res.resume();
-                resolve19();
+                resolve21();
               }
             );
-            replyReq.on("error", () => resolve19());
+            replyReq.on("error", () => resolve21());
             replyReq.on("timeout", () => {
               replyReq.destroy();
-              resolve19();
+              resolve21();
             });
             replyReq.write(replyBody);
             replyReq.end();
@@ -24529,13 +24822,13 @@ async function pollLoop() {
         }
       }
       writeDaemonState(state);
-      await new Promise((resolve19) => setTimeout(resolve19, config2.pollIntervalMs));
+      await new Promise((resolve21) => setTimeout(resolve21, config2.pollIntervalMs));
     } catch (error2) {
       state.errors++;
       state.lastError = redactTokens(error2 instanceof Error ? error2.message : String(error2));
       log(`Poll error: ${state.lastError}`);
       writeDaemonState(state);
-      await new Promise((resolve19) => setTimeout(resolve19, config2.pollIntervalMs * 2));
+      await new Promise((resolve21) => setTimeout(resolve21, config2.pollIntervalMs * 2));
     }
   }
   log("Poll loop ended");
@@ -26107,7 +26400,7 @@ async function triggerStopCallbacks(metrics, _input, options = {}) {
   try {
     await Promise.race([
       Promise.allSettled(promises),
-      new Promise((resolve19) => setTimeout(resolve19, 5e3))
+      new Promise((resolve21) => setTimeout(resolve21, 5e3))
     ]);
   } catch (error2) {
     console.error("[stop-callback] Callback execution error:", error2);
@@ -26397,7 +26690,7 @@ async function sendTelegram2(config2, payload) {
       text: payload.message,
       parse_mode: config2.parseMode || "Markdown"
     });
-    const result = await new Promise((resolve19) => {
+    const result = await new Promise((resolve21) => {
       const req = (0, import_https2.request)(
         {
           hostname: "api.telegram.org",
@@ -26424,9 +26717,9 @@ async function sendTelegram2(config2, payload) {
                 }
               } catch {
               }
-              resolve19({ platform: "telegram", success: true, messageId });
+              resolve21({ platform: "telegram", success: true, messageId });
             } else {
-              resolve19({
+              resolve21({
                 platform: "telegram",
                 success: false,
                 error: `HTTP ${res.statusCode}`
@@ -26436,11 +26729,11 @@ async function sendTelegram2(config2, payload) {
         }
       );
       req.on("error", (e) => {
-        resolve19({ platform: "telegram", success: false, error: e.message });
+        resolve21({ platform: "telegram", success: false, error: e.message });
       });
       req.on("timeout", () => {
         req.destroy();
-        resolve19({
+        resolve21({
           platform: "telegram",
           success: false,
           error: "Request timeout"
@@ -26686,9 +26979,9 @@ async function dispatchNotifications(config2, event, payload, platformMessages) 
           }
         )
       ),
-      new Promise((resolve19) => {
+      new Promise((resolve21) => {
         timer = setTimeout(
-          () => resolve19([
+          () => resolve21([
             {
               platform: "unknown",
               success: false,
@@ -27433,6 +27726,7 @@ function isTeamTask(value) {
 }
 async function withLock(lockDir, fn) {
   const STALE_MS = 3e4;
+  await (0, import_promises7.mkdir)((0, import_node_path6.dirname)(lockDir), { recursive: true });
   try {
     await (0, import_promises7.mkdir)(lockDir, { recursive: false });
   } catch (err) {
@@ -27477,7 +27771,7 @@ async function withMailboxLock(teamName, workerName2, cwd2, fn) {
   while (Date.now() < deadline) {
     const result = await withLock(lockDir, fn);
     if (result.ok) return result.value;
-    await new Promise((resolve19) => setTimeout(resolve19, delayMs));
+    await new Promise((resolve21) => setTimeout(resolve21, delayMs));
     delayMs = Math.min(delayMs * 2, 200);
   }
   throw new Error(`Failed to acquire mailbox lock for ${workerName2} after ${timeoutMs}ms`);
@@ -27583,7 +27877,7 @@ async function teamCreateTask(teamName, task, cwd2) {
       return created;
     });
     if (result.ok) return result.value;
-    await new Promise((resolve19) => setTimeout(resolve19, delayMs));
+    await new Promise((resolve21) => setTimeout(resolve21, delayMs));
     delayMs = Math.min(delayMs * 2, 200);
   }
   throw new Error(`Failed to acquire task creation lock for team ${teamName} after ${timeoutMs}ms`);
@@ -27623,7 +27917,7 @@ async function teamUpdateTask(teamName, taskId, updates, cwd2) {
       return merged;
     });
     if (result.ok) return result.value;
-    await new Promise((resolve19) => setTimeout(resolve19, delayMs));
+    await new Promise((resolve21) => setTimeout(resolve21, delayMs));
     delayMs = Math.min(delayMs * 2, 200);
   }
   throw new Error(`Failed to acquire task update lock for task ${taskId} in team ${teamName} after ${timeoutMs}ms`);
@@ -27644,7 +27938,22 @@ async function teamClaimTask(teamName, taskId, workerName2, expectedVersion, cwd
     teamName,
     cwd: cwd2,
     readTask: teamReadTask,
-    readTeamConfig: teamReadConfig,
+    readTeamConfig: async (tn, c) => {
+      const cfg = await teamReadConfig(tn, c);
+      if (!cfg) return null;
+      if (cfg.workers.length > 0) return cfg;
+      const match = /^worker-(\d+)$/.exec(workerName2);
+      const workerIndex = match ? Number.parseInt(match[1], 10) : 0;
+      if (workerIndex >= 1 && workerIndex <= (cfg.worker_count ?? 0)) {
+        return {
+          ...cfg,
+          workers: Array.from({ length: cfg.worker_count ?? 0 }, (_, index) => ({
+            name: `worker-${index + 1}`
+          }))
+        };
+      }
+      return cfg;
+    },
     withTaskClaimLock,
     normalizeTask,
     isTerminalTaskStatus: isTerminalTeamTaskStatus,
@@ -28020,10 +28329,10 @@ async function readJsonSafe4(filePath) {
   }
 }
 async function writeAtomic2(filePath, data) {
-  const { writeFile: writeFile8 } = await import("fs/promises");
+  const { writeFile: writeFile9 } = await import("fs/promises");
   await (0, import_promises8.mkdir)((0, import_path82.dirname)(filePath), { recursive: true });
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-  await writeFile8(tmpPath, data, "utf-8");
+  await writeFile9(tmpPath, data, "utf-8");
   const { rename: rename3 } = await import("fs/promises");
   await rename3(tmpPath, filePath);
 }
@@ -29944,7 +30253,7 @@ async function withDispatchLock(teamName, cwd2, fn) {
         );
       }
       const jitter = 0.5 + Math.random() * 0.5;
-      await new Promise((resolve19) => setTimeout(resolve19, Math.floor(pollMs * jitter)));
+      await new Promise((resolve21) => setTimeout(resolve21, Math.floor(pollMs * jitter)));
       pollMs = Math.min(pollMs * 2, DISPATCH_LOCK_MAX_POLL_MS);
     }
   }
@@ -32115,8 +32424,8 @@ ${dirtyFiles.map((f) => `- \`${f}\``).join("\n")}`;
               return false;
             }
           })(),
-          new Promise((resolve19) => {
-            const t = setTimeout(() => resolve19(false), remaining);
+          new Promise((resolve21) => {
+            const t = setTimeout(() => resolve21(false), remaining);
             if (typeof t.unref === "function") t.unref();
           })
         ]);
@@ -32455,7 +32764,7 @@ async function waitForWorkerStartupEvidence(teamName, workerName2, taskId, cwd2,
       return true;
     }
     if (attempt < attempts) {
-      await new Promise((resolve19) => setTimeout(resolve19, delayMs));
+      await new Promise((resolve21) => setTimeout(resolve21, delayMs));
     }
   }
   return false;
@@ -32762,6 +33071,7 @@ async function startTeamV2(config2) {
       status: "pending",
       owner: null,
       result: null,
+      ...config2.tasks[i].role ? { role: config2.tasks[i].role } : {},
       ...config2.tasks[i].delegation ? { delegation: config2.tasks[i].delegation } : {},
       created_at: (/* @__PURE__ */ new Date()).toISOString()
     }, null, 2), "utf-8");
@@ -32797,7 +33107,8 @@ async function startTeamV2(config2) {
     const allocationTasks = unownedTaskIndices.map((idx) => ({
       id: String(idx),
       subject: config2.tasks[idx].subject,
-      description: config2.tasks[idx].description
+      description: config2.tasks[idx].description,
+      ...config2.tasks[idx].role ? { role: config2.tasks[idx].role } : {}
     }));
     const allocationWorkers = workerNames.map((name, i) => ({
       name,
@@ -33105,7 +33416,7 @@ async function startTeamV2(config2) {
   };
 }
 async function writeWatchdogFailedMarker(teamName, cwd2, reason) {
-  const { writeFile: writeFile8 } = await import("fs/promises");
+  const { writeFile: writeFile9 } = await import("fs/promises");
   const marker = {
     failedAt: Date.now(),
     reason,
@@ -33114,7 +33425,7 @@ async function writeWatchdogFailedMarker(teamName, cwd2, reason) {
   const root2 = absPath(cwd2, TeamPaths.root(sanitizeTeamName(teamName)));
   const markerPath = (0, import_path91.join)(root2, "watchdog-failed.json");
   await (0, import_promises16.mkdir)(root2, { recursive: true });
-  await writeFile8(markerPath, JSON.stringify(marker, null, 2), "utf-8");
+  await writeFile9(markerPath, JSON.stringify(marker, null, 2), "utf-8");
 }
 async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd2) {
   const logEventFailure = createSwallowedErrorLogger(
@@ -33134,9 +33445,9 @@ async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd2) {
       retryCount: 0,
       lastFailedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    const { writeFile: writeFile8 } = await import("fs/promises");
+    const { writeFile: writeFile9 } = await import("fs/promises");
     await (0, import_promises16.mkdir)(absPath(cwd2, TeamPaths.tasks(sanitized)), { recursive: true });
-    await writeFile8(sidecarPath, JSON.stringify(sidecar, null, 2), "utf-8");
+    await writeFile9(sidecarPath, JSON.stringify(sidecar, null, 2), "utf-8");
     const taskPath2 = absPath(cwd2, TeamPaths.taskFile(sanitized, task.id));
     try {
       const { readFileSync: readFileSync90, writeFileSync: writeFileSync38 } = await import("fs");
@@ -33948,7 +34259,7 @@ async function readJsonSafe5(filePath) {
         return null;
       }
     }
-    await new Promise((resolve19) => setTimeout(resolve19, 25));
+    await new Promise((resolve21) => setTimeout(resolve21, 25));
   }
   return null;
 }
@@ -34066,7 +34377,7 @@ async function nextPendingTaskIndex(runtime) {
     let task = await readTask(root2, taskId);
     if (!task) {
       for (let attempt = 1; attempt < transientReadRetryAttempts; attempt++) {
-        await new Promise((resolve19) => setTimeout(resolve19, transientReadRetryDelayMs));
+        await new Promise((resolve21) => setTimeout(resolve21, transientReadRetryDelayMs));
         task = await readTask(root2, taskId);
         if (task) break;
       }
@@ -34504,8 +34815,8 @@ async function assignTask(teamName, taskId, targetWorkerName, paneId, sessionNam
 Task ID: ${taskId}
 Claim and execute task from: .omc/state/team/${teamName}/tasks/${taskId}.json
 `;
-  const { appendFile: appendFile7 } = await import("fs/promises");
-  await appendFile7(inboxPath, msg, "utf-8");
+  const { appendFile: appendFile8 } = await import("fs/promises");
+  await appendFile8(inboxPath, msg, "utf-8");
   const notified = await notifyPaneWithRetry2(sessionName2, paneId, `new-task:${taskId}`);
   if (!notified) {
     if (previousTaskState) {
@@ -42263,7 +42574,7 @@ function validateCredentials(creds) {
   return !isCredentialExpired(creds);
 }
 function refreshAccessToken(refreshToken) {
-  return new Promise((resolve19) => {
+  return new Promise((resolve21) => {
     const clientId = process.env.CLAUDE_CODE_OAUTH_CLIENT_ID || DEFAULT_OAUTH_CLIENT_ID;
     const body = new URLSearchParams({
       grant_type: "refresh_token",
@@ -42291,7 +42602,7 @@ function refreshAccessToken(refreshToken) {
             try {
               const parsed = JSON.parse(data);
               if (parsed.access_token) {
-                resolve19({
+                resolve21({
                   accessToken: parsed.access_token,
                   refreshToken: parsed.refresh_token || refreshToken,
                   expiresAt: parsed.expires_in ? Date.now() + parsed.expires_in * 1e3 : parsed.expires_at
@@ -42304,20 +42615,20 @@ function refreshAccessToken(refreshToken) {
           if (process.env.OMC_DEBUG) {
             console.error(`[usage-api] Token refresh failed: HTTP ${res.statusCode}`);
           }
-          resolve19(null);
+          resolve21(null);
         });
       }
     );
-    req.on("error", () => resolve19(null));
+    req.on("error", () => resolve21(null));
     req.on("timeout", () => {
       req.destroy();
-      resolve19(null);
+      resolve21(null);
     });
     req.end(body);
   });
 }
 function fetchUsageFromApi(accessToken) {
-  return new Promise((resolve19) => {
+  return new Promise((resolve21) => {
     const req = import_https3.default.request(
       {
         hostname: "api.anthropic.com",
@@ -42338,41 +42649,41 @@ function fetchUsageFromApi(accessToken) {
         res.on("end", () => {
           if (res.statusCode === 200) {
             try {
-              resolve19({ data: JSON.parse(data) });
+              resolve21({ data: JSON.parse(data) });
             } catch {
-              resolve19({ data: null });
+              resolve21({ data: null });
             }
           } else if (res.statusCode === 429) {
             if (process.env.OMC_DEBUG) {
               console.error(`[usage-api] Anthropic API returned 429 (rate limited)`);
             }
-            resolve19({ data: null, rateLimited: true });
+            resolve21({ data: null, rateLimited: true });
           } else {
-            resolve19({ data: null });
+            resolve21({ data: null });
           }
         });
       }
     );
-    req.on("error", () => resolve19({ data: null }));
+    req.on("error", () => resolve21({ data: null }));
     req.on("timeout", () => {
       req.destroy();
-      resolve19({ data: null });
+      resolve21({ data: null });
     });
     req.end();
   });
 }
 function fetchUsageFromZai() {
-  return new Promise((resolve19) => {
+  return new Promise((resolve21) => {
     const baseUrl = process.env.ANTHROPIC_BASE_URL;
     const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
     if (!baseUrl || !authToken) {
-      resolve19({ data: null });
+      resolve21({ data: null });
       return;
     }
     const validation = validateAnthropicBaseUrl(baseUrl);
     if (!validation.allowed) {
       console.error(`[SSRF Guard] Blocking usage API call: ${validation.reason}`);
-      resolve19({ data: null });
+      resolve21({ data: null });
       return;
     }
     try {
@@ -42400,29 +42711,29 @@ function fetchUsageFromZai() {
           res.on("end", () => {
             if (res.statusCode === 200) {
               try {
-                resolve19({ data: JSON.parse(data) });
+                resolve21({ data: JSON.parse(data) });
               } catch {
-                resolve19({ data: null });
+                resolve21({ data: null });
               }
             } else if (res.statusCode === 429) {
               if (process.env.OMC_DEBUG) {
                 console.error(`[usage-api] z.ai API returned 429 (rate limited)`);
               }
-              resolve19({ data: null, rateLimited: true });
+              resolve21({ data: null, rateLimited: true });
             } else {
-              resolve19({ data: null });
+              resolve21({ data: null });
             }
           });
         }
       );
-      req.on("error", () => resolve19({ data: null }));
+      req.on("error", () => resolve21({ data: null }));
       req.on("timeout", () => {
         req.destroy();
-        resolve19({ data: null });
+        resolve21({ data: null });
       });
       req.end();
     } catch {
-      resolve19({ data: null });
+      resolve21({ data: null });
     }
   });
 }
@@ -42589,16 +42900,16 @@ function parseZaiResponse(response) {
   return result;
 }
 function fetchUsageFromMinimax(apiKey) {
-  return new Promise((resolve19) => {
+  return new Promise((resolve21) => {
     const baseUrl = process.env.ANTHROPIC_BASE_URL;
     if (!baseUrl) {
-      resolve19({ data: null });
+      resolve21({ data: null });
       return;
     }
     const validation = validateAnthropicBaseUrl(baseUrl);
     if (!validation.allowed) {
       console.error(`[SSRF Guard] Blocking usage API call: ${validation.reason}`);
-      resolve19({ data: null });
+      resolve21({ data: null });
       return;
     }
     try {
@@ -42625,29 +42936,29 @@ function fetchUsageFromMinimax(apiKey) {
           res.on("end", () => {
             if (res.statusCode === 200) {
               try {
-                resolve19({ data: JSON.parse(data) });
+                resolve21({ data: JSON.parse(data) });
               } catch {
-                resolve19({ data: null });
+                resolve21({ data: null });
               }
             } else if (res.statusCode === 429) {
               if (process.env.OMC_DEBUG) {
                 console.error(`[usage-api] MiniMax API returned 429 (rate limited)`);
               }
-              resolve19({ data: null, rateLimited: true });
+              resolve21({ data: null, rateLimited: true });
             } else {
-              resolve19({ data: null });
+              resolve21({ data: null });
             }
           });
         }
       );
-      req.on("error", () => resolve19({ data: null }));
+      req.on("error", () => resolve21({ data: null }));
       req.on("timeout", () => {
         req.destroy();
-        resolve19({ data: null });
+        resolve21({ data: null });
       });
       req.end();
     } catch {
-      resolve19({ data: null });
+      resolve21({ data: null });
     }
   });
 }
@@ -42999,7 +43310,7 @@ function readMostRecentSessionCache(root2) {
     return null;
   }
 }
-async function readStdin() {
+async function readStdin2() {
   if (process.stdin.isTTY) {
     return null;
   }
@@ -43785,7 +44096,7 @@ function isCacheValid2(cache) {
   return Date.now() - cache.timestamp < CACHE_TTL_MS2;
 }
 function spawnWithTimeout(cmd, timeoutMs) {
-  return new Promise((resolve19, reject) => {
+  return new Promise((resolve21, reject) => {
     const [executable, ...args] = Array.isArray(cmd) ? cmd : ["sh", "-c", cmd];
     const child = (0, import_child_process35.spawn)(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -43808,7 +44119,7 @@ function spawnWithTimeout(cmd, timeoutMs) {
       clearTimeout(timer);
       if (!timedOut) {
         if (code === 0) {
-          resolve19(stdout);
+          resolve21(stdout);
         } else {
           reject(new Error(`Command exited with code ${code}`));
         }
@@ -45007,9 +45318,9 @@ function renderCwd(cwd2, format = "relative", useHyperlinks = false) {
       displayPath = cwd2;
       break;
     case "folder": {
-      const parent = (0, import_node_path12.basename)((0, import_node_path12.dirname)(cwd2));
-      const folder = (0, import_node_path12.basename)(cwd2);
-      displayPath = parent ? (0, import_node_path12.join)(parent, folder) : folder;
+      const parent = (0, import_node_path15.basename)((0, import_node_path15.dirname)(cwd2));
+      const folder = (0, import_node_path15.basename)(cwd2);
+      displayPath = parent ? (0, import_node_path15.join)(parent, folder) : folder;
       break;
     }
     default:
@@ -45022,12 +45333,12 @@ function renderCwd(cwd2, format = "relative", useHyperlinks = false) {
   }
   return rendered;
 }
-var import_node_os4, import_node_path12;
+var import_node_os4, import_node_path15;
 var init_cwd = __esm({
   "src/hud/elements/cwd.ts"() {
     "use strict";
     import_node_os4 = require("node:os");
-    import_node_path12 = require("node:path");
+    import_node_path15 = require("node:path");
     init_colors();
   }
 });
@@ -45051,14 +45362,14 @@ var init_hostname = __esm({
 
 // src/hud/elements/git.ts
 function getGitRepoName(cwd2) {
-  const key = cwd2 ? (0, import_node_path13.resolve)(cwd2) : process.cwd();
+  const key = cwd2 ? (0, import_node_path16.resolve)(cwd2) : process.cwd();
   const cached2 = repoCache.get(key);
   if (cached2 && Date.now() < cached2.expiresAt) {
     return cached2.value;
   }
   let result = null;
   try {
-    const url = (0, import_node_child_process10.execSync)("git remote get-url origin", {
+    const url = (0, import_node_child_process11.execSync)("git remote get-url origin", {
       cwd: cwd2,
       encoding: "utf-8",
       timeout: 1e3,
@@ -45078,14 +45389,14 @@ function getGitRepoName(cwd2) {
   return result;
 }
 function getGitBranch(cwd2) {
-  const key = cwd2 ? (0, import_node_path13.resolve)(cwd2) : process.cwd();
+  const key = cwd2 ? (0, import_node_path16.resolve)(cwd2) : process.cwd();
   const cached2 = branchCache.get(key);
   if (cached2 && Date.now() < cached2.expiresAt) {
     return cached2.value;
   }
   let result = null;
   try {
-    const branch = (0, import_node_child_process10.execSync)("git branch --show-current", {
+    const branch = (0, import_node_child_process11.execSync)("git branch --show-current", {
       cwd: cwd2,
       encoding: "utf-8",
       timeout: 1e3,
@@ -45100,7 +45411,7 @@ function getGitBranch(cwd2) {
   return result;
 }
 function getWorktreeInfo(cwd2) {
-  const key = cwd2 ? (0, import_node_path13.resolve)(cwd2) : process.cwd();
+  const key = cwd2 ? (0, import_node_path16.resolve)(cwd2) : process.cwd();
   const cached2 = worktreeCache.get(key);
   if (cached2 && Date.now() < cached2.expiresAt) {
     return cached2.value;
@@ -45114,20 +45425,20 @@ function getWorktreeInfo(cwd2) {
   };
   let result = { isWorktree: false, worktreeName: null };
   try {
-    const gitDir = (0, import_node_child_process10.execSync)("git rev-parse --git-dir", execOpts).trim();
-    const gitCommonDir = (0, import_node_child_process10.execSync)("git rev-parse --git-common-dir", execOpts).trim();
-    let resolvedGitDir = (0, import_node_path13.resolve)(key, gitDir);
-    let resolvedCommonDir = (0, import_node_path13.resolve)(key, gitCommonDir);
+    const gitDir = (0, import_node_child_process11.execSync)("git rev-parse --git-dir", execOpts).trim();
+    const gitCommonDir = (0, import_node_child_process11.execSync)("git rev-parse --git-common-dir", execOpts).trim();
+    let resolvedGitDir = (0, import_node_path16.resolve)(key, gitDir);
+    let resolvedCommonDir = (0, import_node_path16.resolve)(key, gitCommonDir);
     try {
-      resolvedGitDir = (0, import_node_fs9.realpathSync)(resolvedGitDir);
+      resolvedGitDir = (0, import_node_fs12.realpathSync)(resolvedGitDir);
     } catch {
     }
     try {
-      resolvedCommonDir = (0, import_node_fs9.realpathSync)(resolvedCommonDir);
+      resolvedCommonDir = (0, import_node_fs12.realpathSync)(resolvedCommonDir);
     } catch {
     }
     if (resolvedGitDir !== resolvedCommonDir) {
-      result = { isWorktree: true, worktreeName: (0, import_node_path13.basename)(resolvedGitDir) };
+      result = { isWorktree: true, worktreeName: (0, import_node_path16.basename)(resolvedGitDir) };
     }
   } catch {
   }
@@ -45149,14 +45460,14 @@ function renderGitBranch(cwd2) {
   return `${dim("branch:")}${cyan(branch)}`;
 }
 function getGitStatusCounts(cwd2) {
-  const key = cwd2 ? (0, import_node_path13.resolve)(cwd2) : process.cwd();
+  const key = cwd2 ? (0, import_node_path16.resolve)(cwd2) : process.cwd();
   const cached2 = statusCache.get(key);
   if (cached2 && Date.now() < cached2.expiresAt) {
     return cached2.value;
   }
   let result = null;
   try {
-    const output = (0, import_node_child_process10.execSync)("git --no-optional-locks status --porcelain -b", {
+    const output = (0, import_node_child_process11.execSync)("git --no-optional-locks status --porcelain -b", {
       cwd: cwd2,
       encoding: "utf-8",
       timeout: 1e3,
@@ -45206,13 +45517,13 @@ function renderGitStatus(cwd2, labels = DEFAULT_HUD_LABELS) {
   if (behind > 0) parts.push(`${red(labels.behind)}${behind}`);
   return parts.join(" ");
 }
-var import_node_child_process10, import_node_fs9, import_node_path13, CACHE_TTL_MS3, repoCache, branchCache, worktreeCache, statusCache;
+var import_node_child_process11, import_node_fs12, import_node_path16, CACHE_TTL_MS3, repoCache, branchCache, worktreeCache, statusCache;
 var init_git = __esm({
   "src/hud/elements/git.ts"() {
     "use strict";
-    import_node_child_process10 = require("node:child_process");
-    import_node_fs9 = require("node:fs");
-    import_node_path13 = require("node:path");
+    import_node_child_process11 = require("node:child_process");
+    import_node_fs12 = require("node:fs");
+    import_node_path16 = require("node:path");
     init_colors();
     init_types4();
     CACHE_TTL_MS3 = 3e4;
@@ -45959,7 +46270,7 @@ function showDiagnostic() {
 async function main2(watchMode = false, skipInit = false) {
   try {
     const previousStdinCache = readStdinCache();
-    let stdin = await readStdin();
+    let stdin = await readStdin2();
     if (stdin) {
       stdin = stabilizeContextPercent(stdin, previousStdinCache);
       writeStdinCache(stdin);
@@ -46043,8 +46354,8 @@ async function main2(watchMode = false, skipInit = false) {
     }
     try {
       const updateCacheFile = (0, import_path128.join)((0, import_os22.homedir)(), ".omc", "update-check.json");
-      await (0, import_promises19.access)(updateCacheFile);
-      const content = await (0, import_promises19.readFile)(updateCacheFile, "utf-8");
+      await (0, import_promises22.access)(updateCacheFile);
+      const content = await (0, import_promises22.readFile)(updateCacheFile, "utf-8");
       const cached2 = JSON.parse(content);
       if (cached2?.latestVersion && omcVersion && compareVersions2(omcVersion, cached2.latestVersion) < 0) {
         updateAvailable = cached2.latestVersion;
@@ -46169,7 +46480,7 @@ async function main2(watchMode = false, skipInit = false) {
     }
   }
 }
-var import_fs109, import_promises19, import_path128, import_os22, import_child_process36, import_url16, lastSummarySpawnTimestamp, summaryProcessPid;
+var import_fs109, import_promises22, import_path128, import_os22, import_child_process36, import_url16, lastSummarySpawnTimestamp, summaryProcessPid;
 var init_hud = __esm({
   "src/hud/index.ts"() {
     "use strict";
@@ -46187,7 +46498,7 @@ var init_hud = __esm({
     init_auto_update();
     init_worktree_paths();
     import_fs109 = require("fs");
-    import_promises19 = require("fs/promises");
+    import_promises22 = require("fs/promises");
     import_path128 = require("path");
     import_os22 = require("os");
     import_child_process36 = require("child_process");
@@ -49646,7 +49957,7 @@ var require_compile = __commonJS2((exports2) => {
     const schOrFunc = root2.refs[ref];
     if (schOrFunc)
       return schOrFunc;
-    let _sch = resolve19.call(this, root2, ref);
+    let _sch = resolve21.call(this, root2, ref);
     if (_sch === void 0) {
       const schema = (_a = root2.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
       const { schemaId } = this.opts;
@@ -49673,7 +49984,7 @@ var require_compile = __commonJS2((exports2) => {
   function sameSchemaEnv(s1, s2) {
     return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
   }
-  function resolve19(root2, ref) {
+  function resolve21(root2, ref) {
     let sch;
     while (typeof (sch = this.refs[ref]) == "string")
       ref = sch;
@@ -50171,54 +50482,54 @@ var require_fast_uri = __commonJS2((exports2, module2) => {
     }
     return uri;
   }
-  function resolve19(baseURI, relativeURI, options) {
+  function resolve21(baseURI, relativeURI, options) {
     const schemelessOptions = Object.assign({ scheme: "null" }, options);
     const resolved = resolveComponents(parse62(baseURI, schemelessOptions), parse62(relativeURI, schemelessOptions), schemelessOptions, true);
     return serialize(resolved, { ...schemelessOptions, skipEscape: true });
   }
-  function resolveComponents(base, relative16, options, skipNormalization) {
+  function resolveComponents(base, relative18, options, skipNormalization) {
     const target = {};
     if (!skipNormalization) {
       base = parse62(serialize(base, options), options);
-      relative16 = parse62(serialize(relative16, options), options);
+      relative18 = parse62(serialize(relative18, options), options);
     }
     options = options || {};
-    if (!options.tolerant && relative16.scheme) {
-      target.scheme = relative16.scheme;
-      target.userinfo = relative16.userinfo;
-      target.host = relative16.host;
-      target.port = relative16.port;
-      target.path = removeDotSegments(relative16.path || "");
-      target.query = relative16.query;
+    if (!options.tolerant && relative18.scheme) {
+      target.scheme = relative18.scheme;
+      target.userinfo = relative18.userinfo;
+      target.host = relative18.host;
+      target.port = relative18.port;
+      target.path = removeDotSegments(relative18.path || "");
+      target.query = relative18.query;
     } else {
-      if (relative16.userinfo !== void 0 || relative16.host !== void 0 || relative16.port !== void 0) {
-        target.userinfo = relative16.userinfo;
-        target.host = relative16.host;
-        target.port = relative16.port;
-        target.path = removeDotSegments(relative16.path || "");
-        target.query = relative16.query;
+      if (relative18.userinfo !== void 0 || relative18.host !== void 0 || relative18.port !== void 0) {
+        target.userinfo = relative18.userinfo;
+        target.host = relative18.host;
+        target.port = relative18.port;
+        target.path = removeDotSegments(relative18.path || "");
+        target.query = relative18.query;
       } else {
-        if (!relative16.path) {
+        if (!relative18.path) {
           target.path = base.path;
-          if (relative16.query !== void 0) {
-            target.query = relative16.query;
+          if (relative18.query !== void 0) {
+            target.query = relative18.query;
           } else {
             target.query = base.query;
           }
         } else {
-          if (relative16.path.charAt(0) === "/") {
-            target.path = removeDotSegments(relative16.path);
+          if (relative18.path.charAt(0) === "/") {
+            target.path = removeDotSegments(relative18.path);
           } else {
             if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-              target.path = "/" + relative16.path;
+              target.path = "/" + relative18.path;
             } else if (!base.path) {
-              target.path = relative16.path;
+              target.path = relative18.path;
             } else {
-              target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative16.path;
+              target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative18.path;
             }
             target.path = removeDotSegments(target.path);
           }
-          target.query = relative16.query;
+          target.query = relative18.query;
         }
         target.userinfo = base.userinfo;
         target.host = base.host;
@@ -50226,7 +50537,7 @@ var require_fast_uri = __commonJS2((exports2, module2) => {
       }
       target.scheme = base.scheme;
     }
-    target.fragment = relative16.fragment;
+    target.fragment = relative18.fragment;
     return target;
   }
   function equal(uriA, uriB, options) {
@@ -50404,7 +50715,7 @@ var require_fast_uri = __commonJS2((exports2, module2) => {
   var fastUri = {
     SCHEMES,
     normalize: normalize12,
-    resolve: resolve19,
+    resolve: resolve21,
     resolveComponents,
     equal,
     serialize,
@@ -64771,7 +65082,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = (_c = (_a = task2.pollInterval) !== null && _a !== void 0 ? _a : (_b = this._options) === null || _b === void 0 ? void 0 : _b.defaultTaskPollInterval) !== null && _c !== void 0 ? _c : 1e3;
-        await new Promise((resolve19) => setTimeout(resolve19, pollInterval));
+        await new Promise((resolve21) => setTimeout(resolve21, pollInterval));
         (_d = options === null || options === void 0 ? void 0 : options.signal) === null || _d === void 0 || _d.throwIfAborted();
       }
     } catch (error2) {
@@ -64783,7 +65094,7 @@ var Protocol = class {
   }
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options !== null && options !== void 0 ? options : {};
-    return new Promise((resolve19, reject) => {
+    return new Promise((resolve21, reject) => {
       var _a, _b, _c, _d, _e, _f, _g;
       const earlyReject = (error2) => {
         reject(error2);
@@ -64864,7 +65175,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve19(parseResult.data);
+            resolve21(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -65061,12 +65372,12 @@ var Protocol = class {
       }
     } catch (_d) {
     }
-    return new Promise((resolve19, reject) => {
+    return new Promise((resolve21, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve19, interval);
+      const timeoutId = setTimeout(resolve21, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -65865,7 +66176,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = (_a = task.pollInterval) !== null && _a !== void 0 ? _a : 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve19) => setTimeout(resolve19, pollInterval));
+      await new Promise((resolve21) => setTimeout(resolve21, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -70934,7 +71245,7 @@ var LspClient = class _LspClient {
 Install with: ${this.serverConfig.installHint}`
       );
     }
-    return new Promise((resolve19, reject) => {
+    return new Promise((resolve21, reject) => {
       const command = this.devContainerContext ? "docker" : this.serverConfig.command;
       const args = this.devContainerContext ? ["exec", "-i", "-w", this.devContainerContext.containerWorkspaceRoot, this.devContainerContext.containerId, this.serverConfig.command, ...this.serverConfig.args] : this.serverConfig.args;
       this.process = (0, import_child_process4.spawn)(command, args, {
@@ -70961,7 +71272,7 @@ Install with: ${this.serverConfig.installHint}`
       });
       this.initialize().then(() => {
         this.initialized = true;
-        resolve19();
+        resolve21();
       }).catch(reject);
     });
   }
@@ -71105,13 +71416,13 @@ Install with: ${this.serverConfig.installHint}`
     const message = `Content-Length: ${Buffer.byteLength(content)}\r
 \r
 ${content}`;
-    return new Promise((resolve19, reject) => {
+    return new Promise((resolve21, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pendingRequests.delete(id);
         reject(new Error(`LSP request '${method}' timed out after ${effectiveTimeout}ms`));
       }, effectiveTimeout);
       this.pendingRequests.set(id, {
-        resolve: resolve19,
+        resolve: resolve21,
         reject,
         timeout: timeoutHandle
       });
@@ -71187,7 +71498,7 @@ ${content}`;
       }
     });
     this.openDocuments.add(hostUri);
-    await new Promise((resolve19) => setTimeout(resolve19, 100));
+    await new Promise((resolve21) => setTimeout(resolve21, 100));
   }
   /**
    * Close a document
@@ -71348,13 +71659,13 @@ ${content}`;
     if (this.diagnostics.has(uri)) {
       return Promise.resolve();
     }
-    return new Promise((resolve19) => {
+    return new Promise((resolve21) => {
       let resolved = false;
       const timer = setTimeout(() => {
         if (!resolved) {
           resolved = true;
           this.diagnosticWaiters.delete(uri);
-          resolve19();
+          resolve21();
         }
       }, timeoutMs);
       const existing = this.diagnosticWaiters.get(uri) || [];
@@ -71362,7 +71673,7 @@ ${content}`;
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
-          resolve19();
+          resolve21();
         }
       });
       this.diagnosticWaiters.set(uri, existing);
@@ -73259,7 +73570,7 @@ var SessionLock = class {
   }
 };
 function sleep(ms) {
-  return new Promise((resolve19) => setTimeout(resolve19, ms));
+  return new Promise((resolve21) => setTimeout(resolve21, ms));
 }
 
 // src/tools/python-repl/socket-client.ts
@@ -73289,7 +73600,7 @@ var JsonRpcError = class extends Error {
   }
 };
 async function sendSocketRequest(socketPath, method, params, timeout = 6e4) {
-  return new Promise((resolve19, reject) => {
+  return new Promise((resolve21, reject) => {
     const id = (0, import_crypto5.randomUUID)();
     const request = {
       jsonrpc: "2.0",
@@ -73379,7 +73690,7 @@ async function sendSocketRequest(socketPath, method, params, timeout = 6e4) {
           }
           if (!settled) {
             settled = true;
-            resolve19(response.result);
+            resolve21(response.result);
           }
         } catch (e) {
           if (!settled) {
@@ -74098,6 +74409,7 @@ var STATE_TOOL_MODES = [
 ];
 var EXTRA_STATE_ONLY_MODES = ["ralplan", "omc-teams", "skill-active"];
 var CANCEL_SIGNAL_TTL_MS = 3e4;
+var OWNER_SESSION_FALLBACK_MODES = /* @__PURE__ */ new Set(["ralph"]);
 function readTeamNamesFromStateFile(statePath) {
   if (!(0, import_fs20.existsSync)(statePath)) return [];
   try {
@@ -74221,6 +74533,30 @@ function clearCompletedSessionStateCandidates(mode, root2, requesterSessionId) {
     }
   }
   return { cleared, hadFailure, paths };
+}
+function getStateClearCheckedPaths(mode, root2, sessionId) {
+  const paths = /* @__PURE__ */ new Set();
+  if (sessionId) {
+    paths.add(MODE_CONFIGS[mode] ? getStateFilePath(root2, mode, sessionId) : resolveSessionStatePath(mode, sessionId, root2));
+  } else {
+    paths.add(getStatePath(mode, root2));
+  }
+  for (const legacyPath of getLegacyStateFileCandidates(mode, root2)) {
+    paths.add(legacyPath);
+  }
+  const sessionIds = sessionId ? [sessionId, ...listSessionIds(root2)] : listSessionIds(root2);
+  for (const sid of new Set(sessionIds)) {
+    paths.add(MODE_CONFIGS[mode] ? getStateFilePath(root2, mode, sid) : resolveSessionStatePath(mode, sid, root2));
+  }
+  return [...paths];
+}
+function formatStateClearNoopMessage(mode, root2, sessionId) {
+  const scope = sessionId ? ` in session: ${sessionId}` : "";
+  const checkedPaths = getStateClearCheckedPaths(mode, root2, sessionId);
+  const checked = checkedPaths.length > 0 ? `
+- Checked paths:
+${checkedPaths.map((statePath) => `  - ${statePath}`).join("\n")}` : "";
+  return `No state found to clear for mode: ${mode}${scope}${checked}`;
 }
 function getModeRuntimeArtifactNames(mode) {
   return [
@@ -74594,7 +74930,7 @@ var stateClearTool = {
           let ownerSessionId2;
           let ownerSessionCleanup2 = { cleared: 0, hadFailure: false, paths: [] };
           let ownerLegacyCleanup2 = { cleared: 0, hadFailure: false };
-          if (requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup2.cleared === 0 && legacyCleanup2.cleared === 0) {
+          if (OWNER_SESSION_FALLBACK_MODES.has(mode) && requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup2.cleared === 0 && legacyCleanup2.cleared === 0) {
             ownerSessionId2 = findSingleOwningSessionForMode(mode, root2, sessionId);
             if (ownerSessionId2) {
               if (mode === "team") {
@@ -74638,6 +74974,15 @@ var stateClearTool = {
             if (prunedMissions > 0) details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
             return details.length > 0 ? ` (${details.join(", ")})` : "";
           })();
+          const clearedStateOrArtifacts2 = requestedSessionOwnedPaths.length + completedSessionCleanup.cleared + sessionCleanup2.cleared + legacyCleanup2.cleared + ownerSessionCleanup2.cleared + ownerLegacyCleanup2.cleared + runtimeCleanup2.cleared;
+          if (!ownerSessionId2 && clearedStateOrArtifacts2 === 0 && success && !legacyCleanup2.hadFailure && !sessionCleanup2.hadFailure && !completedSessionCleanup.hadFailure && !ownerSessionCleanup2.hadFailure && !ownerLegacyCleanup2.hadFailure && !runtimeCleanup2.hadFailure) {
+            return {
+              content: [{
+                type: "text",
+                text: formatStateClearNoopMessage(mode, root2, sessionId)
+              }]
+            };
+          }
           if (success && !legacyCleanup2.hadFailure && !sessionCleanup2.hadFailure && !completedSessionCleanup.hadFailure && !ownerSessionCleanup2.hadFailure && !ownerLegacyCleanup2.hadFailure && !runtimeCleanup2.hadFailure) {
             return {
               content: [{
@@ -74659,7 +75004,7 @@ var stateClearTool = {
         let ownerSessionId;
         let ownerSessionCleanup = { cleared: 0, hadFailure: false, paths: [] };
         let ownerLegacyCleanup = { cleared: 0, hadFailure: false };
-        if (requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup.cleared === 0 && legacyCleanup.cleared === 0) {
+        if (OWNER_SESSION_FALLBACK_MODES.has(mode) && requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup.cleared === 0 && legacyCleanup.cleared === 0) {
           ownerSessionId = findSingleOwningSessionForMode(mode, root2, sessionId);
           if (ownerSessionId) {
             if (mode === "team") {
@@ -74702,10 +75047,20 @@ var stateClearTool = {
           if (prunedMissions > 0) details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
           return details.length > 0 ? ` (${details.join(", ")})` : "";
         })();
+        const clearedStateOrArtifacts = requestedSessionOwnedPaths.length + completedSessionCleanup.cleared + sessionCleanup.cleared + legacyCleanup.cleared + ownerSessionCleanup.cleared + ownerLegacyCleanup.cleared + runtimeCleanup2.cleared;
+        const hadFailure = legacyCleanup.hadFailure || sessionCleanup.hadFailure || completedSessionCleanup.hadFailure || ownerSessionCleanup.hadFailure || ownerLegacyCleanup.hadFailure || runtimeCleanup2.hadFailure;
+        if (!ownerSessionId && clearedStateOrArtifacts === 0 && !hadFailure) {
+          return {
+            content: [{
+              type: "text",
+              text: formatStateClearNoopMessage(mode, root2, sessionId)
+            }]
+          };
+        }
         return {
           content: [{
             type: "text",
-            text: `${legacyCleanup.hadFailure || sessionCleanup.hadFailure || completedSessionCleanup.hadFailure || ownerSessionCleanup.hadFailure || ownerLegacyCleanup.hadFailure || runtimeCleanup2.hadFailure ? "Warning: Some files could not be removed" : "Successfully cleared state"} for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
+            text: `${hadFailure ? "Warning: Some files could not be removed" : "Successfully cleared state"} for mode: ${mode} in session: ${sessionId}${ghostNote}${runtimeCleanupNote}`
           }]
         };
       }
@@ -74794,7 +75149,7 @@ var stateClearTool = {
         return {
           content: [{
             type: "text",
-            text: `No state found to clear for mode: ${mode}`
+            text: formatStateClearNoopMessage(mode, root2)
           }]
         };
       }
@@ -75873,7 +76228,7 @@ function mergeArrays(fieldName, base, incoming) {
       return mergeScalarArray(base, incoming);
   }
 }
-function mergeByKey(base, incoming, keyFn, resolve19) {
+function mergeByKey(base, incoming, keyFn, resolve21) {
   const seen = /* @__PURE__ */ new Map();
   for (const item of base) {
     seen.set(keyFn(item), item);
@@ -75882,7 +76237,7 @@ function mergeByKey(base, incoming, keyFn, resolve19) {
     const key = keyFn(item);
     const existing = seen.get(key);
     if (existing) {
-      seen.set(key, resolve19(existing, item));
+      seen.set(key, resolve21(existing, item));
     } else {
       seen.set(key, item);
     }
@@ -82435,6 +82790,7 @@ async function seedAutopilotStartupState(directory, prompt, sessionId) {
     {
       active: true,
       phase: "expansion",
+      current_phase: "expansion",
       iteration: 1,
       max_iterations: DEFAULT_CONFIG6.maxIterations ?? 10,
       originalIdea: prompt,
@@ -84546,6 +84902,37 @@ function getDeepInterviewAmbiguityThreshold() {
 function formatThresholdPercent(threshold) {
   return `${(threshold * 100).toFixed(2).replace(/\.?0+$/, "")}%`;
 }
+function pathLooksWindows(value) {
+  return /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+function isPathInsideOrEqual(parentPath, candidatePath) {
+  const pathApi = pathLooksWindows(parentPath) || pathLooksWindows(candidatePath) ? import_path104.win32 : { relative: import_path104.relative, isAbsolute: import_path104.isAbsolute };
+  const rel = pathApi.relative(parentPath, candidatePath);
+  return rel === "" || !rel.startsWith("..") && !pathApi.isAbsolute(rel);
+}
+function getFrontmatterString(metadata, key) {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+function readSkillBodyOverride(skillPath, metadata, fallbackBody) {
+  const bodyPath = getFrontmatterString(metadata, "omc-full-body");
+  if (!bodyPath) {
+    return fallbackBody;
+  }
+  const skillDir = (0, import_path104.dirname)(skillPath);
+  const resolvedBodyPath = (0, import_path104.resolve)(skillDir, bodyPath);
+  const packageRoot = (0, import_path104.resolve)(getPackageDir5());
+  if (!isPathInsideOrEqual(packageRoot, resolvedBodyPath)) {
+    return fallbackBody;
+  }
+  try {
+    const fullContent = (0, import_fs86.readFileSync)(resolvedBodyPath, "utf-8");
+    const { body } = parseFrontmatter2(fullContent);
+    return body;
+  } catch {
+    return fallbackBody;
+  }
+}
 function applyDeepInterviewRuntimeSettings(template) {
   const threshold = getDeepInterviewAmbiguityThreshold();
   const percent = formatThresholdPercent(threshold);
@@ -84573,7 +84960,8 @@ function loadSkillFromFile(skillPath, skillName) {
     const resolvedName = metadata.name || skillName;
     const safePrimaryName = toSafeSkillName(resolvedName);
     const pipeline = parseSkillPipelineMetadata(metadata);
-    const renderedBody = renderBundledSkillBody(safePrimaryName, body);
+    const fullBody = readSkillBodyOverride(skillPath, metadata, body);
+    const renderedBody = renderBundledSkillBody(safePrimaryName, fullBody);
     const template = [
       renderedBody,
       renderSkillRuntimeGuidance(safePrimaryName),
@@ -84667,6 +85055,9 @@ function listBuiltinSkillNames(options) {
     return skills.map((s) => s.name);
   }
   return skills.filter((s) => !s.aliasOf).map((s) => s.name);
+}
+function getSkillsDir() {
+  return SKILLS_DIR2;
 }
 
 // src/hooks/auto-slash-command/executor.ts
@@ -85453,7 +85844,7 @@ async function pollLoop2(config2) {
       log2(`Poll error: ${state.lastError}`, config2);
       writeDaemonState2(state, config2);
     }
-    await new Promise((resolve19) => setTimeout(resolve19, config2.pollIntervalMs));
+    await new Promise((resolve21) => setTimeout(resolve21, config2.pollIntervalMs));
   }
 }
 function startDaemon(config2) {
@@ -85963,6 +86354,101 @@ function checkEnvFlags() {
   }
   return { disableOmc, skipHooks };
 }
+var SETUP_FALLBACK_SKILL_NAMES = /* @__PURE__ */ new Set(["omc-reference"]);
+function parseSemverLikeVersion(version3) {
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version3)) {
+    return null;
+  }
+  return version3.split(/[+-]/, 1)[0].split(".").map((part) => Number.parseInt(part, 10));
+}
+function compareSemverLikeVersions(a, b) {
+  const parsedA = parseSemverLikeVersion(a);
+  const parsedB = parseSemverLikeVersion(b);
+  if (!parsedA || !parsedB) {
+    return 0;
+  }
+  for (let index = 0; index < 3; index += 1) {
+    const delta = parsedA[index] - parsedB[index];
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+function isValidSetupPluginRoot(pluginRoot) {
+  return (0, import_fs98.existsSync)((0, import_path117.join)(pluginRoot, "docs", "CLAUDE.md"));
+}
+function readInstalledPluginRoots() {
+  const installedPluginsPath = (0, import_path117.join)(getClaudeConfigDir(), "plugins", "installed_plugins.json");
+  if (!(0, import_fs98.existsSync)(installedPluginsPath)) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse((0, import_fs98.readFileSync)(installedPluginsPath, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return [];
+    }
+    const plugins = "plugins" in parsed && parsed.plugins && typeof parsed.plugins === "object" && !Array.isArray(parsed.plugins) ? parsed.plugins : parsed;
+    return Object.entries(plugins).filter(([key]) => key.startsWith("oh-my-claudecode")).flatMap(([, value]) => Array.isArray(value) ? value : []).map((entry) => entry && typeof entry === "object" && "installPath" in entry ? entry.installPath : null).filter((installPath) => typeof installPath === "string" && installPath.length > 0);
+  } catch {
+    return [];
+  }
+}
+function findLatestSiblingPluginRoot(pluginRoot) {
+  const cacheBase = (0, import_path117.dirname)(pluginRoot);
+  if (!(0, import_fs98.existsSync)(cacheBase)) {
+    return null;
+  }
+  try {
+    return (0, import_fs98.readdirSync)(cacheBase).filter((entry) => parseSemverLikeVersion(entry)).map((entry) => (0, import_path117.join)(cacheBase, entry)).filter(isValidSetupPluginRoot).sort((a, b) => compareSemverLikeVersions((0, import_path117.basename)(b), (0, import_path117.basename)(a)))[0] || null;
+  } catch {
+    return null;
+  }
+}
+function getSetupFallbackCanonicalSkillPaths(baseName) {
+  const currentSkillsDir = getSkillsDir();
+  const currentPluginRoot = (0, import_path117.dirname)(currentSkillsDir);
+  const roots = [
+    currentPluginRoot,
+    process.env.CLAUDE_PLUGIN_ROOT,
+    ...readInstalledPluginRoots()
+  ].filter((root2) => typeof root2 === "string" && root2.length > 0);
+  for (const root2 of [...roots]) {
+    const latestSibling = findLatestSiblingPluginRoot(root2);
+    if (latestSibling) {
+      roots.push(latestSibling);
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return [
+    (0, import_path117.join)(currentSkillsDir, baseName, "SKILL.md"),
+    ...roots.flatMap((root2) => [(0, import_path117.join)(root2, "skills", baseName, "SKILL.md")])
+  ].filter((path22) => {
+    if (seen.has(path22)) {
+      return false;
+    }
+    seen.add(path22);
+    return true;
+  });
+}
+function isSupportedSetupFallbackSkill(legacySkillsDir, entry, baseName) {
+  if (!SETUP_FALLBACK_SKILL_NAMES.has(baseName)) {
+    return false;
+  }
+  if (entry.toLowerCase() !== baseName) {
+    return false;
+  }
+  const installedSkillPath = (0, import_path117.join)(legacySkillsDir, entry, "SKILL.md");
+  if (!(0, import_fs98.existsSync)(installedSkillPath)) {
+    return false;
+  }
+  try {
+    const installedContent = (0, import_fs98.readFileSync)(installedSkillPath, "utf-8");
+    return getSetupFallbackCanonicalSkillPaths(baseName).some((canonicalSkillPath) => (0, import_fs98.existsSync)(canonicalSkillPath) && installedContent === (0, import_fs98.readFileSync)(canonicalSkillPath, "utf-8"));
+  } catch {
+    return false;
+  }
+}
 function checkLegacySkills() {
   const legacySkillsDir = (0, import_path117.join)(getClaudeConfigDir(), "skills");
   if (!(0, import_fs98.existsSync)(legacySkillsDir)) return [];
@@ -85975,6 +86461,9 @@ function checkLegacySkills() {
     for (const entry of entries) {
       const baseName = entry.replace(/\.md$/i, "").toLowerCase();
       if (pluginSkillNames.has(baseName)) {
+        if (isSupportedSetupFallbackSkill(legacySkillsDir, entry, baseName)) {
+          continue;
+        }
         collisions.push({ name: baseName, path: (0, import_path117.join)(legacySkillsDir, entry) });
       }
     }
@@ -87182,13 +87671,16 @@ function inferDelegationPlanForTeamTask(text) {
 
 // src/cli/commands/team.ts
 init_loader();
+var import_node_fs9 = require("node:fs");
+var import_node_child_process10 = require("node:child_process");
+var import_node_path12 = require("node:path");
 var HELP_TOKENS = /* @__PURE__ */ new Set(["--help", "-h", "help"]);
 var MIN_WORKER_COUNT = 1;
 var MAX_WORKER_COUNT = 20;
 var VALID_TEAM_CLI_AGENT_TYPES = /* @__PURE__ */ new Set(["claude", "codex", "gemini"]);
 var DEFAULT_TEAM_CLI_AGENT_TYPE = "claude";
 var TEAM_HELP = `
-Usage: omc team [N:agent-type[:role]] [--new-window] [--auto-merge] "<task description>"
+Usage: omc team [N:agent-type[:role]] [--new-window] [--auto-merge] [--no-decompose] "<task description>"
        omc team status <team-name>
        omc team shutdown <team-name> [--force]
        omc team api <operation> [--input <json>] [--json]
@@ -87207,6 +87699,7 @@ Examples:
 Worktrees (opt-in): set team.ops.worktreeMode or OMC_TEAM_WORKTREE_MODE=detached|branch to launch workers from .omc/team/<team>/worktrees/<worker>. Status includes workspace/worktree metadata.
 
 Auto-merge (v2-only):
+  --no-decompose       Treat the launch text as pre-authored/fixed worker scope; do not split by commas/lists.
   --auto-merge          Enable per-commit auto-merge to leader and auto-rebase fanout.
                         Each worker runs in a dedicated git worktree on omc-team/{team}/{worker}.
                         Bursts of rapid worker commits coalesce to a single merge of HEAD.
@@ -87286,7 +87779,8 @@ var TEAM_API_OPERATION_NOTES = {
 var NUMBERED_LINE_RE = /^\s*\d+[.)]\s+(.+)$/;
 var BULLETED_LINE_RE = /^\s*[-*•]\s+(.+)$/;
 var CONJUNCTION_SPLIT_RE = /\s+(?:and|,\s*and|,)\s+/i;
-function resolveTeamFanoutLimit(requestedWorkerCount, _explicitAgentType, _explicitWorkerCount, plan) {
+function resolveTeamFanoutLimit(requestedWorkerCount, _explicitAgentType, explicitWorkerCount, plan, noDecompose = false) {
+  if (explicitWorkerCount !== void 0 || noDecompose) return requestedWorkerCount;
   if (plan.strategy === "atomic") return requestedWorkerCount;
   const subtaskCount = plan.subtasks.length;
   if (subtaskCount > 0 && subtaskCount < requestedWorkerCount) {
@@ -87331,7 +87825,30 @@ function splitTaskString(task) {
   };
 }
 function slugifyTask(task) {
-  return task.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "team-task";
+  const compact = task.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return compact.slice(0, 30).replace(/^-|-$/g, "") || "team-task";
+}
+function resolveAvailableTeamName(baseName, cwd2) {
+  const sanitizedBase = slugifyTask(baseName);
+  const stateRoot2 = (0, import_node_path12.join)(cwd2, ".omc", "state", "team");
+  const teamDir3 = (name) => (0, import_node_path12.join)(stateRoot2, name);
+  if (!(0, import_node_fs9.existsSync)(teamDir3(sanitizedBase))) return sanitizedBase;
+  for (let suffix = 2; suffix <= 99; suffix++) {
+    const suffixText = `-${suffix}`;
+    const candidate = `${sanitizedBase.slice(0, 30 - suffixText.length).replace(/-$/g, "")}${suffixText}`;
+    if (!(0, import_node_fs9.existsSync)(teamDir3(candidate))) return candidate;
+  }
+  throw new Error(`Unable to allocate a fresh team name for ${sanitizedBase}; remove stale .omc/state/team entries or choose a more specific launch task.`);
+}
+function isTeamStateLive(config2) {
+  const target = typeof config2?.tmux_session === "string" ? config2.tmux_session.trim() : "";
+  if (!target) return false;
+  try {
+    (0, import_node_child_process10.execFileSync)("tmux", ["has-session", "-t", target], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function getTeamWorkerIdentityFromEnv(env2 = process.env) {
   const omc = typeof env2.OMC_TEAM_WORKER === "string" ? env2.OMC_TEAM_WORKER.trim() : "";
@@ -87341,7 +87858,7 @@ function getTeamWorkerIdentityFromEnv(env2 = process.env) {
 }
 async function assertTeamSpawnAllowed(cwd2, env2 = process.env) {
   const workerIdentity = getTeamWorkerIdentityFromEnv(env2);
-  const { teamReadManifest: teamReadManifest2 } = await Promise.resolve().then(() => (init_team_ops(), team_ops_exports));
+  const { teamReadConfig: teamReadConfig2, teamReadManifest: teamReadManifest2 } = await Promise.resolve().then(() => (init_team_ops(), team_ops_exports));
   const { findActiveTeamsV2: findActiveTeamsV22 } = await Promise.resolve().then(() => (init_runtime_v2(), runtime_v2_exports));
   const { DEFAULT_TEAM_GOVERNANCE: DEFAULT_TEAM_GOVERNANCE2, normalizeTeamGovernance: normalizeTeamGovernance2 } = await Promise.resolve().then(() => (init_governance(), governance_exports));
   if (workerIdentity) {
@@ -87362,6 +87879,8 @@ async function assertTeamSpawnAllowed(cwd2, env2 = process.env) {
   }
   const activeTeams = await findActiveTeamsV22(cwd2);
   for (const activeTeam of activeTeams) {
+    const config2 = await teamReadConfig2(activeTeam, cwd2);
+    if (!isTeamStateLive(config2)) continue;
     const manifest = await teamReadManifest2(activeTeam, cwd2);
     const governance = normalizeTeamGovernance2(manifest?.governance, manifest?.policy);
     if (governance.one_team_per_leader_session ?? DEFAULT_TEAM_GOVERNANCE2.one_team_per_leader_session) {
@@ -87398,6 +87917,7 @@ function parseTeamArgs(tokens, defaultAgentType = "claude") {
   let json = false;
   let newWindow = false;
   let autoMerge = process.env.OMC_TEAMS_AUTO_MERGE === "1";
+  let noDecompose = false;
   const normalizedDefaultAgentType = VALID_TEAM_CLI_AGENT_TYPES.has(defaultAgentType) ? defaultAgentType : DEFAULT_TEAM_CLI_AGENT_TYPE;
   const filteredArgs = [];
   for (const arg of args) {
@@ -87407,6 +87927,8 @@ function parseTeamArgs(tokens, defaultAgentType = "claude") {
       newWindow = true;
     } else if (arg === "--auto-merge") {
       autoMerge = true;
+    } else if (arg === "--no-decompose" || arg === "--fixed-workers" || arg === "--preformed-plan") {
+      noDecompose = true;
     } else {
       filteredArgs.push(arg);
     }
@@ -87414,6 +87936,7 @@ function parseTeamArgs(tokens, defaultAgentType = "claude") {
   const first = filteredArgs[0] || "";
   let role;
   let specMatched = false;
+  let explicitWorkerSpec = false;
   if (first.includes(",")) {
     const segments = first.split(",");
     const parsedSegments = [];
@@ -87442,6 +87965,7 @@ function parseTeamArgs(tokens, defaultAgentType = "claude") {
       const uniqueRoles = [...new Set(roles)];
       if (uniqueRoles.length === 1 && uniqueRoles[0]) role = uniqueRoles[0];
       specMatched = true;
+      explicitWorkerSpec = true;
       filteredArgs.shift();
     }
   }
@@ -87456,6 +87980,7 @@ function parseTeamArgs(tokens, defaultAgentType = "claude") {
         agentType: normalized.agentType,
         ...role ? { role } : {}
       }));
+      explicitWorkerSpec = true;
       filteredArgs.shift();
     }
   }
@@ -87468,7 +87993,32 @@ function parseTeamArgs(tokens, defaultAgentType = "claude") {
     throw new Error('Usage: omc team [N:agent-type] "<task description>"');
   }
   const teamName = slugifyTask(task);
-  return { workerCount, agentTypes, workerSpecs, role, task, teamName, json, newWindow, autoMerge };
+  return { workerCount, agentTypes, workerSpecs, role, task, teamName, json, newWindow, autoMerge, explicitWorkerSpec, noDecompose };
+}
+function buildTeamLaunchTasks(parsed, decomposition, effectiveWorkerCount) {
+  const tasks = [];
+  if (parsed.explicitWorkerSpec && !parsed.noDecompose && decomposition.strategy !== "atomic" && decomposition.subtasks.length > 1 && decomposition.subtasks.length !== effectiveWorkerCount) {
+    throw new Error(
+      `Pre-authored task scope count (${decomposition.subtasks.length}) must match explicit worker count (${effectiveWorkerCount}); use --no-decompose to give every worker the full launch text.`
+    );
+  }
+  const canUseDecomposition = !parsed.noDecompose && decomposition.strategy !== "atomic" && decomposition.subtasks.length > 1 && (!parsed.explicitWorkerSpec || decomposition.subtasks.length === effectiveWorkerCount);
+  for (let i = 0; i < effectiveWorkerCount; i++) {
+    const workerSpec = parsed.workerSpecs[i];
+    const roleLabel = workerSpec?.role ? ` (${workerSpec.role})` : "";
+    const source = canUseDecomposition ? decomposition.subtasks[i] : void 0;
+    const description = source?.description ?? parsed.task;
+    const subject = source?.subject ?? (effectiveWorkerCount === 1 ? parsed.task.slice(0, 80) : `Worker ${i + 1}${roleLabel}: ${parsed.task}`.slice(0, 80));
+    const delegation = inferDelegationPlanForTeamTask(description);
+    tasks.push({
+      subject,
+      description,
+      owner: `worker-${i + 1}`,
+      ...workerSpec?.role ? { role: workerSpec.role } : {},
+      ...delegation ? { delegation } : {}
+    });
+  }
+  return tasks;
 }
 function sampleValueForField(field) {
   switch (field) {
@@ -87617,32 +88167,12 @@ async function handleTeamStart(parsed, cwd2) {
   const effectiveWorkerCount = resolveTeamFanoutLimit(
     parsed.workerCount,
     parsed.agentTypes[0],
-    parsed.workerCount,
-    decomposition
+    parsed.explicitWorkerSpec ? parsed.workerCount : void 0,
+    decomposition,
+    parsed.noDecompose
   );
-  const tasks = [];
-  if (decomposition.strategy !== "atomic" && decomposition.subtasks.length > 1) {
-    const subtasks = decomposition.subtasks.slice(0, effectiveWorkerCount);
-    for (let i = 0; i < subtasks.length; i++) {
-      const delegation = inferDelegationPlanForTeamTask(subtasks[i].description);
-      tasks.push({
-        subject: subtasks[i].subject,
-        description: subtasks[i].description,
-        owner: `worker-${i + 1}`,
-        ...delegation ? { delegation } : {}
-      });
-    }
-  } else {
-    for (let i = 0; i < effectiveWorkerCount; i++) {
-      const delegation = inferDelegationPlanForTeamTask(parsed.task);
-      tasks.push({
-        subject: effectiveWorkerCount === 1 ? parsed.task.slice(0, 80) : `Worker ${i + 1}: ${parsed.task}`.slice(0, 80),
-        description: parsed.task,
-        owner: `worker-${i + 1}`,
-        ...delegation ? { delegation } : {}
-      });
-    }
-  }
+  const tasks = buildTeamLaunchTasks(parsed, decomposition, effectiveWorkerCount);
+  const launchTeamName = resolveAvailableTeamName(parsed.teamName, cwd2);
   let rolePrompt;
   if (parsed.role) {
     const { loadAgentPrompt: loadAgentPrompt2 } = await Promise.resolve().then(() => (init_utils(), utils_exports));
@@ -87652,7 +88182,7 @@ async function handleTeamStart(parsed, cwd2) {
   if (isRuntimeV2Enabled2()) {
     const { startTeamV2: startTeamV22, monitorTeamV2: monitorTeamV22 } = await Promise.resolve().then(() => (init_runtime_v2(), runtime_v2_exports));
     const runtime2 = await startTeamV22({
-      teamName: parsed.teamName,
+      teamName: launchTeamName,
       workerCount: effectiveWorkerCount,
       agentTypes: parsed.agentTypes.slice(0, effectiveWorkerCount),
       tasks,
@@ -87686,7 +88216,7 @@ async function handleTeamStart(parsed, cwd2) {
   }
   const { startTeam: startTeam2, monitorTeam: monitorTeam2 } = await Promise.resolve().then(() => (init_runtime(), runtime_exports));
   const runtime = await startTeam2({
-    teamName: parsed.teamName,
+    teamName: launchTeamName,
     workerCount: effectiveWorkerCount,
     agentTypes: parsed.agentTypes.slice(0, effectiveWorkerCount),
     tasks,
@@ -88768,7 +89298,886 @@ async function ralphthonCommand(args) {
   console.log(source_default.gray("Orchestrator running. Press Ctrl+C to stop."));
 }
 function sleep5(ms) {
-  return new Promise((resolve19) => setTimeout(resolve19, ms));
+  return new Promise((resolve21) => setTimeout(resolve21, ms));
+}
+
+// src/cli/commands/ultragoal.ts
+var import_promises20 = require("node:fs/promises");
+
+// src/goal-workflows/claude-goal-snapshot.ts
+var import_node_fs10 = require("node:fs");
+var import_promises18 = require("node:fs/promises");
+var import_node_path13 = require("node:path");
+var ClaudeGoalSnapshotError = class extends Error {
+};
+function safeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function safeString2(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function safeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+}
+function normalizeStatus(value) {
+  const status = safeString2(value).toLowerCase();
+  if (status === "complete" || status === "completed" || status === "done") return "complete";
+  if (status === "cancelled" || status === "canceled" || status === "cleared") return "cancelled";
+  if (status === "failed" || status === "failure") return "failed";
+  if (status === "active" || status === "in_progress" || status === "pending" || status === "running") return "active";
+  return "unknown";
+}
+function normalizeObjective(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+function parseClaudeGoalSnapshot(value) {
+  const root2 = safeObject(value);
+  const goalValue = Object.hasOwn(root2, "goal") ? root2.goal : value;
+  if (goalValue === null || goalValue === void 0 || goalValue === false) {
+    return { available: false, raw: value };
+  }
+  const goal = safeObject(goalValue);
+  const objective = safeString2(
+    goal.objective ?? goal.condition ?? goal.goal ?? goal.description ?? root2.objective ?? root2.condition
+  );
+  const status = normalizeStatus(goal.status ?? root2.status);
+  const tokenBudget = safeNumber(
+    goal.token_budget ?? goal.tokenBudget ?? root2.token_budget ?? root2.tokenBudget
+  );
+  const remainingTokens = safeNumber(root2.remainingTokens ?? root2.remaining_tokens);
+  return {
+    available: Boolean(objective || status !== "unknown"),
+    ...objective ? { objective } : {},
+    status,
+    ...tokenBudget !== void 0 ? { tokenBudget } : {},
+    remainingTokens: remainingTokens ?? null,
+    raw: value
+  };
+}
+async function readClaudeGoalSnapshotInput(raw, cwd2 = process.cwd()) {
+  if (!raw?.trim()) return null;
+  const trimmed = raw.trim();
+  try {
+    return parseClaudeGoalSnapshot(JSON.parse(trimmed));
+  } catch {
+    const path22 = (0, import_node_path13.resolve)(cwd2, trimmed);
+    if (!(0, import_node_fs10.existsSync)(path22)) {
+      throw new ClaudeGoalSnapshotError(`Claude goal snapshot is neither valid JSON nor a readable path: ${trimmed}`);
+    }
+    try {
+      return parseClaudeGoalSnapshot(JSON.parse(await (0, import_promises18.readFile)(path22, "utf-8")));
+    } catch (error2) {
+      throw new ClaudeGoalSnapshotError(`Claude goal snapshot path does not contain valid JSON: ${trimmed}${error2 instanceof Error ? ` (${error2.message})` : ""}`);
+    }
+  }
+}
+function reconcileClaudeGoalSnapshot(snapshot, options) {
+  const effectiveSnapshot = snapshot ?? { available: false, raw: null };
+  const errors = [];
+  const warnings = [];
+  if (!effectiveSnapshot.available) {
+    const message = "Claude goal snapshot is absent or reports no active goal; ask the active Claude agent to share the current /goal condition and pass its JSON with --claude-goal-json.";
+    if (options.requireSnapshot) errors.push(message);
+    else warnings.push(message);
+    return { ok: errors.length === 0, snapshot: effectiveSnapshot, warnings, errors };
+  }
+  const expected = normalizeObjective(options.expectedObjective);
+  const actual = normalizeObjective(effectiveSnapshot.objective ?? "");
+  if (!actual) {
+    errors.push("Claude goal snapshot is missing objective text.");
+  } else if (actual !== expected) {
+    errors.push(`Claude goal objective mismatch: expected "${expected}", got "${actual}".`);
+  }
+  const allowed = options.allowedStatuses ?? (options.requireComplete ? ["complete"] : ["active", "complete"]);
+  const actualStatus = effectiveSnapshot.status ?? "unknown";
+  if (!allowed.includes(actualStatus)) {
+    errors.push(`Claude goal status mismatch: expected ${allowed.join(" or ")}, got ${actualStatus}.`);
+  }
+  if (options.requireComplete && actualStatus !== "complete") {
+    errors.push(`Claude goal is not complete; only after the active condition is genuinely satisfied (the /goal hook auto-clears, or you run /goal clear), share the fresh snapshot.`);
+  }
+  return { ok: errors.length === 0, snapshot: effectiveSnapshot, warnings, errors };
+}
+function formatClaudeGoalReconciliation(reconciliation) {
+  const parts = [...reconciliation.errors, ...reconciliation.warnings];
+  return parts.join(" ");
+}
+
+// src/ultragoal/artifacts.ts
+var import_node_fs11 = require("node:fs");
+var import_promises19 = require("node:fs/promises");
+var import_node_path14 = require("node:path");
+var ULTRAGOAL_DIR = ".omc/ultragoal";
+var ULTRAGOAL_BRIEF = "brief.md";
+var ULTRAGOAL_GOALS = "goals.json";
+var ULTRAGOAL_LEDGER = "ledger.jsonl";
+var UltragoalError = class extends Error {
+};
+function iso(now = /* @__PURE__ */ new Date()) {
+  return now.toISOString();
+}
+function ultragoalDir(cwd2) {
+  return (0, import_node_path14.join)(cwd2, ULTRAGOAL_DIR);
+}
+function ultragoalBriefPath(cwd2) {
+  return (0, import_node_path14.join)(ultragoalDir(cwd2), ULTRAGOAL_BRIEF);
+}
+function ultragoalGoalsPath(cwd2) {
+  return (0, import_node_path14.join)(ultragoalDir(cwd2), ULTRAGOAL_GOALS);
+}
+function ultragoalLedgerPath(cwd2) {
+  return (0, import_node_path14.join)(ultragoalDir(cwd2), ULTRAGOAL_LEDGER);
+}
+function repoRelative(cwd2, path22) {
+  return (0, import_node_path14.relative)(cwd2, path22).split("\\").join("/");
+}
+function cleanLine(line) {
+  return line.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, "").trim();
+}
+function normalizeObjective2(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+function textMentionsUltragoalPlanArtifact(value) {
+  const normalized = (value ?? "").toLowerCase();
+  return normalized.includes(ULTRAGOAL_DIR.toLowerCase()) || normalized.includes(ULTRAGOAL_GOALS.toLowerCase()) || normalized.includes(ULTRAGOAL_LEDGER.toLowerCase());
+}
+function textMentionsGoalId(value, goalId) {
+  return (value ?? "").toLowerCase().includes(goalId.toLowerCase());
+}
+function textHasCompletionValidationEvidence(value) {
+  const normalized = (value ?? "").toLowerCase();
+  const hasImplementationCompletion = /\b(?:planned work|implementation|deliverables?|scope|task|work)\b/.test(normalized) && /\b(?:done|complete|completed|finished|shipped)\b/.test(normalized);
+  const hasValidation = /\b(?:validation|verification|tests?|build|lint|review|quality gate|code-review)\b/.test(normalized) && /\b(?:passed|complete|completed|clean|green|approve|approved|clear)\b/.test(normalized);
+  return hasImplementationCompletion && hasValidation;
+}
+async function snapshotObjectiveMapsToUltragoalPlan(cwd2, snapshotObjective) {
+  const actual = normalizeObjective2(snapshotObjective).toLowerCase();
+  if (textMentionsUltragoalPlanArtifact(actual)) return true;
+  if (actual.length < 24) return false;
+  try {
+    const brief = normalizeObjective2(await (0, import_promises19.readFile)(ultragoalBriefPath(cwd2), "utf-8")).toLowerCase();
+    if (!brief || brief.length < 24) return false;
+    return brief.includes(actual) || actual.includes(brief);
+  } catch {
+    return false;
+  }
+}
+async function canReconcileCompletedTaskScopedAggregateSnapshot(cwd2, plan, goal, snapshotObjective, evidence) {
+  if (claudeGoalMode(plan) !== "aggregate") return false;
+  if (goal.status !== "in_progress" || plan.activeGoalId !== goal.id) return false;
+  if (!textMentionsUltragoalPlanArtifact(evidence)) return false;
+  if (!textMentionsGoalId(evidence, goal.id)) return false;
+  if (!textHasCompletionValidationEvidence(evidence)) return false;
+  return snapshotObjectiveMapsToUltragoalPlan(cwd2, snapshotObjective);
+}
+function assertActiveInProgressCheckpoint(plan, goal, checkpointKind) {
+  if (goal.status !== "in_progress" || plan.activeGoalId !== goal.id) {
+    throw new UltragoalError(`Cannot record a ${checkpointKind} checkpoint for ${goal.id} while it is ${goal.status}; start or resume the active ultragoal before checkpointing it.`);
+  }
+}
+function buildCompletedLegacyGoalRemediation(goal) {
+  return [
+    "If the active /goal condition is a different completed legacy goal, do not repeat --status complete in this session.",
+    `Record a non-terminal blocker with: omc ultragoal checkpoint --goal-id ${goal.id} --status blocked --evidence "<completed legacy Claude goal blocks setting a new /goal in this session>" --claude-goal-json "<different completed goal snapshot JSON or path>".`,
+    "Then continue this ultragoal in a fresh Claude Code session in the same repo/worktree and set the intended /goal there."
+  ].join(" ");
+}
+function claudeGoalMode(plan) {
+  return plan.claudeGoalMode ?? "per_story";
+}
+function isResolvedStatus(status) {
+  return status === "complete" || status === "review_blocked";
+}
+function aggregateClaudeObjective(goals) {
+  const prefix = `Complete all ultragoal stories in ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}: `;
+  const suffix = goals.map((goal) => `${goal.id} ${goal.title}`).join("; ");
+  const full = `${prefix}${suffix}`;
+  if (full.length <= 4e3) return full;
+  const fallback = `Complete all ultragoal stories listed in ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}. Use ${ULTRAGOAL_DIR}/${ULTRAGOAL_LEDGER} as the durable audit trail.`;
+  if (fallback.length <= 4e3) return fallback;
+  throw new UltragoalError("Generated aggregate Claude /goal objective exceeds the 4,000 character limit.");
+}
+function expectedClaudeObjective(plan, goal) {
+  return claudeGoalMode(plan) === "aggregate" ? plan.claudeObjective ?? aggregateClaudeObjective(plan.goals) : goal.objective;
+}
+function isFinalRunCompletionCandidate(plan, goal) {
+  return plan.goals.every((candidate) => candidate.id === goal.id || isResolvedStatus(candidate.status));
+}
+function isUltragoalDone(plan) {
+  if (plan.aggregateCompletion?.status === "complete") return true;
+  if (plan.goals.length === 0) return true;
+  if (plan.goals.some((goal) => goal.status === "pending" || goal.status === "in_progress" || goal.status === "failed")) return false;
+  if (!plan.goals.every((goal) => isResolvedStatus(goal.status))) return false;
+  const latestNonReviewBlocked = [...plan.goals].reverse().find((goal) => goal.status !== "review_blocked");
+  return latestNonReviewBlocked?.status === "complete";
+}
+function titleFromObjective(objective, fallback) {
+  const firstLine = objective.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? fallback;
+  return firstLine.length > 72 ? `${firstLine.slice(0, 69).trimEnd()}...` : firstLine;
+}
+function deriveGoalCandidates(brief) {
+  const lines = brief.split(/\r?\n/);
+  const bulletGoals = lines.map((line) => ({ original: line, cleaned: cleanLine(line) })).filter(({ cleaned }) => cleaned.length > 0 && cleaned.length <= 1200).filter(({ original, cleaned }, index, all) => /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(original) && all.findIndex((candidate) => candidate.cleaned === cleaned) === index).map(({ cleaned }) => cleaned);
+  const objectives = bulletGoals.length > 0 ? bulletGoals : brief.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter((paragraph) => paragraph.length > 0 && !paragraph.startsWith("#"));
+  const selected = objectives.length > 0 ? objectives : [brief.trim() || "Complete the requested project objective."];
+  return selected.map((objective, index) => ({
+    title: titleFromObjective(objective, `Goal ${index + 1}`),
+    objective
+  }));
+}
+function normalizeGoalId(title, index) {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36).replace(/-+$/g, "");
+  return `G${String(index + 1).padStart(3, "0")}${slug ? `-${slug}` : ""}`;
+}
+async function appendLedger(cwd2, entry) {
+  await (0, import_promises19.mkdir)(ultragoalDir(cwd2), { recursive: true });
+  const path22 = ultragoalLedgerPath(cwd2);
+  await (0, import_promises19.appendFile)(path22, `${JSON.stringify(entry)}
+`);
+}
+async function readUltragoalPlan(cwd2) {
+  const path22 = ultragoalGoalsPath(cwd2);
+  let raw;
+  try {
+    raw = await (0, import_promises19.readFile)(path22, "utf-8");
+  } catch {
+    throw new UltragoalError(`No ultragoal plan found at ${repoRelative(cwd2, path22)}. Run \`omc ultragoal create-goals ...\` first.`);
+  }
+  const parsed = JSON.parse(raw);
+  if (parsed.version !== 1 || !Array.isArray(parsed.goals)) {
+    throw new UltragoalError(`Invalid ultragoal plan at ${repoRelative(cwd2, path22)}.`);
+  }
+  return parsed;
+}
+async function writePlan(cwd2, plan) {
+  await (0, import_promises19.mkdir)(ultragoalDir(cwd2), { recursive: true });
+  await (0, import_promises19.writeFile)(ultragoalGoalsPath(cwd2), `${JSON.stringify(plan, null, 2)}
+`);
+}
+async function createUltragoalPlan(cwd2, options) {
+  if (!options.force && (0, import_node_fs11.existsSync)(ultragoalGoalsPath(cwd2))) {
+    throw new UltragoalError(`Refusing to overwrite existing ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}; pass --force to recreate it.`);
+  }
+  const now = iso(options.now);
+  const sourceGoals = options.goals?.length ? options.goals : deriveGoalCandidates(options.brief);
+  const candidates = sourceGoals.map((goal, index) => ({
+    id: normalizeGoalId(goal.title ?? titleFromObjective(goal.objective, `Goal ${index + 1}`), index),
+    title: goal.title ?? titleFromObjective(goal.objective, `Goal ${index + 1}`),
+    objective: goal.objective.trim(),
+    status: "pending",
+    tokenBudget: goal.tokenBudget,
+    attempt: 0,
+    createdAt: now,
+    updatedAt: now
+  }));
+  const plan = {
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    briefPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_BRIEF}`,
+    goalsPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}`,
+    ledgerPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_LEDGER}`,
+    claudeGoalMode: options.claudeGoalMode ?? "aggregate",
+    goals: candidates
+  };
+  if (plan.claudeGoalMode === "aggregate") plan.claudeObjective = aggregateClaudeObjective(candidates);
+  await (0, import_promises19.mkdir)(ultragoalDir(cwd2), { recursive: true });
+  await (0, import_promises19.writeFile)(ultragoalBriefPath(cwd2), options.brief.endsWith("\n") ? options.brief : `${options.brief}
+`);
+  await writePlan(cwd2, plan);
+  await (0, import_promises19.writeFile)(ultragoalLedgerPath(cwd2), "");
+  await appendLedger(cwd2, { ts: now, event: "plan_created", message: `${candidates.length} goal(s) created` });
+  return plan;
+}
+function summarizeUltragoalPlan(plan) {
+  return {
+    total: plan.goals.length,
+    pending: plan.goals.filter((goal) => goal.status === "pending").length,
+    inProgress: plan.goals.filter((goal) => goal.status === "in_progress").length,
+    complete: plan.goals.filter((goal) => goal.status === "complete").length,
+    failed: plan.goals.filter((goal) => goal.status === "failed").length,
+    reviewBlocked: plan.goals.filter((goal) => goal.status === "review_blocked").length,
+    aggregateComplete: plan.aggregateCompletion?.status === "complete",
+    activeGoalId: plan.activeGoalId
+  };
+}
+function assertNonEmpty(value, label) {
+  const trimmed = value?.trim();
+  if (!trimmed) throw new UltragoalError(`Missing ${label}.`);
+  return trimmed;
+}
+function appendGoalToPlan(plan, options, now) {
+  const title = assertNonEmpty(options.title, "--title");
+  const objective = assertNonEmpty(options.objective, "--objective");
+  const goal = {
+    id: normalizeGoalId(title, plan.goals.length),
+    title,
+    objective,
+    status: "pending",
+    attempt: 0,
+    createdAt: now,
+    updatedAt: now,
+    evidence: options.evidence
+  };
+  plan.goals.push(goal);
+  plan.updatedAt = now;
+  return goal;
+}
+async function addUltragoalGoal(cwd2, options) {
+  const plan = await readUltragoalPlan(cwd2);
+  const now = iso(options.now);
+  const goal = appendGoalToPlan(plan, options, now);
+  await writePlan(cwd2, plan);
+  await appendLedger(cwd2, {
+    ts: now,
+    event: "goal_added",
+    goalId: goal.id,
+    status: goal.status,
+    evidence: options.evidence,
+    message: goal.title
+  });
+  return { plan, goal };
+}
+function validateQualityGate(value) {
+  if (!value || typeof value !== "object") {
+    throw new UltragoalError("Final ultragoal completion requires --quality-gate-json with ai-slop-cleaner, verification, and code-review evidence.");
+  }
+  const gate = value;
+  const cleaner = gate.aiSlopCleaner;
+  const verification = gate.verification;
+  const review = gate.codeReview;
+  if (!cleaner || typeof cleaner !== "object") throw new UltragoalError("Final quality gate is missing aiSlopCleaner evidence.");
+  if (cleaner.status !== "passed") {
+    throw new UltragoalError('Final quality gate requires aiSlopCleaner.status="passed"; run ai-slop-cleaner even when it is a no-op.');
+  }
+  assertNonEmpty(cleaner.evidence, "aiSlopCleaner.evidence");
+  if (!verification || typeof verification !== "object") throw new UltragoalError("Final quality gate is missing verification evidence.");
+  if (verification.status !== "passed") throw new UltragoalError('Final quality gate requires verification.status="passed".');
+  if (!Array.isArray(verification.commands) || verification.commands.length === 0 || verification.commands.some((command) => typeof command !== "string" || command.trim() === "")) {
+    throw new UltragoalError("Final quality gate requires non-empty verification.commands.");
+  }
+  assertNonEmpty(verification.evidence, "verification.evidence");
+  if (!review || typeof review !== "object") throw new UltragoalError("Final quality gate is missing codeReview evidence.");
+  if (review.recommendation !== "APPROVE") {
+    throw new UltragoalError("Final code-review must be clean: codeReview.recommendation must be APPROVE; use record-review-blockers for COMMENT or REQUEST CHANGES.");
+  }
+  if (review.architectStatus !== "CLEAR") {
+    throw new UltragoalError("Final code-review must be clean: codeReview.architectStatus must be CLEAR; use record-review-blockers for WATCH or BLOCK.");
+  }
+  assertNonEmpty(review.evidence, "codeReview.evidence");
+  return gate;
+}
+async function startNextUltragoal(cwd2, options = {}) {
+  const plan = await readUltragoalPlan(cwd2);
+  const now = iso(options.now);
+  if (plan.aggregateCompletion?.status === "complete") return { plan, goal: null, resumed: false, done: true };
+  const existing = plan.goals.find((goal) => goal.status === "in_progress");
+  if (existing) {
+    await appendLedger(cwd2, { ts: now, event: "goal_resumed", goalId: existing.id, status: existing.status, message: "Resuming active ultragoal" });
+    return { plan, goal: existing, resumed: true, done: false };
+  }
+  let next = plan.goals.find((goal) => goal.status === "pending");
+  if (!next && options.retryFailed) {
+    next = plan.goals.find((goal) => goal.status === "failed");
+    if (next) await appendLedger(cwd2, { ts: now, event: "goal_retried", goalId: next.id, status: "pending", message: next.failureReason });
+  }
+  if (!next) return { plan, goal: null, resumed: false, done: isUltragoalDone(plan) };
+  next.status = "in_progress";
+  next.attempt += 1;
+  next.startedAt = now;
+  next.failedAt = void 0;
+  next.failureReason = void 0;
+  next.updatedAt = now;
+  plan.activeGoalId = next.id;
+  plan.updatedAt = now;
+  await writePlan(cwd2, plan);
+  await appendLedger(cwd2, { ts: now, event: "goal_started", goalId: next.id, status: next.status, message: `Attempt ${next.attempt}` });
+  return { plan, goal: next, resumed: false, done: false };
+}
+async function checkpointUltragoal(cwd2, options) {
+  const plan = await readUltragoalPlan(cwd2);
+  const goal = plan.goals.find((candidate) => candidate.id === options.goalId);
+  if (!goal) throw new UltragoalError(`Unknown ultragoal id: ${options.goalId}`);
+  const now = iso(options.now);
+  if (options.status === "blocked") {
+    assertActiveInProgressCheckpoint(plan, goal, "blocked");
+    const snapshot = options.claudeGoal === void 0 ? null : parseClaudeGoalSnapshot(options.claudeGoal);
+    if (!snapshot?.available) {
+      throw new UltragoalError("Blocked ultragoal checkpoints require a Claude /goal snapshot for the completed legacy goal that blocked a new /goal directive; pass --claude-goal-json.");
+    }
+    if (snapshot.status !== "complete") {
+      throw new UltragoalError(`Cannot record a blocked ultragoal checkpoint while the existing Claude /goal is ${snapshot.status ?? "unknown"}; strict objective mismatch protection remains required for active or incomplete goals.`);
+    }
+    if (!snapshot.objective) {
+      throw new UltragoalError("Blocked ultragoal checkpoint Claude snapshot is missing objective text.");
+    }
+    if (normalizeObjective2(snapshot.objective) === normalizeObjective2(expectedClaudeObjective(plan, goal))) {
+      throw new UltragoalError("Blocked ultragoal checkpoint is only for a different completed legacy Claude goal; complete this ultragoal with --status complete after its audit passes.");
+    }
+    goal.updatedAt = now;
+    plan.activeGoalId = goal.id;
+    plan.updatedAt = now;
+    await writePlan(cwd2, plan);
+    await appendLedger(cwd2, {
+      ts: now,
+      event: "goal_blocked",
+      goalId: goal.id,
+      status: goal.status,
+      evidence: options.evidence,
+      claudeGoal: options.claudeGoal
+    });
+    return plan;
+  }
+  if (options.status === "failed") {
+    assertActiveInProgressCheckpoint(plan, goal, "failed");
+  }
+  let aggregateCompletion;
+  if (options.status === "complete") {
+    assertActiveInProgressCheckpoint(plan, goal, "complete");
+    const expectedObjective = expectedClaudeObjective(plan, goal);
+    const aggregateMode = claudeGoalMode(plan) === "aggregate";
+    const finalRunCheckpoint = isFinalRunCompletionCandidate(plan, goal);
+    const snapshot = options.claudeGoal === void 0 ? null : parseClaudeGoalSnapshot(options.claudeGoal);
+    const reconciliation = reconcileClaudeGoalSnapshot(
+      snapshot,
+      {
+        expectedObjective,
+        allowedStatuses: aggregateMode ? finalRunCheckpoint && !options.allowActiveFinalClaudeGoal ? ["complete"] : ["active"] : ["complete"],
+        requireSnapshot: true,
+        requireComplete: !aggregateMode || finalRunCheckpoint && !options.allowActiveFinalClaudeGoal
+      }
+    );
+    if (!reconciliation.ok) {
+      const completedTaskScopedAggregateSnapshot = snapshot?.available && snapshot.status === "complete" && Boolean(snapshot.objective) && normalizeObjective2(snapshot.objective ?? "") !== normalizeObjective2(expectedObjective) && await canReconcileCompletedTaskScopedAggregateSnapshot(cwd2, plan, goal, snapshot.objective ?? "", options.evidence);
+      if (completedTaskScopedAggregateSnapshot) {
+        aggregateCompletion = {
+          status: "complete",
+          completedAt: now,
+          evidence: assertNonEmpty(options.evidence, "--evidence"),
+          claudeGoal: options.claudeGoal
+        };
+      } else {
+        const taskScopedRequirement = aggregateMode && snapshot?.status === "complete" && Boolean(snapshot.objective) ? " Completed task-scoped aggregate reconciliation requires the checkpoint goal to be the active in-progress OMC goal, evidence that names that active OMC goal id, names .omc/ultragoal/goals.json or ledger.jsonl, includes completed implementation plus validation/review evidence, and a Claude /goal objective that maps to the ultragoal brief/artifact." : "";
+        const remediation = reconciliation.snapshot.available && reconciliation.snapshot.status === "complete" && Boolean(reconciliation.snapshot.objective) && normalizeObjective2(reconciliation.snapshot.objective ?? "") !== normalizeObjective2(expectedObjective) ? ` ${buildCompletedLegacyGoalRemediation(goal)}` : "";
+        throw new UltragoalError(`${formatClaudeGoalReconciliation(reconciliation)}${taskScopedRequirement}${remediation}`);
+      }
+    }
+    if (finalRunCheckpoint && !options.allowActiveFinalClaudeGoal) goal.evidence = options.evidence;
+  }
+  const qualityGate = options.status === "complete" && (aggregateCompletion !== void 0 || isFinalRunCompletionCandidate(plan, goal) && !options.allowActiveFinalClaudeGoal) ? validateQualityGate(options.qualityGate) : void 0;
+  if (aggregateCompletion) {
+    plan.aggregateCompletion = aggregateCompletion;
+    if (plan.activeGoalId === goal.id) delete plan.activeGoalId;
+    plan.updatedAt = now;
+    await writePlan(cwd2, plan);
+    await appendLedger(cwd2, {
+      ts: now,
+      event: "aggregate_completed",
+      goalId: goal.id,
+      status: goal.status,
+      evidence: options.evidence,
+      claudeGoal: options.claudeGoal,
+      qualityGate,
+      message: "Aggregate ultragoal plan completed via task-scoped Claude /goal snapshot; microgoal ledger progress remains independent."
+    });
+    return plan;
+  }
+  goal.status = options.status;
+  goal.updatedAt = now;
+  if (options.status === "complete") {
+    goal.completedAt = now;
+    goal.evidence = options.evidence;
+    goal.failureReason = void 0;
+    goal.failedAt = void 0;
+    if (plan.activeGoalId === goal.id) delete plan.activeGoalId;
+  } else {
+    goal.failedAt = now;
+    goal.failureReason = options.evidence;
+    if (plan.activeGoalId === goal.id) delete plan.activeGoalId;
+  }
+  plan.updatedAt = now;
+  await writePlan(cwd2, plan);
+  await appendLedger(cwd2, {
+    ts: now,
+    event: options.status === "complete" ? "goal_completed" : "goal_failed",
+    goalId: goal.id,
+    status: goal.status,
+    evidence: options.evidence,
+    claudeGoal: options.claudeGoal,
+    qualityGate
+  });
+  return plan;
+}
+async function recordFinalReviewBlockers(cwd2, options) {
+  const plan = await readUltragoalPlan(cwd2);
+  const goal = plan.goals.find((candidate) => candidate.id === options.goalId);
+  if (!goal) throw new UltragoalError(`Unknown ultragoal id: ${options.goalId}`);
+  assertNonEmpty(options.evidence, "--evidence");
+  if (goal.status !== "in_progress") {
+    throw new UltragoalError(`Cannot record final review blockers for ${goal.id} while it is ${goal.status}; start or resume the ultragoal first.`);
+  }
+  if (!isFinalRunCompletionCandidate(plan, goal)) {
+    throw new UltragoalError(`Cannot record final review blockers for ${goal.id}; it is not the only unresolved ultragoal story.`);
+  }
+  const now = iso(options.now);
+  const expectedObjective = expectedClaudeObjective(plan, goal);
+  const aggregateMode = claudeGoalMode(plan) === "aggregate";
+  const reconciliation = reconcileClaudeGoalSnapshot(
+    options.claudeGoal === void 0 ? null : parseClaudeGoalSnapshot(options.claudeGoal),
+    {
+      expectedObjective,
+      allowedStatuses: ["active"],
+      requireSnapshot: true,
+      requireComplete: false
+    }
+  );
+  if (!reconciliation.ok) {
+    throw new UltragoalError(formatClaudeGoalReconciliation(reconciliation));
+  }
+  const addedGoal = appendGoalToPlan(plan, options, now);
+  goal.status = "review_blocked";
+  goal.reviewBlockedAt = now;
+  goal.updatedAt = now;
+  goal.completedAt = void 0;
+  goal.failedAt = void 0;
+  goal.failureReason = void 0;
+  goal.evidence = options.evidence;
+  if (plan.activeGoalId === goal.id) delete plan.activeGoalId;
+  plan.updatedAt = now;
+  await writePlan(cwd2, plan);
+  await appendLedger(cwd2, {
+    ts: now,
+    event: "final_review_failed",
+    goalId: goal.id,
+    status: goal.status,
+    evidence: options.evidence,
+    claudeGoal: options.claudeGoal,
+    message: aggregateMode ? "Final aggregate code-review was not clean; blocker story was appended while Claude /goal remains active." : "Final per-story code-review was not clean; blocker story was appended and may require a fresh/available Claude /goal context."
+  });
+  await appendLedger(cwd2, {
+    ts: now,
+    event: "goal_added",
+    goalId: addedGoal.id,
+    status: addedGoal.status,
+    evidence: options.evidence,
+    message: addedGoal.title
+  });
+  await appendLedger(cwd2, {
+    ts: now,
+    event: "goal_review_blocked",
+    goalId: goal.id,
+    status: goal.status,
+    evidence: options.evidence,
+    claudeGoal: options.claudeGoal
+  });
+  return { plan, blockedGoal: goal, addedGoal };
+}
+function buildClaudeGoalInstruction(goal, plan) {
+  if (claudeGoalMode(plan) === "aggregate") return buildAggregateClaudeGoalInstruction(goal, plan);
+  return buildPerStoryClaudeGoalInstruction(goal, plan);
+}
+function buildPerStoryClaudeGoalInstruction(goal, plan) {
+  const createPayload = {
+    condition: goal.objective,
+    ...goal.tokenBudget ? { token_budget: goal.tokenBudget } : {}
+  };
+  const finalStory = isFinalRunCompletionCandidate(plan, goal);
+  return [
+    "Ultragoal active-goal handoff",
+    `Plan: ${plan.goalsPath}`,
+    `Ledger: ${plan.ledgerPath}`,
+    `Goal: ${goal.id} \u2014 ${goal.title}`,
+    "",
+    "Claude /goal integration constraints (model-facing \u2014 OMC cannot mutate Claude /goal state from a shell):",
+    "- First confirm the active Claude /goal condition for this session. If none is active, invoke /goal <condition> with the payload below.",
+    "- If a different active Claude /goal exists, finish or clear that /goal before starting this ultragoal.",
+    "- If the active /goal is a different completed legacy goal and the Claude session refuses to set a new /goal, continue this ultragoal in a fresh Claude Code session (same repo/worktree) and invoke /goal there.",
+    `- To preserve the durable ledger before switching sessions, record the non-terminal blocker without failing this goal: omc ultragoal checkpoint --goal-id ${goal.id} --status blocked --evidence "<completed legacy Claude goal blocks new /goal in this session>" --claude-goal-json "<goal snapshot JSON or path>"`,
+    "- Work only this goal until its completion audit passes.",
+    finalStory ? "- Final mandatory quality gate: run ai-slop-cleaner on changed files even when it is a no-op, rerun verification, then run $code-review." : "- This is not the final ultragoal story; do not run the final ai-slop-cleaner/$code-review gate yet.",
+    finalStory ? "- If final $code-review is not APPROVE with architect status CLEAR, do not clear the /goal. Record blockers with:" : "- After the goal is actually complete, clear or update the active /goal (run /goal clear once the auto-clear has not already fired), then share a fresh /goal snapshot and checkpoint the ledger with:",
+    finalStory ? `  omc ultragoal record-review-blockers --goal-id ${goal.id} --title "Resolve final code-review blockers" --objective "<blocker-resolution objective>" --evidence "<review findings>" --claude-goal-json "<active /goal snapshot JSON or path>"` : `  omc ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --claude-goal-json "<fresh /goal snapshot JSON or path>"`,
+    finalStory ? "- In legacy per-story mode, the blocker story may require a fresh/available Claude /goal context because this story remains an active incomplete /goal; do not claim it is complete." : null,
+    finalStory ? "- If final $code-review is clean (APPROVE + CLEAR), clear the /goal (or wait for the auto-clear), then checkpoint with --quality-gate-json:" : null,
+    finalStory ? `  omc ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --claude-goal-json "<fresh complete /goal snapshot JSON or path>" --quality-gate-json "<quality gate JSON or path>"` : null,
+    "- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.",
+    "",
+    "Suggested /goal payload (model-facing \u2014 invoke /goal yourself in-session):",
+    JSON.stringify(createPayload, null, 2),
+    "",
+    "Objective (use as the /goal condition):",
+    goal.objective
+  ].filter((line) => line !== null).join("\n");
+}
+function buildAggregateClaudeGoalInstruction(goal, plan) {
+  const objective = plan.claudeObjective ?? aggregateClaudeObjective(plan.goals);
+  const finalStory = isFinalRunCompletionCandidate(plan, goal);
+  const createPayload = { condition: objective };
+  const checkpointStatus = finalStory ? "complete" : "active";
+  return [
+    "Ultragoal aggregate-goal handoff",
+    `Plan: ${plan.goalsPath}`,
+    `Ledger: ${plan.ledgerPath}`,
+    `Goal: ${goal.id} \u2014 ${goal.title}`,
+    "",
+    "Claude /goal integration constraints (model-facing \u2014 OMC cannot mutate Claude /goal state from a shell):",
+    "- Claude /goal = the whole ultragoal run; OMC G001/G002/etc. = ledger stories.",
+    "- First confirm the active Claude /goal condition for this session. If none is active, invoke /goal <condition> with the aggregate payload below.",
+    "- If the active /goal already reports the same aggregate objective as active, continue this OMC story without setting a new /goal.",
+    "- If a different active or incomplete Claude /goal exists, finish or clear that /goal before starting this ultragoal; do not claim a shell command can replace Claude /goal state.",
+    finalStory ? "- This is the final pending story: run the mandatory final ai-slop-cleaner pass, rerun verification, and run $code-review before any /goal clear." : "- This is not the final story: do not clear the /goal yet; the aggregate Claude /goal must remain active while later OMC stories remain.",
+    finalStory ? "- If final $code-review is not APPROVE with architect status CLEAR, do not clear the /goal. Record durable blocker work first:" : null,
+    finalStory ? `  omc ultragoal record-review-blockers --goal-id ${goal.id} --title "Resolve final code-review blockers" --objective "<blocker-resolution objective>" --evidence "<review findings>" --claude-goal-json "<active /goal snapshot JSON or path>"` : null,
+    finalStory ? "- If final $code-review is clean (APPROVE + CLEAR), clear the /goal (or let the auto-clear fire when the condition holds), share a fresh complete /goal snapshot, then checkpoint with --quality-gate-json." : null,
+    `- Checkpoint this OMC story with a fresh /goal snapshot whose objective matches the aggregate payload and whose status is ${checkpointStatus}:`,
+    finalStory ? `  omc ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --claude-goal-json "<fresh complete /goal snapshot JSON or path>" --quality-gate-json "<quality gate JSON or path>"` : `  omc ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --claude-goal-json "<fresh /goal snapshot JSON or path>"`,
+    "- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.",
+    "",
+    "Suggested /goal payload (model-facing \u2014 invoke /goal yourself in-session):",
+    JSON.stringify(createPayload, null, 2),
+    "",
+    "Aggregate /goal condition:",
+    objective,
+    "",
+    "Current OMC story objective:",
+    goal.objective
+  ].filter((line) => line !== null).join("\n");
+}
+
+// src/cli/commands/ultragoal.ts
+var ULTRAGOAL_HELP = `omc ultragoal - Durable repo-native multi-goal workflow with Claude Code /goal handoff
+
+Usage:
+  omc ultragoal create-goals [--brief <text> | --brief-file <path> | --from-stdin] [--goal <title::objective>] [--claude-goal-mode <aggregate|per-story>] [--force] [--json]
+  omc ultragoal complete-goals [--retry-failed] [--json]
+  omc ultragoal add-goal --title <title> --objective <text> [--evidence <text>] [--json]
+  omc ultragoal record-review-blockers --goal-id <id> --title <title> --objective <text> --evidence <review-findings> --claude-goal-json <active-json-or-path> [--json]
+  omc ultragoal checkpoint --goal-id <id> --status <complete|failed|blocked> [--evidence <text>] [--claude-goal-json <json-or-path>] [--quality-gate-json <json-or-path>] [--json]
+  omc ultragoal status [--claude-goal-json <json-or-path>] [--json]
+
+Aliases:
+  create -> create-goals, complete|next|start-next -> complete-goals
+
+Artifacts:
+  .omc/ultragoal/brief.md
+  .omc/ultragoal/goals.json
+  .omc/ultragoal/ledger.jsonl
+
+Claude /goal integration:
+  This command cannot directly invoke the Claude Code /goal slash command from a shell;
+  /goal is a model-facing in-session directive that registers a session-scoped Stop hook
+  until its condition holds (auto-clears on success). complete-goals writes durable state
+  and prints a model-facing handoff that tells the active Claude agent when to invoke
+  /goal <condition>, when to clear it, and what snapshot JSON to share back.
+  New plans default to aggregate mode: one Claude /goal covers the whole ultragoal run
+  while OMC checkpoints G001/G002 stories in the durable ledger.
+  Final completion is mandatory-gated: run ai-slop-cleaner, rerun verification,
+  run $code-review, and pass --quality-gate-json with APPROVE + CLEAR evidence.
+  Non-clean final review must use record-review-blockers before clearing the /goal.
+`;
+function hasFlag2(args, flag) {
+  return args.includes(flag);
+}
+function readValue(args, flag) {
+  const index = args.indexOf(flag);
+  if (index >= 0) return args[index + 1];
+  const prefix = `${flag}=`;
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+function readRepeated(args, flag) {
+  const values = [];
+  const prefix = `${flag}=`;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === flag && args[index + 1]) {
+      values.push(args[index + 1]);
+      index += 1;
+    } else if (arg.startsWith(prefix)) {
+      values.push(arg.slice(prefix.length));
+    }
+  }
+  return values;
+}
+function parseGoalArg(raw) {
+  const [title, ...rest] = raw.split("::");
+  if (rest.length === 0) return { objective: raw.trim() };
+  return { title: title.trim(), objective: rest.join("::").trim() };
+}
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf-8");
+}
+function positionalText(args) {
+  const valueTaking = /* @__PURE__ */ new Set(["--brief", "--brief-file", "--goal", "--goal-id", "--status", "--evidence", "--claude-goal-json", "--claude-goal-mode", "--title", "--objective", "--quality-gate-json"]);
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (valueTaking.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--")) continue;
+    words.push(arg);
+  }
+  return words.join(" ").trim();
+}
+function printJson(value) {
+  console.log(JSON.stringify(value, null, 2));
+}
+function normalizeClaudeGoalMode(raw) {
+  if (!raw) return void 0;
+  if (raw === "aggregate") return "aggregate";
+  if (raw === "per-story" || raw === "per_story") return "per_story";
+  throw new UltragoalError("Invalid --claude-goal-mode; expected aggregate or per-story.");
+}
+function printStatus(plan) {
+  const summary = summarizeUltragoalPlan(plan);
+  if (summary.aggregateComplete) {
+    console.log("ultragoal aggregate product: complete");
+    console.log(`microgoal ledger bookkeeping (progress-only): ${summary.complete}/${summary.total} complete, ${summary.pending} pending, ${summary.inProgress} in progress, ${summary.failed} failed, ${summary.reviewBlocked} review-blocked`);
+  } else {
+    console.log(`ultragoal: ${summary.complete}/${summary.total} complete, ${summary.pending} pending, ${summary.inProgress} in progress, ${summary.failed} failed, ${summary.reviewBlocked} review-blocked`);
+  }
+  for (const goal of plan.goals) {
+    const marker = goal.id === plan.activeGoalId ? "*" : "-";
+    console.log(`${marker} ${goal.id} [${goal.status}] ${goal.title}`);
+  }
+}
+async function parseClaudeGoalJson(raw) {
+  if (!raw) return void 0;
+  return readClaudeGoalSnapshotInput(raw, process.cwd());
+}
+async function readJsonInput(raw) {
+  if (!raw) return void 0;
+  try {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) return JSON.parse(trimmed);
+    return JSON.parse(await (0, import_promises20.readFile)(trimmed, "utf-8"));
+  } catch (error2) {
+    const message = error2 instanceof Error ? error2.message : String(error2);
+    throw new UltragoalError(`Invalid --quality-gate-json: ${message}`);
+  }
+}
+async function ultragoalCommand(args) {
+  const command = args[0] ?? "help";
+  const rest = args.slice(1);
+  const json = hasFlag2(rest, "--json");
+  const cwd2 = process.cwd();
+  try {
+    if (command === "help" || command === "--help" || command === "-h") {
+      console.log(ULTRAGOAL_HELP);
+      return;
+    }
+    if (command === "create" || command === "create-goals") {
+      const briefFile = readValue(rest, "--brief-file");
+      const brief = readValue(rest, "--brief") ?? (briefFile ? await (0, import_promises20.readFile)(briefFile, "utf-8") : void 0) ?? (hasFlag2(rest, "--from-stdin") ? await readStdin() : void 0) ?? positionalText(rest);
+      if (!brief.trim()) throw new UltragoalError("Missing brief text. Pass --brief, --brief-file, --from-stdin, or positional text.");
+      const goals = readRepeated(rest, "--goal").map(parseGoalArg);
+      const plan = await createUltragoalPlan(cwd2, {
+        brief,
+        goals,
+        claudeGoalMode: normalizeClaudeGoalMode(readValue(rest, "--claude-goal-mode")),
+        force: hasFlag2(rest, "--force")
+      });
+      if (json) printJson({ ok: true, plan, summary: summarizeUltragoalPlan(plan) });
+      else {
+        console.log(`ultragoal plan created: ${plan.goals.length} goal(s)`);
+        console.log(`brief: ${plan.briefPath}`);
+        console.log(`goals: ${plan.goalsPath}`);
+        console.log(`ledger: ${plan.ledgerPath}`);
+      }
+      return;
+    }
+    if (command === "status") {
+      const plan = await readUltragoalPlan(cwd2);
+      const snapshot = await readClaudeGoalSnapshotInput(readValue(rest, "--claude-goal-json"), cwd2);
+      const activeGoal = plan.goals.find((goal) => goal.id === plan.activeGoalId || goal.status === "in_progress");
+      const expectedObjective = plan.claudeGoalMode === "aggregate" ? plan.claudeObjective : activeGoal?.objective;
+      const reconciliation = activeGoal ? reconcileClaudeGoalSnapshot(snapshot, {
+        expectedObjective: expectedObjective ?? activeGoal.objective,
+        allowedStatuses: plan.claudeGoalMode === "aggregate" ? ["active"] : ["active", "complete"],
+        requireSnapshot: false
+      }) : null;
+      if (json) printJson({ plan, summary: summarizeUltragoalPlan(plan), reconciliation });
+      else {
+        printStatus(plan);
+        if (reconciliation && !reconciliation.ok) console.log(`claude goal warning: ${formatClaudeGoalReconciliation(reconciliation)}`);
+        else if (reconciliation?.warnings.length) console.log(`claude goal warning: ${formatClaudeGoalReconciliation(reconciliation)}`);
+      }
+      return;
+    }
+    if (command === "add-goal") {
+      const title = readValue(rest, "--title");
+      const objective = readValue(rest, "--objective");
+      if (!title?.trim()) throw new UltragoalError("Missing --title.");
+      if (!objective?.trim()) throw new UltragoalError("Missing --objective.");
+      const result = await addUltragoalGoal(cwd2, { title, objective, evidence: readValue(rest, "--evidence") });
+      if (json) printJson({ ok: true, plan: result.plan, addedGoal: result.goal, summary: summarizeUltragoalPlan(result.plan) });
+      else {
+        console.log(`ultragoal added goal: ${result.goal.id}`);
+        printStatus(result.plan);
+      }
+      return;
+    }
+    if (command === "record-review-blockers") {
+      const goalId = readValue(rest, "--goal-id");
+      const title = readValue(rest, "--title");
+      const objective = readValue(rest, "--objective");
+      const evidence = readValue(rest, "--evidence");
+      if (!goalId) throw new UltragoalError("Missing --goal-id.");
+      if (!title?.trim()) throw new UltragoalError("Missing --title.");
+      if (!objective?.trim()) throw new UltragoalError("Missing --objective.");
+      if (!evidence?.trim()) throw new UltragoalError("Missing --evidence.");
+      const claudeGoal = await parseClaudeGoalJson(readValue(rest, "--claude-goal-json"));
+      const result = await recordFinalReviewBlockers(cwd2, { goalId, title, objective, evidence, claudeGoal });
+      if (json) printJson({ ok: true, plan: result.plan, blockedGoal: result.blockedGoal, addedGoal: result.addedGoal, summary: summarizeUltragoalPlan(result.plan) });
+      else {
+        console.log(`ultragoal final review blockers recorded: ${result.blockedGoal.id} -> review_blocked; added ${result.addedGoal.id}`);
+        printStatus(result.plan);
+      }
+      return;
+    }
+    if (command === "complete" || command === "complete-goals" || command === "next" || command === "start-next") {
+      const result = await startNextUltragoal(cwd2, { retryFailed: hasFlag2(rest, "--retry-failed") });
+      if (!result.goal) {
+        if (json) printJson({ ok: true, done: result.done, summary: summarizeUltragoalPlan(result.plan) });
+        else console.log(result.done ? "ultragoal: all goals complete" : "ultragoal: no pending goals (use --retry-failed to retry failed goals)");
+        return;
+      }
+      const instruction = buildClaudeGoalInstruction(result.goal, result.plan);
+      if (json) printJson({ ok: true, resumed: result.resumed, goal: result.goal, instruction });
+      else console.log(instruction);
+      return;
+    }
+    if (command === "checkpoint") {
+      const goalId = readValue(rest, "--goal-id");
+      const status = readValue(rest, "--status");
+      if (!goalId) throw new UltragoalError("Missing --goal-id.");
+      if (status !== "complete" && status !== "failed" && status !== "blocked") throw new UltragoalError("Missing or invalid --status; expected complete, failed, or blocked.");
+      const evidence = readValue(rest, "--evidence");
+      const claudeGoal = await parseClaudeGoalJson(readValue(rest, "--claude-goal-json"));
+      const qualityGate = await readJsonInput(readValue(rest, "--quality-gate-json"));
+      const plan = await checkpointUltragoal(cwd2, { goalId, status, evidence, claudeGoal, qualityGate });
+      if (json) printJson({ ok: true, plan, summary: summarizeUltragoalPlan(plan) });
+      else {
+        const goal = plan.goals.find((candidate) => candidate.id === goalId);
+        console.log(`ultragoal checkpoint: ${goalId} -> ${goal?.status ?? status}`);
+        printStatus(plan);
+      }
+      return;
+    }
+    throw new UltragoalError(`Unknown ultragoal command: ${command}
+
+${ULTRAGOAL_HELP}`);
+  } catch (error2) {
+    if (error2 instanceof UltragoalError || error2 instanceof ClaudeGoalSnapshotError) {
+      console.error(`[ultragoal] ${error2.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error2;
+  }
 }
 
 // src/cli/commands/teleport.ts
@@ -89371,7 +90780,7 @@ function hasOmcMarkers(path22) {
   const content = (0, import_fs102.readFileSync)(path22, "utf-8");
   return content.includes("<!-- OMC:START -->") && content.includes("<!-- OMC:END -->");
 }
-function ensureMirroredPath(sourcePath, targetPath) {
+function ensureMirroredPath(sourcePath, targetPath, options = {}) {
   if (!(0, import_fs102.existsSync)(sourcePath)) return;
   try {
     const sourceStat = (0, import_fs102.lstatSync)(sourcePath);
@@ -89389,6 +90798,9 @@ function ensureMirroredPath(sourcePath, targetPath) {
     }
     (0, import_fs102.symlinkSync)(sourcePath, targetPath, "file");
   } catch {
+    if (options.allowCopyFallback === false) {
+      return;
+    }
     const sourceStat = (0, import_fs102.lstatSync)(sourcePath);
     if (sourceStat.isDirectory()) {
       (0, import_fs102.cpSync)(sourcePath, targetPath, { recursive: true });
@@ -89426,9 +90838,14 @@ function prepareOmcLaunchConfigDir(baseConfigDir = getClaudeConfigDir()) {
     ".omc-silent-update.json",
     "keybindings.json",
     "settings.json",
-    "settings.local.json"
+    "settings.local.json",
+    ".credentials.json"
   ]) {
-    ensureMirroredPath((0, import_path121.join)(baseConfigDir, entry), (0, import_path121.join)(runtimeConfigDir, (0, import_path121.basename)(entry)));
+    ensureMirroredPath(
+      (0, import_path121.join)(baseConfigDir, entry),
+      (0, import_path121.join)(runtimeConfigDir, (0, import_path121.basename)(entry)),
+      { allowCopyFallback: entry !== ".credentials.json" }
+    );
   }
   const runtimeSettingsPath = (0, import_path121.join)(runtimeConfigDir, "settings.json");
   if ((0, import_fs102.existsSync)(runtimeSettingsPath)) {
@@ -89937,7 +91354,7 @@ function interopCommand(options = {}) {
 // src/cli/ask.ts
 var import_child_process34 = require("child_process");
 var import_fs103 = require("fs");
-var import_promises18 = require("fs/promises");
+var import_promises21 = require("fs/promises");
 var import_os21 = require("os");
 var import_path122 = require("path");
 var import_url15 = require("url");
@@ -90011,12 +91428,12 @@ async function resolveAgentPromptContent(role, promptsDir) {
   }
   const promptPath = (0, import_path122.join)(promptsDir, `${normalizedRole}.md`);
   if (!(0, import_fs103.existsSync)(promptPath)) {
-    const files = await (0, import_promises18.readdir)(promptsDir).catch(() => []);
+    const files = await (0, import_promises21.readdir)(promptsDir).catch(() => []);
     const availableRoles = files.filter((file) => file.endsWith(".md")).map((file) => file.slice(0, -3)).sort();
     const availableSuffix = availableRoles.length > 0 ? ` Available roles: ${availableRoles.join(", ")}.` : "";
     throw new Error(`[ask] --agent-prompt role "${normalizedRole}" not found in ${promptsDir}.${availableSuffix}`);
   }
-  const content = (await (0, import_promises18.readFile)(promptPath, "utf-8")).trim();
+  const content = (await (0, import_promises21.readFile)(promptPath, "utf-8")).trim();
   if (!content) {
     throw new Error(`[ask] --agent-prompt role "${normalizedRole}" is empty: ${promptPath}`);
   }
@@ -90267,15 +91684,15 @@ async function runHudWatchLoop(options) {
     if (shouldStop) {
       break;
     }
-    await new Promise((resolve19) => {
+    await new Promise((resolve21) => {
       const timer = setTimeout(() => {
         wakeSleep = null;
-        resolve19();
+        resolve21();
       }, options.intervalMs);
       wakeSleep = () => {
         clearTimeout(timer);
         wakeSleep = null;
-        resolve19();
+        resolve21();
       };
       timer.unref?.();
     });
@@ -91219,6 +92636,10 @@ program2.command("autoresearch").description("Hard-deprecated shim that redirect
 });
 program2.command("ralphthon").description("Autonomous hackathon lifecycle: interview -> execute -> harden -> done").helpOption(false).allowUnknownOption(true).allowExcessArguments(true).argument("[args...]", "ralphthon arguments").action(async (args) => {
   await ralphthonCommand(args);
+});
+program2.command("ultragoal").description("Durable repo-native multi-goal workflow with Claude Code /goal handoff (see omc ultragoal help)").helpOption(false).allowUnknownOption(true).allowExcessArguments(true).argument("[args...]", "ultragoal subcommand arguments").addHelpText("after", `
+${ULTRAGOAL_HELP}`).action(async (args) => {
+  await ultragoalCommand(args);
 });
 function buildProgram() {
   return program2;
