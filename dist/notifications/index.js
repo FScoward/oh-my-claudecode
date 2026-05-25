@@ -44,9 +44,14 @@ export async function notify(event, data) {
         if (!config || !isEventEnabled(config, event)) {
             return null;
         }
-        // Verbosity filter (second gate after isEventEnabled)
+        // Verbosity filter (second gate after isEventEnabled).  An explicitly
+        // enabled ask-user-question event is user intent to surface an interactive
+        // block, so do not let the default "session" verbosity silently drop it.
         const verbosity = getVerbosity(config);
-        if (!isEventAllowedByVerbosity(verbosity, event)) {
+        const isExplicitAskUserQuestionEvent = event === "ask-user-question" &&
+            config.events?.["ask-user-question"]?.enabled === true;
+        if (!isExplicitAskUserQuestionEvent &&
+            !isEventAllowedByVerbosity(verbosity, event)) {
             return null;
         }
         // Get tmux pane ID
@@ -72,6 +77,7 @@ export async function notify(event, data) {
             iteration: data.iteration,
             maxIterations: data.maxIterations,
             question: data.question,
+            askUserQuestionPrompts: data.askUserQuestionPrompts,
             incompleteTasks: data.incompleteTasks,
             agentName: data.agentName,
             agentType: data.agentType,
@@ -144,6 +150,12 @@ export async function notify(event, data) {
                             event: payload.event,
                             createdAt: new Date().toISOString(),
                             projectPath: payload.projectPath,
+                            ...(payload.event === "ask-user-question" && payload.askUserQuestionPrompts?.[0]
+                                ? {
+                                    askUserQuestionOptionCount: payload.askUserQuestionPrompts[0].options.length,
+                                    askUserQuestionAllowOther: payload.askUserQuestionPrompts[0].allowOther !== false,
+                                }
+                                : {}),
                         });
                     }
                 }

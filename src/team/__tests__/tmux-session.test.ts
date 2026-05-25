@@ -10,6 +10,7 @@ import {
   getDefaultShell,
   buildWorkerStartCommand,
   paneLooksReady,
+  paneHasActiveTask,
 } from '../tmux-session.js';
 
 afterEach(() => {
@@ -320,6 +321,57 @@ describe('pane readiness startup banners', () => {
     expect(paneLooksReady('Welcome\n❯ ')).toBe(true);
     expect(paneLooksReady('Welcome\n> ')).toBe(true);
     expect(paneLooksReady('⏵⏵ bypass permissions on (shift+tab to cycle)\nReady\n❯ ')).toBe(true);
+  });
+
+  it('treats Claude Code v2.1.x idle pane (prompt above persistent mode indicator) as ready', () => {
+    // Claude Code v2.1.142 renders the permission-mode indicator
+    // ("⏵⏵ bypass permissions on (shift+tab to cycle)") *below* the prompt
+    // as a persistent idle-state UI element. Before this fix, the pane was
+    // misread as still bootstrapping and OMC never dispatched the inbox to
+    // claude workers, leaving them hung with "[OMC] Starting..." forever.
+    const capture = [
+      '▐▛███▜▌   Claude Code v2.1.142',
+      '▝▜█████▛▘  Opus 4.7 (1M context) · Claude Max',
+      '  ▘▘ ▝▝    ~/some/repo',
+      '',
+      '───────────────────────────────────────',
+      '❯ ',
+      '───────────────────────────────────────',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+
+    expect(paneLooksReady(capture)).toBe(true);
+    expect(paneHasActiveTask(capture)).toBe(false);
+  });
+
+  it('treats Claude idle prompt inside the TUI gutter as ready for initial dispatch', () => {
+    const capture = [
+      '╭────────────────────────────────────────────────────────╮',
+      '│ ✻ Welcome to Claude Code v2.1.142                      │',
+      '│                                                        │',
+      '│ ❯                                                      │',
+      '╰────────────────────────────────────────────────────────╯',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+
+    expect(paneLooksReady(capture)).toBe(true);
+    expect(paneHasActiveTask(capture)).toBe(false);
+  });
+
+  it('still flags Claude Code v2.1.x mid-task panes via paneHasActiveTask', () => {
+    // Same v2.1.x pane shape with a spinner + "esc to interrupt" — paneLooksReady
+    // sees the prompt and reports ready, but waitForPaneReady's secondary
+    // paneHasActiveTask guard catches the in-flight task and keeps the worker
+    // from being treated as idle.
+    const capture = [
+      '❯ Run the migration',
+      '·  Thinking…',
+      '   esc to interrupt',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+
+    expect(paneLooksReady(capture)).toBe(true);
+    expect(paneHasActiveTask(capture)).toBe(true);
   });
 });
 

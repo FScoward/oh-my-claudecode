@@ -339,8 +339,15 @@ export function getRateLimitsFromStdin(stdin) {
 /**
  * Get model display name from stdin.
  * Prefer the official display name field, then fall back to the raw model id.
+ * Returns null when Claude Code does not provide model metadata so the HUD
+ * omits the model instead of guessing or showing a fake placeholder.
  */
+export function getModelId(stdin) {
+    const modelId = stdin.model?.id?.trim();
+    return modelId || null;
+}
 export function getModelName(stdin) {
-    return stdin.model?.display_name ?? stdin.model?.id ?? 'Unknown';
+    const displayName = stdin.model?.display_name?.trim();
+    return displayName || getModelId(stdin);
 }
 //# sourceMappingURL=stdin.js.map

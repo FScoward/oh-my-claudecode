@@ -133,6 +133,8 @@ describe('createTeamSession context resolution', () => {
       args[0] === 'new-session' && args.includes('-d') && args.includes('-P'),
     );
     expect(detachedCreateCall).toBeDefined();
+    expect(mockedCalls.execFileArgs).toContainEqual(['set-option', '-t', 'omc-team-race-team-detached', 'set-clipboard', 'on']);
+    expect(mockedCalls.execFileArgs).toContainEqual(['set-option', '-at', 'omc-team-race-team-detached', 'terminal-features', ',*:clipboard']);
     expect(session.leaderPaneId).toBe('%91');
     expect(session.sessionName).toBe('omc-team-race-team-detached:0');
     expect(session.workerPaneIds).toEqual([]);
@@ -168,6 +170,8 @@ describe('createTeamSession context resolution', () => {
 
     const detachedCreateCall = mockedCalls.execFileArgs.find((args) => args[0] === 'new-session');
     expect(detachedCreateCall).toBeUndefined();
+    expect(mockedCalls.execFileArgs).toContainEqual(['set-option', '-t', 'omx', 'set-clipboard', 'on']);
+    expect(mockedCalls.execFileArgs).toContainEqual(['set-option', '-at', 'omx', 'terminal-features', ',*:clipboard']);
 
     const targetedContextCall = mockedCalls.execFileArgs.find((args) =>
       args[0] === 'display-message'

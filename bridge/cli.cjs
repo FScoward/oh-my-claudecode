@@ -8873,12 +8873,14 @@ function normalizeRegistryEntry(value) {
   }
   const args = Array.isArray(raw.args) && raw.args.every((item) => typeof item === "string") ? [...raw.args] : [];
   const env2 = isStringRecord(raw.env) ? { ...raw.env } : void 0;
+  const headers = isStringRecord(raw.headers) ? { ...raw.headers } : void 0;
   const timeout = typeof raw.timeout === "number" && Number.isFinite(raw.timeout) && raw.timeout > 0 ? raw.timeout : void 0;
   const effectiveTimeout = timeout ?? (command && isLauncherBackedMcpCommand(command, args) ? DEFAULT_LAUNCHER_MCP_STARTUP_TIMEOUT_SEC : void 0);
   return {
     ...command ? { command } : {},
     ...args.length > 0 ? { args } : {},
     ...env2 && Object.keys(env2).length > 0 ? { env: env2 } : {},
+    ...headers && Object.keys(headers).length > 0 ? { headers } : {},
     ...url ? { url } : {},
     ...type ? { type } : {},
     ...effectiveTimeout ? { timeout: effectiveTimeout } : {}
@@ -9044,9 +9046,23 @@ function parseTomlStringArray(value) {
     return void 0;
   }
 }
-function renderTomlEnvTable(env2) {
-  const entries = Object.entries(env2).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key} = ${renderTomlString(value)}`);
+function renderTomlBareKey(key) {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : renderTomlString(key);
+}
+function parseTomlKey(value) {
+  const trimmed = value.trim();
+  if (/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+    return trimmed;
+  }
+  const parsed = parseTomlQuotedString(trimmed);
+  return parsed && parsed.trim().length > 0 ? parsed : void 0;
+}
+function renderTomlStringMapInline(values) {
+  const entries = Object.entries(values).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${renderTomlBareKey(key)} = ${renderTomlString(value)}`);
   return `{ ${entries.join(", ")} }`;
+}
+function renderTomlEnvTable(env2) {
+  return renderTomlStringMapInline(env2);
 }
 function parseTomlEnvTable(value) {
   const trimmed = value.trim();
@@ -9055,10 +9071,13 @@ function parseTomlEnvTable(value) {
   }
   const env2 = {};
   const inner = trimmed.slice(1, -1);
-  const entryPattern = /([A-Za-z0-9_-]+)\s*=\s*"((?:\\.|[^"\\])*)"/g;
+  const entryPattern = /((?:[A-Za-z0-9_-]+)|(?:"(?:\\.|[^"\\])*"))\s*=\s*"((?:\\.|[^"\\])*)"/g;
   let match;
   while ((match = entryPattern.exec(inner)) !== null) {
-    env2[match[1]] = unescapeTomlString(match[2]);
+    const key = parseTomlKey(match[1]);
+    if (key) {
+      env2[key] = unescapeTomlString(match[2]);
+    }
   }
   return Object.keys(env2).length > 0 ? env2 : void 0;
 }
@@ -9081,6 +9100,12 @@ function renderCodexServerBlock(name, entry) {
   }
   if (entry.timeout) {
     lines.push(`startup_timeout_sec = ${entry.timeout}`);
+  }
+  if (entry.headers && Object.keys(entry.headers).length > 0) {
+    lines.push("", `[mcp_servers.${name}.headers]`);
+    for (const [key, value] of Object.entries(entry.headers).sort(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`${renderTomlBareKey(key)} = ${renderTomlString(value)}`);
+    }
   }
   return lines.join("\n");
 }
@@ -9138,6 +9163,7 @@ function parseCodexMcpRegistryEntries(content) {
   const lines = content.split(/\r?\n/);
   let currentName = null;
   let currentEntry = {};
+  let currentSection = null;
   const flushCurrent = () => {
     if (!currentName) return;
     const normalized = normalizeRegistryEntry(currentEntry);
@@ -9146,10 +9172,22 @@ function parseCodexMcpRegistryEntries(content) {
     }
     currentName = null;
     currentEntry = {};
+    currentSection = null;
   };
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const headersSectionMatch = line.match(/^\[mcp_servers\.([^\]]+)\.headers\]$/);
+    if (headersSectionMatch) {
+      const name = headersSectionMatch[1].trim();
+      if (!currentName || currentName !== name) {
+        flushCurrent();
+        currentName = name;
+        currentEntry = {};
+      }
+      currentSection = "headers";
       continue;
     }
     const sectionMatch = line.match(/^\[mcp_servers\.([^\]]+)\]$/);
@@ -9157,18 +9195,27 @@ function parseCodexMcpRegistryEntries(content) {
       flushCurrent();
       currentName = sectionMatch[1].trim();
       currentEntry = {};
+      currentSection = "server";
       continue;
     }
-    if (!currentName) {
+    if (!currentName || !currentSection) {
       continue;
     }
     const [rawKey, ...rawValueParts] = line.split("=");
     if (!rawKey || rawValueParts.length === 0) {
       continue;
     }
-    const key = rawKey.trim();
+    const key = currentSection === "headers" ? parseTomlKey(rawKey) : rawKey.trim();
+    if (!key) {
+      continue;
+    }
     const value = rawValueParts.join("=").trim();
-    if (key === "command") {
+    if (currentSection === "headers") {
+      const parsed = parseTomlQuotedString(value);
+      if (parsed !== void 0) {
+        currentEntry.headers = { ...currentEntry.headers ?? {}, [key]: parsed };
+      }
+    } else if (key === "command") {
       const parsed = parseTomlQuotedString(value);
       if (parsed) currentEntry.command = parsed;
     } else if (key === "args") {
@@ -9183,6 +9230,9 @@ function parseCodexMcpRegistryEntries(content) {
     } else if (key === "env") {
       const parsed = parseTomlEnvTable(value);
       if (parsed) currentEntry.env = parsed;
+    } else if (key === "headers") {
+      const parsed = parseTomlEnvTable(value);
+      if (parsed) currentEntry.headers = parsed;
     } else if (key === "startup_timeout_sec") {
       const parsed = Number(value);
       if (Number.isFinite(parsed) && parsed > 0) currentEntry.timeout = parsed;
@@ -14605,6 +14655,7 @@ var init_types4 = __esm({
       ralph: "ralph",
       background: "bg",
       thinking: "thinking",
+      model: "Model",
       staged: "+",
       modified: "!",
       untracked: "?",
@@ -14622,6 +14673,7 @@ var init_types4 = __esm({
         ralph: "\u5FAA\u73AF",
         background: "\u540E\u53F0",
         thinking: "\u601D\u8003",
+        model: "\u6A21\u578B",
         staged: "\u5DF2\u6682\u5B58",
         modified: "\u5DF2\u4FEE\u6539",
         untracked: "\u672A\u8DDF\u8E2A",
@@ -14633,9 +14685,10 @@ var init_types4 = __esm({
       Object.keys(DEFAULT_HUD_LABELS)
     );
     DEFAULT_ELEMENT_ORDER = {
-      line1: ["hostname", "cwd", "gitRepo", "gitBranch", "gitStatus", "model", "apiKeySource", "profile"],
+      line1: ["hostname", "cwd", "gitRepo", "gitBranch", "gitStatus", "apiKeySource", "profile"],
       main: [
         "omcLabel",
+        "model",
         "enterpriseCost",
         "rateLimits",
         "customBuckets",
@@ -14676,10 +14729,10 @@ var init_types4 = __esm({
         // Disabled by default for backward compatibility
         gitInfoPosition: "above",
         // Git info above main HUD line (backward compatible)
-        model: false,
-        // Disabled by default for backward compatibility
-        modelFormat: "short",
-        // Short names by default for backward compatibility
+        model: true,
+        // Show only when Claude Code statusline stdin provides a model
+        modelFormat: "versioned",
+        // Preserve model version by default
         omcLabel: true,
         rateLimits: true,
         // Show rate limits by default
@@ -14751,8 +14804,8 @@ var init_types4 = __esm({
         gitBranch: false,
         gitStatus: false,
         gitInfoPosition: "above",
-        model: false,
-        modelFormat: "short",
+        model: true,
+        modelFormat: "versioned",
         omcLabel: true,
         rateLimits: true,
         ralph: true,
@@ -14793,8 +14846,8 @@ var init_types4 = __esm({
         gitBranch: true,
         gitStatus: true,
         gitInfoPosition: "above",
-        model: false,
-        modelFormat: "short",
+        model: true,
+        modelFormat: "versioned",
         omcLabel: true,
         rateLimits: true,
         ralph: true,
@@ -14836,8 +14889,8 @@ var init_types4 = __esm({
         gitBranch: true,
         gitStatus: true,
         gitInfoPosition: "above",
-        model: false,
-        modelFormat: "short",
+        model: true,
+        modelFormat: "versioned",
         omcLabel: true,
         rateLimits: true,
         ralph: true,
@@ -14879,8 +14932,8 @@ var init_types4 = __esm({
         gitBranch: true,
         gitStatus: false,
         gitInfoPosition: "above",
-        model: false,
-        modelFormat: "short",
+        model: true,
+        modelFormat: "versioned",
         omcLabel: true,
         rateLimits: false,
         ralph: true,
@@ -14921,8 +14974,8 @@ var init_types4 = __esm({
         gitBranch: true,
         gitStatus: true,
         gitInfoPosition: "above",
-        model: false,
-        modelFormat: "short",
+        model: true,
+        modelFormat: "versioned",
         omcLabel: true,
         rateLimits: true,
         ralph: true,
@@ -22156,29 +22209,6 @@ var init_agents_overlay = __esm({
   }
 });
 
-// src/utils/daemon-module-path.ts
-function resolveDaemonModulePath(currentFilename, distSegments) {
-  const isWindowsStylePath = /^[a-zA-Z]:\\/.test(currentFilename) || currentFilename.includes("\\");
-  const pathApi = isWindowsStylePath ? import_path66.win32 : { basename: import_path66.basename, dirname: import_path66.dirname, join: import_path66.join };
-  const tsCompiledPath = currentFilename.replace(/\.ts$/, ".js");
-  if (tsCompiledPath !== currentFilename) {
-    return tsCompiledPath;
-  }
-  const currentDir = pathApi.dirname(currentFilename);
-  const inBundledCli = pathApi.basename(currentFilename) === "cli.cjs" && pathApi.basename(currentDir) === "bridge";
-  if (inBundledCli) {
-    return pathApi.join(currentDir, "..", "dist", ...distSegments);
-  }
-  return currentFilename;
-}
-var import_path66;
-var init_daemon_module_path = __esm({
-  "src/utils/daemon-module-path.ts"() {
-    "use strict";
-    import_path66 = require("path");
-  }
-});
-
 // src/cli/tmux-utils.ts
 function tmuxEnv() {
   const { TMUX: _, ...env2 } = process.env;
@@ -22268,7 +22298,7 @@ function resolveTmuxBinaryPath() {
     if (result.status !== 0) return "tmux";
     const candidates = result.stdout?.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) ?? [];
     const first = candidates[0];
-    if (first && ((0, import_path67.isAbsolute)(first) || import_path67.win32.isAbsolute(first))) {
+    if (first && ((0, import_path66.isAbsolute)(first) || import_path66.win32.isAbsolute(first))) {
       return first;
     }
   } catch {
@@ -22316,7 +22346,7 @@ function resolveLaunchPolicy(env2 = process.env, args = [], options = {}) {
   return "outside-tmux";
 }
 function buildTmuxSessionName(cwd2) {
-  const dirToken = sanitizeTmuxToken((0, import_path67.basename)(cwd2));
+  const dirToken = sanitizeTmuxToken((0, import_path66.basename)(cwd2));
   let branchToken = "detached";
   try {
     const branch = (0, import_child_process19.execFileSync)("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
@@ -22365,7 +22395,7 @@ function wrapWithLoginShell(command) {
     return `${quoteForCmd(comspec)} /d /s /c ${quoteForCmd(command)}`;
   }
   const shell = process.env.SHELL || "/bin/sh";
-  const shellName = (0, import_path67.basename)(shell).replace(/\.(exe|cmd|bat)$/i, "");
+  const shellName = (0, import_path66.basename)(shell).replace(/\.(exe|cmd|bat)$/i, "");
   const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : "";
   const sourcePrefix = rcFile ? `[ -f ${quoteShellArg2(rcFile)} ] && . ${quoteShellArg2(rcFile)}; ` : "";
   return `exec ${quoteShellArg2(shell)} -lc ${quoteShellArg2(`${sourcePrefix}${command}`)}`;
@@ -22373,13 +22403,36 @@ function wrapWithLoginShell(command) {
 function quoteShellArg2(value) {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
-var import_child_process19, import_path67, import_util7;
+var import_child_process19, import_path66, import_util7;
 var init_tmux_utils = __esm({
   "src/cli/tmux-utils.ts"() {
     "use strict";
     import_child_process19 = require("child_process");
-    import_path67 = require("path");
+    import_path66 = require("path");
     import_util7 = require("util");
+  }
+});
+
+// src/utils/daemon-module-path.ts
+function resolveDaemonModulePath(currentFilename, distSegments) {
+  const isWindowsStylePath = /^[a-zA-Z]:\\/.test(currentFilename) || currentFilename.includes("\\");
+  const pathApi = isWindowsStylePath ? import_path67.win32 : { basename: import_path67.basename, dirname: import_path67.dirname, join: import_path67.join };
+  const tsCompiledPath = currentFilename.replace(/\.ts$/, ".js");
+  if (tsCompiledPath !== currentFilename) {
+    return tsCompiledPath;
+  }
+  const currentDir = pathApi.dirname(currentFilename);
+  const inBundledCli = pathApi.basename(currentFilename) === "cli.cjs" && pathApi.basename(currentDir) === "bridge";
+  if (inBundledCli) {
+    return pathApi.join(currentDir, "..", "dist", ...distSegments);
+  }
+  return currentFilename;
+}
+var import_path67;
+var init_daemon_module_path = __esm({
+  "src/utils/daemon-module-path.ts"() {
+    "use strict";
+    import_path67 = require("path");
   }
 });
 
@@ -24331,6 +24384,7 @@ __export(reply_listener_exports, {
   RateLimiter: () => RateLimiter,
   SlackConnectionStateTracker: () => SlackConnectionStateTracker,
   buildDaemonConfig: () => buildDaemonConfig,
+  buildReplyInjectionSteps: () => buildReplyInjectionSteps,
   getReplyListenerStatus: () => getReplyListenerStatus,
   isDaemonRunning: () => isDaemonRunning,
   pollLoop: () => pollLoop,
@@ -24451,19 +24505,51 @@ function isDaemonRunning() {
 function sanitizeReplyInput(text) {
   return text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").replace(/[\u202a-\u202e\u2066-\u2069]/g, "").replace(/\r?\n/g, " ").replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\(/g, "\\$(").replace(/\$\{/g, "\\${").trim();
 }
-function injectReply(paneId, text, platform, config2) {
+function buildReplyInjectionSteps(text, platform, config2, mapping) {
+  const prefix = config2.includePrefix ? `[reply:${platform}] ` : "";
+  const sanitized = sanitizeReplyInput(prefix + text);
+  const truncated = sanitized.slice(0, config2.maxMessageLength);
+  if (mapping?.event === "ask-user-question" && mapping.askUserQuestionAllowOther !== false && Number.isFinite(mapping.askUserQuestionOptionCount)) {
+    const optionCount = Math.max(0, Math.floor(mapping.askUserQuestionOptionCount ?? 0));
+    return [
+      ...Array.from({ length: optionCount }, () => ({ kind: "key", value: "Down" })),
+      { kind: "key", value: "Enter" },
+      { kind: "literal", value: truncated },
+      { kind: "key", value: "Enter" }
+    ];
+  }
+  return [
+    { kind: "literal", value: truncated },
+    { kind: "key", value: "Enter" }
+  ];
+}
+function sendReplyInjectionSteps(paneId, steps) {
+  try {
+    for (const step of steps) {
+      if (step.kind === "literal") {
+        tmuxExec(["send-keys", "-t", paneId, "-l", step.value], { stripTmux: true, timeout: 2e3 });
+      } else {
+        tmuxExec(["send-keys", "-t", paneId, step.value], { stripTmux: true, timeout: 2e3 });
+      }
+    }
+    return true;
+  } catch (error2) {
+    log(`ERROR: Failed to send reply injection steps to pane ${paneId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    return false;
+  }
+}
+function injectReply(paneId, text, platform, config2, mapping) {
   const content = capturePaneContent(paneId, 15);
   if (!content.trim()) {
     log(`WARN: Pane ${paneId} appears empty. Skipping injection, removing stale mapping.`);
     removeMessagesByPane(paneId);
     return false;
   }
-  const prefix = config2.includePrefix ? `[reply:${platform}] ` : "";
-  const sanitized = sanitizeReplyInput(prefix + text);
-  const truncated = sanitized.slice(0, config2.maxMessageLength);
-  const success = sendToPane(paneId, truncated, true);
+  const steps = buildReplyInjectionSteps(text, platform, config2, mapping);
+  const preview = steps.find((step) => step.kind === "literal")?.value ?? "";
+  const success = mapping?.event === "ask-user-question" ? sendReplyInjectionSteps(paneId, steps) : sendToPane(paneId, preview, true);
   if (success) {
-    log(`Injected reply from ${platform} into pane ${paneId}: "${truncated.slice(0, 50)}${truncated.length > 50 ? "..." : ""}"`);
+    log(`Injected reply from ${platform} into pane ${paneId}: "${preview.slice(0, 50)}${preview.length > 50 ? "..." : ""}"`);
   } else {
     log(`ERROR: Failed to inject reply into pane ${paneId}`);
   }
@@ -24529,7 +24615,7 @@ async function pollDiscord(config2, state, rateLimiter) {
       }
       state.discordLastMessageId = msg.id;
       writeDaemonState(state);
-      const success = injectReply(mapping.tmuxPaneId, msg.content, "discord", config2);
+      const success = injectReply(mapping.tmuxPaneId, msg.content, "discord", config2, mapping);
       if (success) {
         state.messagesInjected++;
         try {
@@ -24655,7 +24741,7 @@ async function pollTelegram(config2, state, rateLimiter) {
       }
       state.telegramLastUpdateId = update.update_id;
       writeDaemonState(state);
-      const success = injectReply(mapping.tmuxPaneId, text, "telegram", config2);
+      const success = injectReply(mapping.tmuxPaneId, text, "telegram", config2, mapping);
       if (success) {
         state.messagesInjected++;
         try {
@@ -24754,17 +24840,19 @@ async function pollLoop() {
               return;
             }
             let targetPaneId = null;
+            let targetMapping;
             if (event.thread_ts && event.thread_ts !== event.ts) {
               const mapping = lookupByMessageId("slack-bot", event.thread_ts);
               if (mapping) {
                 targetPaneId = mapping.tmuxPaneId;
+                targetMapping = mapping;
               }
             }
             if (!targetPaneId) {
               log("WARN: No target pane found for Slack message, skipping");
               return;
             }
-            const success = injectReply(targetPaneId, event.text, "slack", config2);
+            const success = injectReply(targetPaneId, event.text, "slack", config2, targetMapping);
             if (success) {
               state.messagesInjected++;
               writeDaemonState(state);
@@ -25021,6 +25109,7 @@ var init_reply_listener = __esm({
     import_path72 = require("path");
     import_url11 = require("url");
     import_child_process20 = require("child_process");
+    init_tmux_utils();
     import_https = require("https");
     init_daemon_module_path();
     init_paths();
@@ -26016,6 +26105,24 @@ function formatAskUserQuestion(payload) {
     lines.push(`**Question:** ${payload.question}`);
     lines.push("");
   }
+  if (payload.askUserQuestionPrompts?.length) {
+    for (const [promptIndex, prompt] of payload.askUserQuestionPrompts.entries()) {
+      if (payload.askUserQuestionPrompts.length > 1) {
+        lines.push(`**${prompt.header || `Question ${promptIndex + 1}`}:** ${prompt.question}`);
+      }
+      if (prompt.options.length > 0 || prompt.allowOther !== false) {
+        lines.push("**Options:**");
+        prompt.options.forEach((option, optionIndex) => {
+          const description = option.description ? ` \u2014 ${option.description}` : "";
+          lines.push(`${optionIndex + 1}. ${option.label}${description}`);
+        });
+        if (prompt.allowOther !== false) {
+          lines.push(`${prompt.options.length + 1}. ${prompt.otherLabel || "Other"} \u2014 reply with free text`);
+        }
+        lines.push("");
+      }
+    }
+  }
   lines.push(`Claude is waiting for your response.`);
   lines.push("");
   lines.push(buildFooter(payload, true));
@@ -26474,6 +26581,16 @@ function computeTemplateVariables(payload) {
   vars.iteration = payload.iteration != null ? String(payload.iteration) : "";
   vars.maxIterations = payload.maxIterations != null ? String(payload.maxIterations) : "";
   vars.question = payload.question || "";
+  vars.questionOptions = payload.askUserQuestionPrompts?.map((prompt) => {
+    const optionLines = prompt.options.map((option, index) => {
+      const description = option.description ? ` \u2014 ${option.description}` : "";
+      return `${index + 1}. ${option.label}${description}`;
+    });
+    if (prompt.allowOther !== false) {
+      optionLines.push(`${prompt.options.length + 1}. ${prompt.otherLabel || "Other"} \u2014 reply with free text`);
+    }
+    return optionLines.join("\n");
+  }).filter(Boolean).join("\n\n") || "";
   vars.incompleteTasks = payload.incompleteTasks != null ? String(payload.incompleteTasks) : "";
   vars.agentName = payload.agentName || "";
   vars.agentType = payload.agentType || "";
@@ -26879,6 +26996,7 @@ async function sendWebhook(config2, payload) {
         reason: payload.reason,
         active_mode: payload.activeMode,
         question: payload.question,
+        ask_user_question_prompts: payload.askUserQuestionPrompts,
         ...payload.replyChannel && { channel: payload.replyChannel },
         ...payload.replyTarget && { to: payload.replyTarget },
         ...payload.replyThread && { thread_id: payload.replyThread }
@@ -27146,7 +27264,8 @@ async function notify(event, data) {
       return null;
     }
     const verbosity = getVerbosity(config2);
-    if (!isEventAllowedByVerbosity(verbosity, event)) {
+    const isExplicitAskUserQuestionEvent = event === "ask-user-question" && config2.events?.["ask-user-question"]?.enabled === true;
+    if (!isExplicitAskUserQuestionEvent && !isEventAllowedByVerbosity(verbosity, event)) {
       return null;
     }
     const { getCurrentTmuxPaneId: getCurrentTmuxPaneId2 } = await Promise.resolve().then(() => (init_tmux(), tmux_exports));
@@ -27170,6 +27289,7 @@ async function notify(event, data) {
       iteration: data.iteration,
       maxIterations: data.maxIterations,
       question: data.question,
+      askUserQuestionPrompts: data.askUserQuestionPrompts,
       incompleteTasks: data.incompleteTasks,
       agentName: data.agentName,
       agentType: data.agentType,
@@ -27238,7 +27358,11 @@ async function notify(event, data) {
               tmuxSessionName: payload.tmuxSession || "",
               event: payload.event,
               createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-              projectPath: payload.projectPath
+              projectPath: payload.projectPath,
+              ...payload.event === "ask-user-question" && payload.askUserQuestionPrompts?.[0] ? {
+                askUserQuestionOptionCount: payload.askUserQuestionPrompts[0].options.length,
+                askUserQuestionAllowOther: payload.askUserQuestionPrompts[0].allowOther !== false
+              } : {}
             });
           }
         }
@@ -29141,6 +29265,50 @@ var init_model_contract = __esm({
   }
 });
 
+// src/cli/tmux-clipboard.ts
+function hasUniversalClipboardTerminalFeature(features) {
+  return features.split(/\r?\n|,/).map((feature) => feature.trim()).some((feature) => feature === UNIVERSAL_CLIPBOARD_FEATURE || feature.startsWith(`${UNIVERSAL_CLIPBOARD_FEATURE}:`));
+}
+function configureTmuxClipboardForSession(sessionName2, opts) {
+  tmuxExec(["set-option", "-t", sessionName2, "set-clipboard", "on"], opts);
+  let terminalFeatures = "";
+  try {
+    terminalFeatures = String(tmuxExec(["show-options", "-t", sessionName2, "-v", "terminal-features"], opts) ?? "");
+  } catch {
+    terminalFeatures = "";
+  }
+  if (!hasUniversalClipboardTerminalFeature(terminalFeatures)) {
+    tmuxExec(["set-option", "-at", sessionName2, "terminal-features", `,${UNIVERSAL_CLIPBOARD_FEATURE}`], opts);
+  }
+}
+function configureTmuxClipboardForCurrentSession(opts) {
+  const sessionName2 = String(tmuxExec(["display-message", "-p", "#S"], opts) ?? "").trim();
+  if (sessionName2) {
+    configureTmuxClipboardForSession(sessionName2, opts);
+  }
+}
+async function configureTmuxClipboardForSessionAsync(sessionName2, opts) {
+  await tmuxExecAsync(["set-option", "-t", sessionName2, "set-clipboard", "on"], opts);
+  let terminalFeatures = "";
+  try {
+    const result = await tmuxExecAsync(["show-options", "-t", sessionName2, "-v", "terminal-features"], opts);
+    terminalFeatures = String(result.stdout ?? "");
+  } catch {
+    terminalFeatures = "";
+  }
+  if (!hasUniversalClipboardTerminalFeature(terminalFeatures)) {
+    await tmuxExecAsync(["set-option", "-at", sessionName2, "terminal-features", `,${UNIVERSAL_CLIPBOARD_FEATURE}`], opts);
+  }
+}
+var UNIVERSAL_CLIPBOARD_FEATURE;
+var init_tmux_clipboard = __esm({
+  "src/cli/tmux-clipboard.ts"() {
+    "use strict";
+    init_tmux_utils();
+    UNIVERSAL_CLIPBOARD_FEATURE = "*:clipboard";
+  }
+});
+
 // src/team/tmux-session.ts
 var tmux_session_exports = {};
 __export(tmux_session_exports, {
@@ -29402,6 +29570,10 @@ function createSession(teamName, workerName2, workingDirectory) {
     args.push("-c", workingDirectory);
   }
   tmuxExec(args, { stripTmux: true, stdio: "pipe", timeout: 5e3 });
+  try {
+    configureTmuxClipboardForSession(name, { stripTmux: true, stdio: "pipe", timeout: 5e3 });
+  } catch {
+  }
   return name;
 }
 function killSession(teamName, workerName2) {
@@ -29528,6 +29700,10 @@ async function createTeamSession(teamName, workerCount, cwd2, options = {}) {
   }
   const teamTarget = sessionAndWindow;
   const resolvedSessionName = teamTarget.split(":")[0];
+  try {
+    await configureTmuxClipboardForSessionAsync(resolvedSessionName);
+  } catch {
+  }
   const workerPaneIds = [];
   if (workerCount <= 0) {
     try {
@@ -29609,11 +29785,12 @@ function paneHasTrustPrompt(captured) {
 }
 function paneHasClaudeStartupBanner(captured) {
   const lines = captured.split("\n").map((line) => line.replace(/\r/g, "").trim()).filter((line) => line.length > 0).slice(-20);
-  const lastPromptIndex = lines.findLastIndex((line) => /^\s*[›>❯]\s*/u.test(line));
+  const lastPromptIndex = lines.findLastIndex(paneLineLooksLikeIdlePrompt);
+  if (lastPromptIndex >= 0) return false;
   const lastStartupBannerIndex = lines.findLastIndex(
     (line) => /bypass\s+permissions\s+on/i.test(line) || /shift\+tab\s+to\s+cycle/i.test(line) || /^⏵⏵\s+/.test(line)
   );
-  return lastStartupBannerIndex >= 0 && lastStartupBannerIndex > lastPromptIndex;
+  return lastStartupBannerIndex >= 0;
 }
 function paneIsBootstrapping(captured) {
   if (paneHasClaudeStartupBanner(captured)) return true;
@@ -29631,6 +29808,9 @@ function paneHasActiveTask(captured) {
   if (tail.some((l) => /^[·✻]\s+[A-Za-z][A-Za-z0-9''-]*(?:\s+[A-Za-z][A-Za-z0-9''-]*){0,3}(?:…|\.{3})$/u.test(l))) return true;
   return false;
 }
+function paneLineLooksLikeIdlePrompt(line) {
+  return /^\s*(?:[│┃║▌▐▏▕╎┆┊]\s*)?[›>❯]\s*/u.test(line);
+}
 function paneLooksReady(captured) {
   const content = captured.trimEnd();
   if (content === "") return false;
@@ -29638,10 +29818,8 @@ function paneLooksReady(captured) {
   if (lines.length === 0) return false;
   if (paneIsBootstrapping(content)) return false;
   const lastLine = lines[lines.length - 1];
-  if (/^\s*[›>❯]\s*/u.test(lastLine)) return true;
-  const hasCodexPromptLine = lines.some((line) => /^\s*›\s*/u.test(line));
-  const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
-  return hasCodexPromptLine || hasClaudePromptLine;
+  if (paneLineLooksLikeIdlePrompt(lastLine)) return true;
+  return lines.some(paneLineLooksLikeIdlePrompt);
 }
 async function waitForPaneReady(paneId, opts = {}) {
   const envTimeout = Number.parseInt(process.env.OMC_SHELL_READY_TIMEOUT_MS ?? "", 10);
@@ -29899,6 +30077,7 @@ var init_tmux_session = __esm({
     import_promises10 = __toESM(require("fs/promises"), 1);
     init_team_name();
     init_tmux_utils();
+    init_tmux_clipboard();
     sleep4 = (ms) => new Promise((r) => setTimeout(r, ms));
     TMUX_SESSION_PREFIX = "omc-team";
     SUPPORTED_POSIX_SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "fish", "ksh"]);
@@ -30725,14 +30904,21 @@ function assertCleanLeaderWorktree(repoRoot) {
     throw error2;
   }
 }
+function canonicalPathForComparison(path22) {
+  try {
+    return (0, import_node_fs6.realpathSync)(path22);
+  } catch {
+    return (0, import_node_path7.resolve)(path22);
+  }
+}
 function getRegisteredWorktreeBranch(repoRoot, wtPath) {
   try {
     const output = git(repoRoot, ["worktree", "list", "--porcelain"]);
-    const resolvedWtPath = (0, import_node_path7.resolve)(wtPath);
+    const resolvedWtPath = canonicalPathForComparison(wtPath);
     let currentMatches = false;
     for (const line of output.split("\n")) {
       if (line.startsWith("worktree ")) {
-        currentMatches = (0, import_node_path7.resolve)(line.slice("worktree ".length).trim()) === resolvedWtPath;
+        currentMatches = canonicalPathForComparison(line.slice("worktree ".length).trim()) === resolvedWtPath;
         continue;
       }
       if (!currentMatches) continue;
@@ -30746,8 +30932,8 @@ function getRegisteredWorktreeBranch(repoRoot, wtPath) {
 function isRegisteredWorktreePath(repoRoot, wtPath) {
   try {
     const output = git(repoRoot, ["worktree", "list", "--porcelain"]);
-    const resolvedWtPath = (0, import_node_path7.resolve)(wtPath);
-    return output.split("\n").some((line) => line.startsWith("worktree ") && (0, import_node_path7.resolve)(line.slice("worktree ".length).trim()) === resolvedWtPath);
+    const resolvedWtPath = canonicalPathForComparison(wtPath);
+    return output.split("\n").some((line) => line.startsWith("worktree ") && canonicalPathForComparison(line.slice("worktree ".length).trim()) === resolvedWtPath);
   } catch {
     return false;
   }
@@ -32911,13 +33097,27 @@ async function spawnV2Worker(opts) {
     };
   }
   if (opts.agentType === "claude") {
-    const settled = await waitForWorkerStartupEvidence(
+    let settled = await waitForWorkerStartupEvidence(
       opts.teamName,
       opts.workerName,
       opts.taskId,
       opts.cwd,
       6
     );
+    for (let attempt = 1; !settled && attempt <= 4; attempt++) {
+      try {
+        await tmuxExecAsync(["send-keys", "-t", paneId, "Enter"]);
+      } catch {
+        break;
+      }
+      settled = await waitForWorkerStartupEvidence(
+        opts.teamName,
+        opts.workerName,
+        opts.taskId,
+        opts.cwd,
+        12
+      );
+    }
     if (!settled) {
       return {
         paneId,
@@ -43443,8 +43643,13 @@ function getRateLimitsFromStdin(stdin) {
     weeklyResetsAt: parseResetDate(stdin.rate_limits?.seven_day?.resets_at)
   };
 }
+function getModelId(stdin) {
+  const modelId = stdin.model?.id?.trim();
+  return modelId || null;
+}
 function getModelName(stdin) {
-  return stdin.model?.display_name ?? stdin.model?.id ?? "Unknown";
+  const displayName = stdin.model?.display_name?.trim();
+  return displayName || getModelId(stdin);
 }
 var import_fs104, import_path123, TRANSIENT_CONTEXT_PERCENT_TOLERANCE, SESSION_ID_ENV_VARS;
 var init_stdin = __esm({
@@ -45369,7 +45574,7 @@ function getGitRepoName(cwd2) {
   }
   let result = null;
   try {
-    const url = (0, import_node_child_process11.execSync)("git remote get-url origin", {
+    const url = (0, import_node_child_process10.execSync)("git remote get-url origin", {
       cwd: cwd2,
       encoding: "utf-8",
       timeout: 1e3,
@@ -45396,7 +45601,7 @@ function getGitBranch(cwd2) {
   }
   let result = null;
   try {
-    const branch = (0, import_node_child_process11.execSync)("git branch --show-current", {
+    const branch = (0, import_node_child_process10.execSync)("git branch --show-current", {
       cwd: cwd2,
       encoding: "utf-8",
       timeout: 1e3,
@@ -45425,8 +45630,8 @@ function getWorktreeInfo(cwd2) {
   };
   let result = { isWorktree: false, worktreeName: null };
   try {
-    const gitDir = (0, import_node_child_process11.execSync)("git rev-parse --git-dir", execOpts).trim();
-    const gitCommonDir = (0, import_node_child_process11.execSync)("git rev-parse --git-common-dir", execOpts).trim();
+    const gitDir = (0, import_node_child_process10.execSync)("git rev-parse --git-dir", execOpts).trim();
+    const gitCommonDir = (0, import_node_child_process10.execSync)("git rev-parse --git-common-dir", execOpts).trim();
     let resolvedGitDir = (0, import_node_path16.resolve)(key, gitDir);
     let resolvedCommonDir = (0, import_node_path16.resolve)(key, gitCommonDir);
     try {
@@ -45467,7 +45672,7 @@ function getGitStatusCounts(cwd2) {
   }
   let result = null;
   try {
-    const output = (0, import_node_child_process11.execSync)("git --no-optional-locks status --porcelain -b", {
+    const output = (0, import_node_child_process10.execSync)("git --no-optional-locks status --porcelain -b", {
       cwd: cwd2,
       encoding: "utf-8",
       timeout: 1e3,
@@ -45517,11 +45722,11 @@ function renderGitStatus(cwd2, labels = DEFAULT_HUD_LABELS) {
   if (behind > 0) parts.push(`${red(labels.behind)}${behind}`);
   return parts.join(" ");
 }
-var import_node_child_process11, import_node_fs12, import_node_path16, CACHE_TTL_MS3, repoCache, branchCache, worktreeCache, statusCache;
+var import_node_child_process10, import_node_fs12, import_node_path16, CACHE_TTL_MS3, repoCache, branchCache, worktreeCache, statusCache;
 var init_git = __esm({
   "src/hud/elements/git.ts"() {
     "use strict";
-    import_node_child_process11 = require("node:child_process");
+    import_node_child_process10 = require("node:child_process");
     import_node_fs12 = require("node:fs");
     import_node_path16 = require("node:path");
     init_colors();
@@ -45538,6 +45743,10 @@ var init_git = __esm({
 function extractVersion(modelId) {
   const idMatch = modelId.match(/(?:opus|sonnet|haiku)-(\d+)-(\d+)/i);
   if (idMatch) return `${idMatch[1]}.${idMatch[2]}`;
+  const legacyIdMatch = modelId.match(/claude-(\d+)(?:-(\d+))?-(?:opus|sonnet|haiku)/i);
+  if (legacyIdMatch) {
+    return legacyIdMatch[2] ? `${legacyIdMatch[1]}.${legacyIdMatch[2]}` : legacyIdMatch[1];
+  }
   const displayMatch = modelId.match(/(?:opus|sonnet|haiku)\s+(\d+(?:\.\d+)?)/i);
   if (displayMatch) return displayMatch[1];
   return null;
@@ -45561,16 +45770,17 @@ function formatModelName(modelId, format = "short") {
   }
   return shortName;
 }
-function renderModel(modelId, format = "short") {
+function renderModel(modelId, format = "versioned", labels = DEFAULT_HUD_LABELS) {
   const name = formatModelName(modelId, format);
   if (!name) return null;
-  return cyan(name);
+  return cyan(`${labels.model}: ${name}`);
 }
 var init_model = __esm({
   "src/hud/elements/model.ts"() {
     "use strict";
     init_colors();
     init_string_width();
+    init_types4();
   }
 });
 
@@ -45826,10 +46036,12 @@ async function render(context, config2) {
     const gitStatusElement = renderGitStatus(context.cwd, hudLabels);
     if (gitStatusElement) rendered.set("gitStatus", gitStatusElement);
   }
-  if (enabledElements.model && context.modelName) {
+  const modelSource = enabledElements.modelFormat === "full" ? context.modelId ?? context.modelName : context.modelName;
+  if (enabledElements.model && modelSource) {
     const modelElement = renderModel(
-      context.modelName,
-      enabledElements.modelFormat
+      modelSource,
+      enabledElements.modelFormat,
+      hudLabels
     );
     if (modelElement) rendered.set("model", modelElement);
   }
@@ -46396,6 +46608,7 @@ async function main2(watchMode = false, skipInit = false) {
       contextPercent,
       contextDisplayScope: currentSessionId ?? cwd2,
       modelName: getModelName(stdin),
+      modelId: getModelId(stdin),
       ralph,
       ultrawork,
       prd,
@@ -71095,6 +71308,13 @@ var LSP_SERVERS = {
     extensions: [".css", ".scss", ".less"],
     installHint: "npm install -g vscode-langservers-extracted"
   },
+  vue: {
+    name: "Vue Language Server (Volar)",
+    command: "vue-language-server",
+    args: ["--stdio"],
+    extensions: [".vue"],
+    installHint: "npm install -g @vue/language-server"
+  },
   yaml: {
     name: "YAML Language Server",
     command: "yaml-language-server",
@@ -72297,7 +72517,13 @@ async function runLspAggregatedDiagnostics(directory, extensions = [".ts", ".tsx
   const files = findFiles(directory, extensions, ["node_modules", "dist", "build", ".git"]);
   const allDiagnostics = [];
   let filesChecked = 0;
+  const skippedFiles = [];
+  const installHintSet = /* @__PURE__ */ new Set();
   for (const file of files) {
+    if (!getServerForFile(file)) {
+      skippedFiles.push({ file, reason: "no language server registered for extension" });
+      continue;
+    }
     try {
       await lspClientManager.runWithClientLease(file, async (client) => {
         await client.openDocument(file);
@@ -72311,18 +72537,29 @@ async function runLspAggregatedDiagnostics(directory, extensions = [".ts", ".tsx
         }
         filesChecked++;
       });
-    } catch (_error) {
-      continue;
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      const match = message.match(/^Language server '([^']+)' not found\.\nInstall with: (.+)$/s);
+      if (match) {
+        installHintSet.add(match[2].trim());
+        skippedFiles.push({ file, reason: `missing language server: ${match[1]}` });
+      } else {
+        skippedFiles.push({ file, reason: message });
+      }
     }
   }
   const errorCount = allDiagnostics.filter((d) => d.diagnostic.severity === 1).length;
   const warningCount = allDiagnostics.filter((d) => d.diagnostic.severity === 2).length;
+  const installHints = Array.from(installHintSet);
+  const allFilesSkipped = filesChecked === 0 && files.length > 0;
   return {
-    success: errorCount === 0,
+    success: errorCount === 0 && !allFilesSkipped,
     diagnostics: allDiagnostics,
     errorCount,
     warningCount,
-    filesChecked
+    filesChecked,
+    skippedFiles,
+    installHints
   };
 }
 
@@ -72382,25 +72619,41 @@ function formatTscResult(result) {
 function formatLspResult(result) {
   let diagnostics = "";
   let summary = "";
-  if (result.diagnostics.length === 0) {
+  if (result.diagnostics.length === 0 && result.installHints.length === 0 && result.skippedFiles.length === 0) {
     diagnostics = `Checked ${result.filesChecked} files. No diagnostics found!`;
     summary = `LSP check passed: 0 errors, 0 warnings (${result.filesChecked} files)`;
   } else {
-    const byFile = /* @__PURE__ */ new Map();
-    for (const item of result.diagnostics) {
-      if (!byFile.has(item.file)) {
-        byFile.set(item.file, []);
+    const hasSkips = result.skippedFiles.length > 0;
+    const parts = [];
+    if (result.installHints.length > 0) {
+      const hintLines = result.installHints.map((h) => `  - ${h}`).join("\n");
+      parts.push(
+        `\u26A0 Missing language servers detected:
+${hintLines}
+Install the language server(s) above and re-run, or these files cannot be checked.`
+      );
+    }
+    if (result.diagnostics.length > 0) {
+      const byFile = /* @__PURE__ */ new Map();
+      for (const item of result.diagnostics) {
+        if (!byFile.has(item.file)) {
+          byFile.set(item.file, []);
+        }
+        byFile.get(item.file).push(item);
       }
-      byFile.get(item.file).push(item);
-    }
-    const fileOutputs = [];
-    for (const [file, items] of byFile) {
-      const diags = items.map((i) => i.diagnostic);
-      fileOutputs.push(`${file}:
+      const fileOutputs = [];
+      for (const [file, items] of byFile) {
+        const diags = items.map((i) => i.diagnostic);
+        fileOutputs.push(`${file}:
 ${formatDiagnostics(diags, file)}`);
+      }
+      parts.push(fileOutputs.join("\n\n"));
     }
-    diagnostics = fileOutputs.join("\n\n");
-    summary = `LSP check ${result.success ? "passed" : "failed"}: ${result.errorCount} errors, ${result.warningCount} warnings (${result.filesChecked} files)`;
+    if (hasSkips) {
+      parts.push(`Skipped ${result.skippedFiles.length} file(s) due to missing or unregistered language servers.`);
+    }
+    diagnostics = parts.join("\n\n");
+    summary = hasSkips ? `LSP check incomplete: ${result.errorCount} errors, ${result.warningCount} warnings (${result.filesChecked}/${result.filesChecked + result.skippedFiles.length} files checked)` : `LSP check ${result.success ? "passed" : "failed"}: ${result.errorCount} errors, ${result.warningCount} warnings (${result.filesChecked} files)`;
   }
   return {
     strategy: "lsp",
@@ -74484,6 +74737,60 @@ function getLegacyStateFileCandidates(mode, root2) {
   ];
   return [...new Set(candidates)];
 }
+function getWorkingDirectoryLocalOmcRoot(root2) {
+  return (0, import_path26.join)(root2, ".omc");
+}
+function shouldCheckWorkingDirectoryLocalState(root2) {
+  return getWorkingDirectoryLocalOmcRoot(root2) !== getOmcRoot(root2);
+}
+function getWorkingDirectoryLocalSessionStatePath(mode, root2, sessionId) {
+  const normalizedName = mode.endsWith("-state") ? mode : `${mode}-state`;
+  return (0, import_path26.join)(getWorkingDirectoryLocalOmcRoot(root2), "state", "sessions", sessionId, `${normalizedName}.json`);
+}
+function getWorkingDirectoryLocalLegacyStateFileCandidates(mode, root2) {
+  const normalizedName = mode.endsWith("-state") ? mode : `${mode}-state`;
+  return [
+    (0, import_path26.join)(getWorkingDirectoryLocalOmcRoot(root2), "state", `${normalizedName}.json`),
+    (0, import_path26.join)(getWorkingDirectoryLocalOmcRoot(root2), `${normalizedName}.json`)
+  ];
+}
+function getWorkingDirectoryLocalStateClearCandidates(mode, root2, sessionId) {
+  if (!shouldCheckWorkingDirectoryLocalState(root2)) {
+    return [];
+  }
+  const paths = /* @__PURE__ */ new Set();
+  if (sessionId) {
+    paths.add(getWorkingDirectoryLocalSessionStatePath(mode, root2, sessionId));
+  }
+  for (const legacyPath of getWorkingDirectoryLocalLegacyStateFileCandidates(mode, root2)) {
+    paths.add(legacyPath);
+  }
+  return [...paths];
+}
+function clearWorkingDirectoryLocalStateCandidates(mode, root2, sessionId) {
+  let cleared = 0;
+  let hadFailure = false;
+  const paths = getWorkingDirectoryLocalStateClearCandidates(mode, root2, sessionId);
+  const localLegacyPaths = new Set(getWorkingDirectoryLocalLegacyStateFileCandidates(mode, root2));
+  for (const statePath of paths) {
+    if (!(0, import_fs20.existsSync)(statePath)) {
+      continue;
+    }
+    try {
+      if (sessionId && localLegacyPaths.has(statePath)) {
+        const raw = JSON.parse((0, import_fs20.readFileSync)(statePath, "utf-8"));
+        if (!canClearStateForSession(raw, sessionId)) {
+          continue;
+        }
+      }
+      (0, import_fs20.unlinkSync)(statePath);
+      cleared++;
+    } catch {
+      hadFailure = true;
+    }
+  }
+  return { cleared, hadFailure, paths };
+}
 function clearLegacyStateCandidates(mode, root2, sessionId) {
   let cleared = 0;
   let hadFailure = false;
@@ -74543,6 +74850,9 @@ function getStateClearCheckedPaths(mode, root2, sessionId) {
   }
   for (const legacyPath of getLegacyStateFileCandidates(mode, root2)) {
     paths.add(legacyPath);
+  }
+  for (const localPath of getWorkingDirectoryLocalStateClearCandidates(mode, root2, sessionId)) {
+    paths.add(localPath);
   }
   const sessionIds = sessionId ? [sessionId, ...listSessionIds(root2)] : listSessionIds(root2);
   for (const sid of new Set(sessionIds)) {
@@ -74927,10 +75237,12 @@ var stateClearTool = {
           const success = clearModeState(mode, root2, sessionId);
           const sessionCleanup2 = clearSessionOwnedStateCandidates(mode, root2, sessionId);
           const legacyCleanup2 = clearLegacyStateCandidates(mode, root2, sessionId);
+          const shouldUseLocalFallback2 = requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup2.cleared === 0 && legacyCleanup2.cleared === 0;
+          const workingDirectoryLocalCleanup2 = shouldUseLocalFallback2 ? clearWorkingDirectoryLocalStateCandidates(mode, root2, sessionId) : { cleared: 0, hadFailure: false, paths: [] };
           let ownerSessionId2;
           let ownerSessionCleanup2 = { cleared: 0, hadFailure: false, paths: [] };
           let ownerLegacyCleanup2 = { cleared: 0, hadFailure: false };
-          if (OWNER_SESSION_FALLBACK_MODES.has(mode) && requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup2.cleared === 0 && legacyCleanup2.cleared === 0) {
+          if (OWNER_SESSION_FALLBACK_MODES.has(mode) && requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup2.cleared === 0 && legacyCleanup2.cleared === 0 && workingDirectoryLocalCleanup2.cleared === 0) {
             ownerSessionId2 = findSingleOwningSessionForMode(mode, root2, sessionId);
             if (ownerSessionId2) {
               if (mode === "team") {
@@ -74957,6 +75269,9 @@ var stateClearTool = {
           if (sessionCleanup2.cleared > 0) {
             ghostNoteParts2.push(`removed ${sessionCleanup2.cleared} recovered session file${sessionCleanup2.cleared === 1 ? "" : "s"}`);
           }
+          if (workingDirectoryLocalCleanup2.cleared > 0) {
+            ghostNoteParts2.push(`removed ${workingDirectoryLocalCleanup2.cleared} workingDirectory-local state file${workingDirectoryLocalCleanup2.cleared === 1 ? "" : "s"}`);
+          }
           if (runtimeCleanup2.cleared > 0) {
             ghostNoteParts2.push(`removed ${runtimeCleanup2.cleared} runtime artifact${runtimeCleanup2.cleared === 1 ? "" : "s"}`);
           }
@@ -74974,8 +75289,8 @@ var stateClearTool = {
             if (prunedMissions > 0) details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
             return details.length > 0 ? ` (${details.join(", ")})` : "";
           })();
-          const clearedStateOrArtifacts2 = requestedSessionOwnedPaths.length + completedSessionCleanup.cleared + sessionCleanup2.cleared + legacyCleanup2.cleared + ownerSessionCleanup2.cleared + ownerLegacyCleanup2.cleared + runtimeCleanup2.cleared;
-          if (!ownerSessionId2 && clearedStateOrArtifacts2 === 0 && success && !legacyCleanup2.hadFailure && !sessionCleanup2.hadFailure && !completedSessionCleanup.hadFailure && !ownerSessionCleanup2.hadFailure && !ownerLegacyCleanup2.hadFailure && !runtimeCleanup2.hadFailure) {
+          const clearedStateOrArtifacts2 = requestedSessionOwnedPaths.length + completedSessionCleanup.cleared + sessionCleanup2.cleared + legacyCleanup2.cleared + workingDirectoryLocalCleanup2.cleared + ownerSessionCleanup2.cleared + ownerLegacyCleanup2.cleared + runtimeCleanup2.cleared;
+          if (!ownerSessionId2 && clearedStateOrArtifacts2 === 0 && success && !legacyCleanup2.hadFailure && !sessionCleanup2.hadFailure && !workingDirectoryLocalCleanup2.hadFailure && !completedSessionCleanup.hadFailure && !ownerSessionCleanup2.hadFailure && !ownerLegacyCleanup2.hadFailure && !runtimeCleanup2.hadFailure) {
             return {
               content: [{
                 type: "text",
@@ -74983,7 +75298,7 @@ var stateClearTool = {
               }]
             };
           }
-          if (success && !legacyCleanup2.hadFailure && !sessionCleanup2.hadFailure && !completedSessionCleanup.hadFailure && !ownerSessionCleanup2.hadFailure && !ownerLegacyCleanup2.hadFailure && !runtimeCleanup2.hadFailure) {
+          if (success && !legacyCleanup2.hadFailure && !sessionCleanup2.hadFailure && !workingDirectoryLocalCleanup2.hadFailure && !completedSessionCleanup.hadFailure && !ownerSessionCleanup2.hadFailure && !ownerLegacyCleanup2.hadFailure && !runtimeCleanup2.hadFailure) {
             return {
               content: [{
                 type: "text",
@@ -75001,10 +75316,12 @@ var stateClearTool = {
         }
         const sessionCleanup = clearSessionOwnedStateCandidates(mode, root2, sessionId);
         const legacyCleanup = clearLegacyStateCandidates(mode, root2, sessionId);
+        const shouldUseLocalFallback = requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup.cleared === 0 && legacyCleanup.cleared === 0;
+        const workingDirectoryLocalCleanup = shouldUseLocalFallback ? clearWorkingDirectoryLocalStateCandidates(mode, root2, sessionId) : { cleared: 0, hadFailure: false, paths: [] };
         let ownerSessionId;
         let ownerSessionCleanup = { cleared: 0, hadFailure: false, paths: [] };
         let ownerLegacyCleanup = { cleared: 0, hadFailure: false };
-        if (OWNER_SESSION_FALLBACK_MODES.has(mode) && requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup.cleared === 0 && legacyCleanup.cleared === 0) {
+        if (OWNER_SESSION_FALLBACK_MODES.has(mode) && requestedSessionOwnedPaths.length === 0 && completedSessionCleanup.cleared === 0 && sessionCleanup.cleared === 0 && legacyCleanup.cleared === 0 && workingDirectoryLocalCleanup.cleared === 0) {
           ownerSessionId = findSingleOwningSessionForMode(mode, root2, sessionId);
           if (ownerSessionId) {
             if (mode === "team") {
@@ -75030,6 +75347,9 @@ var stateClearTool = {
         if (sessionCleanup.cleared > 0) {
           ghostNoteParts.push(`removed ${sessionCleanup.cleared} recovered session file${sessionCleanup.cleared === 1 ? "" : "s"}`);
         }
+        if (workingDirectoryLocalCleanup.cleared > 0) {
+          ghostNoteParts.push(`removed ${workingDirectoryLocalCleanup.cleared} workingDirectory-local state file${workingDirectoryLocalCleanup.cleared === 1 ? "" : "s"}`);
+        }
         if (runtimeCleanup2.cleared > 0) {
           ghostNoteParts.push(`removed ${runtimeCleanup2.cleared} runtime artifact${runtimeCleanup2.cleared === 1 ? "" : "s"}`);
         }
@@ -75047,8 +75367,8 @@ var stateClearTool = {
           if (prunedMissions > 0) details.push(`pruned ${prunedMissions} HUD mission entry(ies)`);
           return details.length > 0 ? ` (${details.join(", ")})` : "";
         })();
-        const clearedStateOrArtifacts = requestedSessionOwnedPaths.length + completedSessionCleanup.cleared + sessionCleanup.cleared + legacyCleanup.cleared + ownerSessionCleanup.cleared + ownerLegacyCleanup.cleared + runtimeCleanup2.cleared;
-        const hadFailure = legacyCleanup.hadFailure || sessionCleanup.hadFailure || completedSessionCleanup.hadFailure || ownerSessionCleanup.hadFailure || ownerLegacyCleanup.hadFailure || runtimeCleanup2.hadFailure;
+        const clearedStateOrArtifacts = requestedSessionOwnedPaths.length + completedSessionCleanup.cleared + sessionCleanup.cleared + legacyCleanup.cleared + workingDirectoryLocalCleanup.cleared + ownerSessionCleanup.cleared + ownerLegacyCleanup.cleared + runtimeCleanup2.cleared;
+        const hadFailure = legacyCleanup.hadFailure || sessionCleanup.hadFailure || workingDirectoryLocalCleanup.hadFailure || completedSessionCleanup.hadFailure || ownerSessionCleanup.hadFailure || ownerLegacyCleanup.hadFailure || runtimeCleanup2.hadFailure;
         if (!ownerSessionId && clearedStateOrArtifacts === 0 && !hadFailure) {
           return {
             content: [{
@@ -82409,6 +82729,8 @@ function buildSessionStartAdditionalContext(messages) {
   return selected.join("\n");
 }
 function readLinuxBootId() {
+  const testBootId = process.env.OMC_TEST_BOOT_ID?.trim();
+  if (testBootId) return testBootId;
   try {
     if (!(0, import_fs81.existsSync)(LINUX_BOOT_ID_PATH)) return void 0;
     const bootId = (0, import_fs81.readFileSync)(LINUX_BOOT_ID_PATH, "utf-8").trim();
@@ -83722,14 +84044,49 @@ The CLAUDE.md instruction "Pass model on Task calls: haiku, sonnet, opus" applie
   }
   return { continue: true };
 }
-function dispatchAskUserQuestionNotification(sessionId, directory, toolInput) {
+function stringOrUndefined(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : void 0;
+}
+function extractAskUserQuestionPrompts(toolInput) {
   const input = toolInput;
-  const questions = input?.questions || [];
-  const questionText = questions.map((q) => q.question || "").filter(Boolean).join("; ") || "User input requested";
+  const questions = Array.isArray(input?.questions) ? input.questions : [];
+  return questions.map((question) => {
+    const questionText = stringOrUndefined(question.question);
+    if (!questionText) return null;
+    const rawOptions = Array.isArray(question.options) ? question.options : [];
+    const options = rawOptions.map((option) => {
+      const label = stringOrUndefined(option.label);
+      if (!label) return null;
+      const value = stringOrUndefined(option.value);
+      const description = stringOrUndefined(option.description);
+      return {
+        label,
+        ...value ? { value } : {},
+        ...description ? { description } : {}
+      };
+    }).filter((option) => option !== null);
+    const allowOther = question.allowOther ?? question.allow_other;
+    const otherLabel = stringOrUndefined(question.otherLabel ?? question.other_label);
+    const multiSelect = question.multiSelect ?? question.multi_select;
+    const header = stringOrUndefined(question.header);
+    return {
+      question: questionText,
+      ...header ? { header } : {},
+      options,
+      allowOther: allowOther === false ? false : true,
+      otherLabel: otherLabel ?? "Other",
+      multiSelect: multiSelect === true
+    };
+  }).filter((question) => question !== null);
+}
+function dispatchAskUserQuestionNotification(sessionId, directory, toolInput) {
+  const prompts = extractAskUserQuestionPrompts(toolInput);
+  const questionText = prompts.map((q) => q.question).filter(Boolean).join("; ") || "User input requested";
   dispatchNotificationInBackground("ask-user-question", {
     sessionId,
     projectPath: directory,
     question: questionText,
+    askUserQuestionPrompts: prompts,
     profileName: process.env.OMC_NOTIFY_PROFILE
   });
 }
@@ -84894,10 +85251,18 @@ function readDeepInterviewThresholdFromSettings(path22) {
   const threshold = deepInterview.ambiguityThreshold;
   return typeof threshold === "number" && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1 ? threshold : null;
 }
-function getDeepInterviewAmbiguityThreshold() {
-  const profileThreshold = readDeepInterviewThresholdFromSettings((0, import_path104.join)(getClaudeConfigDir(), "settings.json"));
-  const projectThreshold = readDeepInterviewThresholdFromSettings((0, import_path104.join)(process.cwd(), ".claude", "settings.json"));
-  return projectThreshold ?? profileThreshold ?? DEFAULT_DEEP_INTERVIEW_AMBIGUITY_THRESHOLD;
+function getDeepInterviewAmbiguityThresholdResolution() {
+  const profileSettingsPath = (0, import_path104.join)(getClaudeConfigDir(), "settings.json");
+  const projectSettingsPath = (0, import_path104.join)(process.cwd(), ".claude", "settings.json");
+  const profileThreshold = readDeepInterviewThresholdFromSettings(profileSettingsPath);
+  const projectThreshold = readDeepInterviewThresholdFromSettings(projectSettingsPath);
+  if (projectThreshold !== null) {
+    return { threshold: projectThreshold, source: "./.claude/settings.json" };
+  }
+  if (profileThreshold !== null) {
+    return { threshold: profileThreshold, source: "[$CLAUDE_CONFIG_DIR|~/.claude]/settings.json" };
+  }
+  return { threshold: DEFAULT_DEEP_INTERVIEW_AMBIGUITY_THRESHOLD, source: "default" };
 }
 function formatThresholdPercent(threshold) {
   return `${(threshold * 100).toFixed(2).replace(/\.?0+$/, "")}%`;
@@ -84934,10 +85299,10 @@ function readSkillBodyOverride(skillPath, metadata, fallbackBody) {
   }
 }
 function applyDeepInterviewRuntimeSettings(template) {
-  const threshold = getDeepInterviewAmbiguityThreshold();
+  const { threshold, source } = getDeepInterviewAmbiguityThresholdResolution();
   const percent = formatThresholdPercent(threshold);
-  const withResolvedPlaceholders = template.replaceAll("<resolvedThreshold>", `${threshold}`).replaceAll("<resolvedThresholdPercent>", percent);
-  const withRuntimeSettings = withResolvedPlaceholders.includes("3.5. **Load runtime settings**:") ? withResolvedPlaceholders : withResolvedPlaceholders.replace(
+  const withResolvedPlaceholders = template.replaceAll("<resolvedThreshold>", `${threshold}`).replaceAll("<resolvedThresholdPercent>", percent).replaceAll("<resolvedThresholdSource>", source);
+  const withRuntimeSettings = withResolvedPlaceholders.includes("3.5. **Load runtime settings**:") || withResolvedPlaceholders.includes("## Phase 0: Resolve Ambiguity Threshold") ? withResolvedPlaceholders : withResolvedPlaceholders.replace(
     '4. **Initialize state** via `state_write(mode="deep-interview")`:',
     [
       `3.5. **Load runtime settings** from \`~/.claude/settings.json\` and \`./.claude/settings.json\` before state init (project overrides profile). For this run, use \`ambiguityThreshold = ${threshold}\`.`,
@@ -84949,9 +85314,13 @@ function applyDeepInterviewRuntimeSettings(template) {
     `We'll proceed to execution once ambiguity drops below ${percent}.`
   ).replace("(default: 20%)", `(default: ${percent})`).replace("(default 0.2)", `(default ${threshold})`).replace('"ambiguityThreshold": 0.2,', `"ambiguityThreshold": ${threshold},`).replace("Gate: \u226420% ambiguity", `Gate: \u2264${percent} ambiguity`).replace("(threshold: 20%).", `(threshold: ${percent}).`).replace("ambiguity \u2264 20%", `ambiguity \u2264 ${percent}`);
 }
+function normalizeSkillNameForRuntimeRendering(skillName) {
+  return skillName.trim().toLowerCase().replace(/^oh-my-claudecode:/, "").replace(/^omc:/, "");
+}
 function renderBundledSkillBody(skillName, body) {
+  const normalizedSkillName = normalizeSkillNameForRuntimeRendering(skillName);
   const rewrittenBody = rewriteOmcCliInvocations(body.trim());
-  return skillName === "deep-interview" || skillName === "deep-dive" ? applyDeepInterviewRuntimeSettings(rewrittenBody) : rewrittenBody;
+  return normalizedSkillName === "deep-interview" || normalizedSkillName === "deep-dive" ? applyDeepInterviewRuntimeSettings(rewrittenBody) : rewrittenBody;
 }
 function loadSkillFromFile(skillPath, skillName) {
   try {
@@ -85037,7 +85406,7 @@ var cachedSkills = null;
 var cachedSkillsKey = null;
 function getBuiltinSkillsCacheKey() {
   return JSON.stringify({
-    deepInterviewAmbiguityThreshold: getDeepInterviewAmbiguityThreshold()
+    deepInterviewAmbiguityThreshold: getDeepInterviewAmbiguityThresholdResolution()
   });
 }
 function createBuiltinSkills() {
@@ -87672,8 +88041,8 @@ function inferDelegationPlanForTeamTask(text) {
 // src/cli/commands/team.ts
 init_loader();
 var import_node_fs9 = require("node:fs");
-var import_node_child_process10 = require("node:child_process");
 var import_node_path12 = require("node:path");
+init_tmux_utils();
 var HELP_TOKENS = /* @__PURE__ */ new Set(["--help", "-h", "help"]);
 var MIN_WORKER_COUNT = 1;
 var MAX_WORKER_COUNT = 20;
@@ -87844,7 +88213,7 @@ function isTeamStateLive(config2) {
   const target = typeof config2?.tmux_session === "string" ? config2.tmux_session.trim() : "";
   if (!target) return false;
   try {
-    (0, import_node_child_process10.execFileSync)("tmux", ["has-session", "-t", target], { stdio: "ignore" });
+    tmuxExec(["has-session", "-t", target], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -90764,6 +91133,7 @@ var import_path121 = require("path");
 init_mcp_registry();
 init_config_dir();
 init_tmux_utils();
+init_tmux_clipboard();
 init_paths3();
 var MADMAX_FLAG = "--madmax";
 var YOLO_FLAG = "--yolo";
@@ -90809,6 +91179,27 @@ function ensureMirroredPath(sourcePath, targetPath, options = {}) {
     (0, import_fs102.copyFileSync)(sourcePath, targetPath);
   }
 }
+function isJsonObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function readJsonObject4(path22) {
+  try {
+    const parsed = JSON.parse((0, import_fs102.readFileSync)(path22, "utf-8"));
+    return isJsonObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function refreshRuntimeClaudeJsonMcpServers(baseConfigDir, runtimeClaudeJsonPath) {
+  const sourceClaudeJsonPath = (0, import_path121.join)((0, import_path121.dirname)(baseConfigDir), ".claude.json");
+  const sourceClaudeJson = readJsonObject4(sourceClaudeJsonPath);
+  if (!sourceClaudeJson || !isJsonObject(sourceClaudeJson.mcpServers)) {
+    return;
+  }
+  const runtimeClaudeJson = readJsonObject4(runtimeClaudeJsonPath) ?? {};
+  runtimeClaudeJson.mcpServers = sourceClaudeJson.mcpServers;
+  (0, import_fs102.writeFileSync)(runtimeClaudeJsonPath, JSON.stringify(runtimeClaudeJson, null, 2));
+}
 function prepareOmcLaunchConfigDir(baseConfigDir = getClaudeConfigDir()) {
   const companionPath = (0, import_path121.join)(baseConfigDir, "CLAUDE-omc.md");
   if (!hasOmcMarkers(companionPath)) {
@@ -90822,6 +91213,7 @@ function prepareOmcLaunchConfigDir(baseConfigDir = getClaudeConfigDir()) {
   if (preservedClaudeJson) {
     (0, import_fs102.writeFileSync)(runtimeClaudeJsonPath, preservedClaudeJson);
   }
+  refreshRuntimeClaudeJsonMcpServers(baseConfigDir, runtimeClaudeJsonPath);
   (0, import_fs102.copyFileSync)(companionPath, (0, import_path121.join)(runtimeConfigDir, "CLAUDE.md"));
   for (const entry of [
     "agents",
@@ -91059,6 +91451,10 @@ function runClaude(cwd2, args, sessionId) {
 }
 function runClaudeInsideTmux(cwd2, args) {
   try {
+    configureTmuxClipboardForCurrentSession({ stdio: "ignore" });
+  } catch {
+  }
+  try {
     tmuxExec(["set-option", "mouse", "on"], { stdio: "ignore" });
   } catch {
   }
@@ -91114,6 +91510,10 @@ function runClaudeOutsideTmux(cwd2, args, _sessionId, options = {}) {
     }
     runClaudeDirect(cwd2, args);
     return;
+  }
+  try {
+    configureTmuxClipboardForSession(sessionName2, { stripTmux: true, stdio: "ignore" });
+  } catch {
   }
   try {
     tmuxExec(["set-option", "-t", sessionName2, "mouse", "on"], { stripTmux: true, stdio: "ignore" });
