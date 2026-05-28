@@ -93,7 +93,11 @@ export function setEnvironmentVariables() {
  * bug #17088, which mislabels every successful hook as an error.
  *
  * This function reads the plugin's hooks.json and rewrites every command of the
- * form:
+ * current form:
+ *   sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [args]
+ * or stale absolute-shell cache form:
+ *   "/bin/sh" "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [args]
+ * or legacy form:
  *   sh "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/X.mjs" [args]
  * to:
  *   node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [args]
@@ -108,14 +112,19 @@ export function patchHooksJsonForWindows(pluginRoot) {
     try {
         const content = readFileSync(hooksJsonPath, 'utf-8');
         const data = JSON.parse(content);
-        // Matches: sh "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/X.mjs" [optional args]
-        const pattern = /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/find-node\.sh" "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([^"]+)"(.*)$/;
+        // Matches current hooks.json:
+        // sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [optional args]
+        // Also matches older hotfix cache entries that hardcoded "/bin/sh".
+        const currentPattern = /^(?:"\/bin\/sh"|sh) "\$CLAUDE_PLUGIN_ROOT"\/scripts\/find-node\.sh "\$CLAUDE_PLUGIN_ROOT"\/scripts\/run\.cjs "\$CLAUDE_PLUGIN_ROOT"\/scripts\/([^"\s]+)"?(.*)$/;
+        // Matches legacy hooks.json:
+        // sh "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/X.mjs" [optional args]
+        const legacyPattern = /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/find-node\.sh" "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([^"\s]+)"?(.*)$/;
         let patched = false;
         for (const groups of Object.values(data.hooks ?? {})) {
             for (const group of groups) {
                 for (const hook of group.hooks ?? []) {
                     if (typeof hook.command === 'string') {
-                        const m = hook.command.match(pattern);
+                        const m = hook.command.match(currentPattern) ?? hook.command.match(legacyPattern);
                         if (m) {
                             hook.command = `node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/${m[1]}${m[2]}`;
                             patched = true;

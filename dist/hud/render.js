@@ -27,7 +27,7 @@ import { renderGitRepo, renderGitBranch, renderGitStatus } from "./elements/git.
 import { renderModel } from "./elements/model.js";
 import { renderApiKeySource } from "./elements/api-key-source.js";
 import { renderCallCounts } from "./elements/call-counts.js";
-import { renderContextLimitWarning } from "./elements/context-warning.js";
+import { renderContextLimitWarning, renderPayloadLimitWarning, } from "./elements/context-warning.js";
 import { renderMissionBoard } from "./mission-board.js";
 import { renderSessionSummary } from "./elements/session-summary.js";
 import { renderLastTool } from "./elements/last-tool.js";
@@ -234,7 +234,7 @@ export async function render(context, config) {
     // -- main-group elements (default: main statusline) --
     if (enabledElements.omcLabel) {
         const versionTag = context.omcVersion ? `#${context.omcVersion}` : "";
-        if (context.updateAvailable) {
+        if (enabledElements.updateNotification !== false && context.updateAvailable) {
             rendered.set("omcLabel", bold(`[OMC${versionTag}] -> ${context.updateAvailable} omc update`));
         }
         else {
@@ -397,6 +397,9 @@ export async function render(context, config) {
     const ctxWarning = renderContextLimitWarning(context.contextPercent, config.contextLimitWarning.threshold, config.contextLimitWarning.autoCompact);
     if (ctxWarning)
         renderedDetail.set("contextWarning", [ctxWarning]);
+    const payloadWarning = renderPayloadLimitWarning(context.payloadEstimate);
+    if (payloadWarning)
+        renderedDetail.set("payloadWarning", [payloadWarning]);
     if (enabledElements.todos) {
         const todos = renderTodosWithCurrent(context.todos);
         if (todos)

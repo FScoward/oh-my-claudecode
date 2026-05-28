@@ -73,6 +73,51 @@ export function checkHookConflicts() {
     }
     return merged;
 }
+function isWindowsUnsafePluginHookCommand(command) {
+    return command.includes('find-node.sh')
+        || command.includes('/bin/sh')
+        || /^sh\s/.test(command);
+}
+/**
+ * Native Windows cannot execute plugin hooks that still route through sh/find-node.
+ * Detect stale cache manifests so doctor can point users at setup/update repair
+ * instead of reporting a generic hook conflict.
+ */
+export function checkWindowsUnsafePluginHooks() {
+    if (process.platform !== 'win32') {
+        return [];
+    }
+    const roots = [process.env.CLAUDE_PLUGIN_ROOT, ...readInstalledPluginRoots()]
+        .filter((root) => typeof root === 'string' && root.length > 0);
+    const seenRoots = new Set();
+    const unsafe = [];
+    for (const pluginRoot of roots) {
+        if (seenRoots.has(pluginRoot))
+            continue;
+        seenRoots.add(pluginRoot);
+        const hooksJsonPath = join(pluginRoot, 'hooks', 'hooks.json');
+        if (!existsSync(hooksJsonPath))
+            continue;
+        try {
+            const parsed = JSON.parse(readFileSync(hooksJsonPath, 'utf-8'));
+            for (const [event, groups] of Object.entries(parsed.hooks ?? {})) {
+                for (const group of groups) {
+                    for (const hook of group.hooks ?? []) {
+                        if (hook.type !== 'command' || typeof hook.command !== 'string')
+                            continue;
+                        if (isWindowsUnsafePluginHookCommand(hook.command)) {
+                            unsafe.push({ pluginRoot, event, command: hook.command });
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            // Ignore unreadable manifests; doctor should remain best-effort.
+        }
+    }
+    return unsafe;
+}
 /**
  * Check a single file for OMC markers.
  * Returns { hasMarkers, hasUserContent } or null on error.
@@ -404,6 +449,7 @@ export function runConflictCheck() {
     const legacySkills = checkLegacySkills();
     const envFlags = checkEnvFlags();
     const configIssues = checkConfigIssues();
+    const windowsUnsafePluginHooks = checkWindowsUnsafePluginHooks();
     const mcpRegistrySync = inspectUnifiedMcpRegistrySync();
     // Determine if there are actual conflicts
     const hasConflicts = hookConflicts.some(h => !h.isOmc) || // Non-OMC hooks present
@@ -411,6 +457,7 @@ export function runConflictCheck() {
         envFlags.disableOmc || // OMC is disabled
         envFlags.skipHooks.length > 0 || // Hooks are being skipped
         configIssues.unknownFields.length > 0 || // Unknown config fields
+        windowsUnsafePluginHooks.length > 0 || // Stale plugin hooks still use sh/find-node on Windows
         mcpRegistrySync.claudeMissing.length > 0 ||
         mcpRegistrySync.claudeMismatched.length > 0 ||
         mcpRegistrySync.codexMissing.length > 0 ||
@@ -422,6 +469,7 @@ export function runConflictCheck() {
         legacySkills,
         envFlags,
         configIssues,
+        windowsUnsafePluginHooks,
         mcpRegistrySync,
         hasConflicts
     };
@@ -511,6 +559,18 @@ export function formatReport(report, json) {
             lines.push(`    - ${skill.name} ${colors.gray(`(${skill.path})`)}`);
         }
         lines.push(`    ${colors.gray('These legacy files shadow plugin skills. Remove them or rename to avoid conflicts.')}`);
+        lines.push('');
+    }
+    // Windows plugin hook portability
+    if (report.windowsUnsafePluginHooks.length > 0) {
+        lines.push(colors.bold('🪟 Windows Plugin Hooks'));
+        lines.push('');
+        lines.push(`  ${colors.yellow('⚠')} Plugin hooks still route through sh/find-node on native Windows:`);
+        for (const hook of report.windowsUnsafePluginHooks) {
+            lines.push(`    - ${hook.event} ${colors.gray(`(${hook.pluginRoot})`)}`);
+            lines.push(`      ${colors.gray(hook.command)}`);
+        }
+        lines.push(`    ${colors.gray('Run /oh-my-claudecode:omc-setup or update/reinstall the plugin to rewrite hooks to direct node run.cjs commands.')}`);
         lines.push('');
     }
     // Config issues
