@@ -53,7 +53,24 @@ vi.mock('../../../lib/worktree-paths.js', async () => {
         resolveToWorktreeRoot: vi.fn((dir) => dir ?? process.cwd()),
     };
 });
-import { processSessionEnd } from '../index.js';
+import { processSessionEndCleanupWorker } from '../index.js';
+async function waitForAssertion(assertion, timeoutMs = 1000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError;
+    while (Date.now() < deadline) {
+        try {
+            assertion();
+            return;
+        }
+        catch (error) {
+            lastError = error;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+    }
+    if (lastError) {
+        throw lastError;
+    }
+}
 describe('processSessionEnd team cleanup (#1632)', () => {
     let tmpDir;
     let transcriptPath;
@@ -84,17 +101,17 @@ describe('processSessionEnd team cleanup (#1632)', () => {
         teamCleanupMocks.teamReadConfig.mockResolvedValue({
             workers: [{ name: 'worker-1', pane_id: '%1' }],
         });
-        await processSessionEnd({
-            session_id: sessionId,
-            transcript_path: transcriptPath,
-            cwd: tmpDir,
-            permission_mode: 'default',
-            hook_event_name: 'SessionEnd',
-            reason: 'clear',
+        await processSessionEndCleanupWorker({
+            directory: tmpDir,
+            sessionId,
+            transcriptPath,
+            cleanupBudgetMs: 10000,
         });
-        expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledWith('delivery-team', tmpDir, { force: true, timeoutMs: 0 });
-        expect(teamCleanupMocks.shutdownTeam).not.toHaveBeenCalled();
-    });
+        await waitForAssertion(() => {
+            expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledWith('delivery-team', tmpDir, { force: true, timeoutMs: 0 });
+            expect(teamCleanupMocks.shutdownTeam).not.toHaveBeenCalled();
+        });
+    }, 10000);
     it('force-shuts down a legacy runtime team referenced by the ending session', async () => {
         const sessionId = 'pid-1632-legacy';
         const teamSessionDir = path.join(tmpDir, '.omc', 'state', 'sessions', sessionId);
@@ -106,16 +123,49 @@ describe('processSessionEnd team cleanup (#1632)', () => {
             leaderPaneId: '%0',
             tmuxOwnsWindow: false,
         });
-        await processSessionEnd({
-            session_id: sessionId,
-            transcript_path: transcriptPath,
-            cwd: tmpDir,
-            permission_mode: 'default',
-            hook_event_name: 'SessionEnd',
-            reason: 'clear',
+        await processSessionEndCleanupWorker({
+            directory: tmpDir,
+            sessionId,
+            transcriptPath,
+            cleanupBudgetMs: 2000,
         });
-        expect(teamCleanupMocks.shutdownTeam).toHaveBeenCalledWith('legacy-team', 'legacy-team:0', tmpDir, 0, undefined, '%0', false);
-        expect(teamCleanupMocks.shutdownTeamV2).not.toHaveBeenCalled();
+        await waitForAssertion(() => {
+            expect(teamCleanupMocks.shutdownTeam).toHaveBeenCalledWith('legacy-team', 'legacy-team:0', tmpDir, 0, undefined, '%0', false);
+            expect(teamCleanupMocks.shutdownTeamV2).not.toHaveBeenCalled();
+        });
+    });
+    it('uses initial team names when session-scoped mode state has already been deleted', async () => {
+        const sessionId = 'pid-1632-captured';
+        teamCleanupMocks.teamReadConfig.mockResolvedValue({
+            workers: [{ name: 'worker-1', pane_id: '%1' }],
+        });
+        await processSessionEndCleanupWorker({
+            directory: tmpDir,
+            sessionId,
+            transcriptPath,
+            cleanupBudgetMs: 2000,
+            initialTeamNames: ['captured-team'],
+        });
+        await waitForAssertion(() => {
+            expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledWith('captured-team', tmpDir, { force: true, timeoutMs: 0 });
+        });
+    });
+    it('rejects unsafe initial team names before invoking cleanup operations', async () => {
+        const sessionId = 'pid-1632-unsafe';
+        teamCleanupMocks.teamReadConfig.mockResolvedValue({
+            workers: [{ name: 'worker-1', pane_id: '%1' }],
+        });
+        await processSessionEndCleanupWorker({
+            directory: tmpDir,
+            sessionId,
+            transcriptPath,
+            cleanupBudgetMs: 2000,
+            initialTeamNames: ['../../evil', 'bad/name', '..', '', 'safe-team'],
+        });
+        await waitForAssertion(() => {
+            expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledTimes(1);
+            expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledWith('safe-team', tmpDir, { force: true, timeoutMs: 0 });
+        });
     });
     it('only cleans up manifests owned by the ending session', async () => {
         const sessionId = 'pid-1632-owner';
@@ -135,16 +185,16 @@ describe('processSessionEnd team cleanup (#1632)', () => {
         teamCleanupMocks.teamReadConfig.mockImplementation((async (teamName) => ({
             workers: [{ name: `${teamName}-worker`, pane_id: '%1' }],
         })));
-        await processSessionEnd({
-            session_id: sessionId,
-            transcript_path: transcriptPath,
-            cwd: tmpDir,
-            permission_mode: 'default',
-            hook_event_name: 'SessionEnd',
-            reason: 'clear',
+        await processSessionEndCleanupWorker({
+            directory: tmpDir,
+            sessionId,
+            transcriptPath,
+            cleanupBudgetMs: 2000,
         });
-        expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledTimes(1);
-        expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledWith('owned-team', tmpDir, { force: true, timeoutMs: 0 });
+        await waitForAssertion(() => {
+            expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledTimes(1);
+            expect(teamCleanupMocks.shutdownTeamV2).toHaveBeenCalledWith('owned-team', tmpDir, { force: true, timeoutMs: 0 });
+        });
     });
 });
 //# sourceMappingURL=team-cleanup.test.js.map

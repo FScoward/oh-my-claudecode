@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getGitRepoName, getGitBranch, getWorktreeInfo, renderGitRepo, renderGitBranch, resetGitCache } from '../../hud/elements/git.js';
-// Mock child_process.execFileSync
-vi.mock('node:child_process', () => ({
+// Mock child_process.execFileSync (preserve other exports so transitively
+// imported modules that use execFile/spawn still resolve).
+vi.mock('node:child_process', async (importOriginal) => ({
+    ...(await importOriginal()),
     execFileSync: vi.fn(),
 }));
 import { execFileSync } from 'node:child_process';

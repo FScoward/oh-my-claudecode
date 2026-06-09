@@ -8,7 +8,8 @@
 
 import { existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync } from 'fs';
 import { spawn } from 'child_process';
-import { join, dirname, basename } from 'path';
+import { join, dirname, basename, resolve, relative, isAbsolute } from 'path';
+import { homedir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getClaudeConfigDir, getUpdateCheckCachePath } from './lib/config-dir.mjs';
 import { resolveOmcStateRoot } from './lib/state-root.mjs';
@@ -371,6 +372,43 @@ const SESSION_END_MODE_STATE_FILES = [
 import { MODEL_ROUTING_OVERRIDE_MESSAGE } from './lib/model-routing-override-message.mjs';
 export { MODEL_ROUTING_OVERRIDE_MESSAGE };
 
+/**
+ * Validate that a candidate cwd is a real OMC workspace anchor.
+ * Returns the candidate unchanged if it is non-empty AND contains a
+ * `.omc-workspace` marker OR a `.git` directory.
+ * Otherwise emits a one-line warning to stderr and returns null,
+ * signalling the caller to skip all state mutations.
+ */
+function validateCwd(candidate) {
+  if (!candidate || typeof candidate !== 'string') {
+    process.stderr.write(
+      `[OMC] session-start: refusing to use cwd '${candidate}' as workspace anchor (no .omc-workspace or .git marker)\n`
+    );
+    return null;
+  }
+  // cwd is commonly a subdirectory of the repo/workspace root, so walk up
+  // looking for a `.omc-workspace` marker or `.git` dir. Stop before scanning
+  // $HOME (or above) so a stray marker/repo in $HOME cannot validate an
+  // unrelated directory. Returns the original candidate so downstream root
+  // resolution (getOmcRoot/resolveOmcStateRoot) can anchor it.
+  let home = null;
+  try { home = homedir(); } catch { home = null; }
+  let cursor = candidate;
+  while (true) {
+    if (home && cursor === home) break;
+    if (existsSync(join(cursor, '.omc-workspace')) || existsSync(join(cursor, '.git'))) {
+      return candidate;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  process.stderr.write(
+    `[OMC] session-start: refusing to use cwd '${candidate}' as workspace anchor (no .omc-workspace or .git marker)\n`
+  );
+  return null;
+}
+
 function isTruthyProviderFlag(value) {
   return value === '1' || value === 'true';
 }
@@ -438,6 +476,15 @@ function compactBudgetedText(text, maxChars) {
   return `${text.slice(0, maxChars - notice.length).trimEnd()}${notice}`;
 }
 
+function formatUpdateNoticeForUser(updateInfo, options = {}) {
+  const latestVersion = updateInfo?.latestVersion || 'latest';
+  const currentVersion = updateInfo?.currentVersion || 'unknown';
+  const action = options.autoUpgradePrompt === false
+    ? 'To update later, run: omc update'
+    : 'Run /update to upgrade now, or use /plugin install oh-my-claudecode';
+  return `[OMC UPDATE AVAILABLE] oh-my-claudecode v${latestVersion} is available (current: v${currentVersion}). ${action}`;
+}
+
 function buildSessionStartAdditionalContext(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return '';
 
@@ -489,12 +536,49 @@ function extractOmcVersion(content) {
   return match ? match[1] : null;
 }
 
+function getPluginCacheBase() {
+  return join(configDir, 'plugins', 'cache', 'omc', 'oh-my-claudecode');
+}
+
+function isPathInsideOrEqual(parent, child) {
+  const relativePath = relative(resolve(parent), resolve(child));
+  return relativePath === '' || (relativePath && !relativePath.startsWith('..') && !isAbsolute(relativePath));
+}
+
+function isManagedPluginCacheRoot(pluginRoot) {
+  const normalizedRoot = pluginRoot.replace(/[\\/]+$/, '');
+  const cacheBase = getPluginCacheBase();
+  if (isPathInsideOrEqual(cacheBase, normalizedRoot)) return true;
+
+  // A stale root can come from an older config-dir location; the canonical
+  // cache path shape still proves it is an OMC managed cache version.
+  const unixRoot = normalizedRoot.replace(/\\/g, '/');
+  return /\/plugins\/cache\/omc\/oh-my-claudecode\/\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(unixRoot);
+}
+
+function getLatestPluginCacheVersion() {
+  try {
+    const cacheBase = getPluginCacheBase();
+    if (!existsSync(cacheBase)) return null;
+    const versions = readdirSync(cacheBase)
+      .filter(v => /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(v))
+      .filter(v => readJsonFile(join(cacheBase, v, 'package.json'))?.version === v)
+      .sort(semverCompare)
+      .reverse();
+    return versions[0] || null;
+  } catch { return null; }
+}
+
 // Get plugin version from CLAUDE_PLUGIN_ROOT
 function getPluginVersion() {
   try {
     const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
     if (!pluginRoot) return null;
     const pkg = readJsonFile(join(pluginRoot, 'package.json'));
+    const latestCacheVersion = isManagedPluginCacheRoot(pluginRoot) ? getLatestPluginCacheVersion() : null;
+    if (latestCacheVersion && (!pkg?.version || semverCompare(latestCacheVersion, pkg.version) > 0)) {
+      return latestCacheVersion;
+    }
     return pkg?.version || null;
   } catch { return null; }
 }
@@ -711,10 +795,28 @@ async function main() {
     let data = {};
     try { data = JSON.parse(input); } catch {}
 
-    const directory = data.cwd || data.directory || process.cwd();
+    const rawDirectory = data.cwd || data.directory || process.cwd();
+    const directory = validateCwd(rawDirectory);
+    if (directory === null) {
+      console.log(JSON.stringify({ continue: true }));
+      return;
+    }
     const sessionId = data.session_id || data.sessionId || '';
     const omcRoot = await resolveOmcStateRoot(directory);
     const messages = [];
+    const userMessages = [];
+
+    // Fire sibling-retrofit warning once per session (lifted off getOmcRoot hot path)
+    try {
+      const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+      if (pluginRoot) {
+        const { findWorkspaceRoot, warnSiblingRetrofit } = await import(
+          pathToFileURL(join(pluginRoot, 'dist', 'lib', 'worktree-paths.js')).href
+        );
+        const anchor = findWorkspaceRoot(directory);
+        if (anchor) warnSiblingRetrofit(anchor, sessionId || undefined);
+      }
+    } catch { /* non-fatal — dist unavailable or no workspace anchor */ }
     const projectMemoryModules = await loadProjectMemoryModules();
 
     writeSessionStartedMarker(omcRoot, directory, sessionId);
@@ -738,7 +840,8 @@ async function main() {
       if (pluginVersion) {
         const updateInfo = await checkNpmUpdate(pluginVersion);
         if (updateInfo) {
-          messages.push(`<session-restore>\n\n[OMC UPDATE AVAILABLE]\n\nA new version of oh-my-claudecode is available: v${updateInfo.latestVersion} (current: v${updateInfo.currentVersion})\n\nTo update, run: omc update\n(This syncs plugin, npm package, and CLAUDE.md together)\n\n</session-restore>\n\n---\n`);
+          const omcConfig = readJsonFile(join(configDir, '.omc-config.json')) || {};
+          userMessages.push(formatUpdateNoticeForUser(updateInfo, { autoUpgradePrompt: omcConfig.autoUpgradePrompt !== false }));
         }
       }
     } catch {}
@@ -1039,14 +1142,20 @@ ${cleanContent}
       // Notification module not available, skip silently
     }
 
-    if (messages.length > 0) {
-      console.log(JSON.stringify({
+    if (messages.length > 0 || userMessages.length > 0) {
+      const output = {
         continue: true,
-        hookSpecificOutput: {
+      };
+      if (userMessages.length > 0) {
+        output.systemMessage = userMessages.join('\n');
+      }
+      if (messages.length > 0) {
+        output.hookSpecificOutput = {
           hookEventName: 'SessionStart',
           additionalContext: buildSessionStartAdditionalContext(messages)
-        }
-      }));
+        };
+      }
+      console.log(JSON.stringify(output));
     } else {
       console.log(JSON.stringify({ continue: true, suppressOutput: true }));
     }

@@ -100,6 +100,8 @@ describe('OMC_STATE_DIR state-root resolution (issue #2532)', () => {
         fakeProject = join(tempDir, 'project');
         fakeStateDir = join(tempDir, 'centralized-state');
         mkdirSync(fakeProject, { recursive: true });
+        // session-start validateCwd requires a real workspace anchor (.git / .omc-workspace)
+        mkdirSync(join(fakeProject, '.git'), { recursive: true });
         mkdirSync(fakeStateDir, { recursive: true });
         delete process.env.OMC_STATE_DIR;
         clearWorktreeCache();

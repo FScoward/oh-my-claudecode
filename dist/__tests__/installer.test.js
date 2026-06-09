@@ -143,7 +143,13 @@ describe('Installer Constants', () => {
             expect(files.length).toBeGreaterThan(0);
             for (const file of files) {
                 const content = readFileSync(join(commandsDir, file), 'utf-8');
-                expect(content, `${file} should dispatch to a bundled skill`).toContain('SKILL.md');
+                if (file === 'compact.md') {
+                    expect(content, 'compact.md should avoid unsupported Skill compact invocation').not.toContain('Skill("compact")');
+                    expect(content, 'compact.md should provide a manual native /compact handoff').toContain('bare Claude Code command');
+                }
+                else {
+                    expect(content, `${file} should dispatch to a bundled skill`).toContain('SKILL.md');
+                }
                 expect(content, `${file} should pass through user arguments`).toContain('$ARGUMENTS');
             }
         });
@@ -531,7 +537,7 @@ describe('Installer Constants', () => {
             expect(existsSync(templatesLibDir)).toBe(true);
             const libFiles = readdirSync(templatesLibDir);
             // Required lib files that must be present
-            const requiredFiles = ['stdin.mjs', 'atomic-write.mjs', 'config-dir.mjs'];
+            const requiredFiles = ['stdin.mjs', 'atomic-write.mjs', 'config-dir.mjs', 'state-root.mjs', 'model-routing-override-message.mjs'];
             for (const file of requiredFiles) {
                 expect(libFiles).toContain(file);
             }

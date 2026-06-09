@@ -7,7 +7,7 @@ English | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](READM
 [![GitHub stars](https://img.shields.io/github/stars/Yeachan-Heo/oh-my-claudecode?style=flat&color=yellow)](https://github.com/Yeachan-Heo/oh-my-claudecode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Sponsor](https://img.shields.io/badge/Sponsor-❤️-red?style=flat&logo=github)](https://github.com/sponsors/Yeachan-Heo)
-[![Discord](https://img.shields.io/discord/1452487457085063218?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/PUwSMR9XNk)
+[![Discord](https://img.shields.io/discord/1452487457085063218?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/sj4exxQ9v)
 
 > **For Codex users:** Check out [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) — the same orchestration experience for OpenAI Codex CLI.
 
@@ -15,7 +15,7 @@ English | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](READM
 
 _Don't learn Claude Code. Just use OMC._
 
-[Get Started](#quick-start) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [Migration Guide](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
+[Get Started](#quick-start) • [Documentation](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI Reference](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [Migration Guide](docs/MIGRATION.md) • [Discord](https://discord.gg/sj4exxQ9v)
 
 ---
 
@@ -112,7 +112,7 @@ OMC exposes two different surfaces:
 | Feature                                        | Terminal CLI                                  | In-session skill                                                        | Notes                                                                                                                                |
 | ---------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Setup                                          | `omc setup`                                   | `/setup` or `/omc-setup`                                                | Both are real entrypoints. `/setup` is the easiest plugin-first path.                                                                |
-| Ask providers                                  | `omc ask codex "review this patch"`           | `/ask codex "review this patch"`                                        | Both route through the same advisor flow.                                                                                            |
+| Ask providers                                  | `omc ask codex "review this patch"`           | `/ask codex "review this patch"`                                        | Both route through the same advisor flow. Providers: `claude`, `codex`, `gemini`, `grok`.                                            |
 | Team orchestration                             | `omc team 2:codex "review auth flow"`         | `/team 3:executor "fix all TypeScript errors"`                          | Both exist, but they are different runtimes: `omc team` launches tmux CLI workers; `/team` runs the in-session native team workflow. |
 | Autopilot / Ralph / Ultrawork / Deep Interview | —                                             | `/autopilot ...`, `/ralph ...`, `/ultrawork ...`, `/deep-interview ...` | These are in-session skills. There is no `omc autopilot` / `omc ralph` / `omc ultrawork` CLI subcommand in this repo.                |
 | Autoresearch                                   | `omc autoresearch` (**hard-deprecated shim**) | `/deep-interview --autoresearch ...` + `/oh-my-claudecode:autoresearch` | Setup stays in deep-interview; execution now belongs to the stateful skill.                                                          |
@@ -177,6 +177,7 @@ For mixed Codex + Gemini work in one command, use the **`/ccg`** skill (routes v
 | ------------------------- | ------------------------ | -------------------------------------------- |
 | `omc team N:codex "..."`  | N Codex CLI panes        | Code review, security analysis, architecture |
 | `omc team N:gemini "..."` | N Gemini CLI panes       | UI/UX design, docs, large-context tasks      |
+| `omc team N:grok "..."`   | N Grok Build CLI panes   | Code review, analysis cross-check            |
 | `omc team N:claude "..."` | N Claude CLI panes       | General tasks via Claude CLI in tmux         |
 | `/ccg`                    | /ask codex + /ask gemini | Tri-model advisor synthesis                  |
 
@@ -184,7 +185,7 @@ Workers spawn on-demand and die when their task completes — no idle resource u
 
 Native team worker worktrees are being added behind an opt-in/config gate. See [Native Team Worktree Mode](docs/TEAM-WORKTREE-MODE.md) for the workspace contract, canonical state-root rules, dirty-worktree preservation policy, and verification checklist.
 
-> **Note: Package naming** — The project is branded as **oh-my-claudecode** (repo, plugin, commands), but the npm package is published as [`oh-my-claude-sisyphus`](https://www.npmjs.com/package/oh-my-claude-sisyphus). If you install or upgrade the CLI tools via npm/bun, use `npm i -g oh-my-claude-sisyphus@latest`.
+> **Note: Package naming** — The project is branded as **oh-my-claudecode** (repo, plugin, commands), but the npm package is published as [`oh-my-claude-sisyphus`](https://www.npmjs.com/package/oh-my-claude-sisyphus). If you install or upgrade the CLI tools via npm/bun, use `npm i -g oh-my-claude-sisyphus@latest`; the package installs both `oh-my-claudecode` and the short `omc` command aliases.
 
 ### Updating
 
@@ -194,7 +195,7 @@ If you installed OMC via npm, upgrade with the published package name:
 npm i -g oh-my-claude-sisyphus@latest
 ```
 
-> **Package naming note:** the repo, plugin, and commands are branded **oh-my-claudecode**, but the published npm package name remains `oh-my-claude-sisyphus`.
+> **Package naming note:** the repo, plugin, and commands are branded **oh-my-claudecode**, but the published npm package name remains `oh-my-claude-sisyphus`. npm installs expose both `oh-my-claudecode` and `omc`; examples prefer `omc` for brevity.
 
 If you installed OMC via the Claude Code marketplace/plugin flow, update with:
 
@@ -246,7 +247,7 @@ Multiple strategies for different use cases — from Team-backed orchestration t
 | Mode                        | What it is                                                                              | Use For                                                                 |
 | --------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | **Team (recommended)**      | Canonical staged pipeline (`team-plan → team-prd → team-exec → team-verify → team-fix`) | Coordinated Claude agents on a shared task list                         |
-| **omc team (CLI)**          | tmux CLI workers — real `claude`/`codex`/`gemini` processes in split-panes              | Codex/Gemini CLI tasks; on-demand spawn, die when done                  |
+| **omc team (CLI)**          | tmux CLI workers — real `claude`/`codex`/`gemini`/`grok` processes in split-panes       | Codex/Gemini/Grok CLI tasks; on-demand spawn, die when done             |
 | **ccg**                     | Tri-model advisors via `/ask codex` + `/ask gemini`, Claude synthesizes                 | Mixed backend+UI work needing both Codex and Gemini                     |
 | **Autopilot**               | Autonomous execution (single lead agent)                                                | End-to-end feature work with minimal ceremony                           |
 | **Ultrawork**               | Maximum parallelism (non-team)                                                          | Burst parallel fixes/refactors where Team isn't needed                  |
@@ -307,9 +308,24 @@ Wrap handler at server.py:42 in try/except ClientDisconnectedError...
 **Skillify:** `/skillify` extracts reusable patterns with strict quality gates
 **Auto-inject:** Matching skills load into context automatically — no manual recall needed
 
-Project-scoped skills are stored in `.omc/skills/` and are intended to be committed when you want them shared. If you create them inside a linked git worktree and do not commit them, they disappear when that worktree is removed.
+Project-scoped OMC-authored skills are stored in `.omc/skills/` and are intended to be committed when you want them shared. During slash/skill execution OMC also reads Claude Code workspace skills from `.claude/skills/` and compatibility skills from `.agents/skills/`, so existing workspace-local `SKILL.md` packages remain callable without copying them into user-global skills. If you create project-local skills inside a linked git worktree and do not commit them, they disappear when that worktree is removed.
 
 [Full feature list →](docs/REFERENCE.md)
+
+### Multi-repo workspaces
+
+When several independent git repos share a parent directory, drop a `.omc-workspace` marker at the parent so all sub-repos share one `.omc/` state root:
+
+```bash
+cd /path/to/parent-dir-with-many-repos
+echo '{"id":"my-workspace"}' > .omc-workspace
+# Sessions inside any sub-repo now share /path/.omc/
+# For parallel ultragoal runs:
+cd repo-A && omc ultragoal create-goals --auto-plan-id --brief "..."
+cd ../repo-B && omc ultragoal create-goals --auto-plan-id --brief "..."
+```
+
+See [Multi-repo workspaces in REFERENCE.md](docs/REFERENCE.md#multi-repo-workspaces-with-omc-workspace) for resolution order, `OMC_STATE_DIR`, and workspace identifier options.
 
 ---
 
@@ -347,6 +363,7 @@ Run local provider CLIs and save a markdown artifact under `.omc/artifacts/ask/`
 omc ask claude "review this migration plan"
 omc ask codex --prompt "identify architecture risks"
 omc ask gemini --prompt "propose UI polish ideas"
+omc ask grok --prompt "cross-check this code review"
 omc ask claude --agent-prompt executor --prompt "draft implementation steps"
 
 # Inside a Claude Code / OMC session
@@ -534,6 +551,7 @@ OMC can optionally orchestrate external AI providers for cross-validation and de
 | --------------------------------------------------------- | ----------------------------------- | ------------------------------------------------ |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm install -g @google/gemini-cli` | Design review, UI consistency (1M token context) |
 | [Codex CLI](https://github.com/openai/codex)              | `npm install -g @openai/codex`      | Architecture validation, code review cross-check |
+| [Grok Build](https://build.grok.com)                      | Download from build.grok.com (`grok` at `~/.grok/bin/grok`) | Code review, analysis cross-check                |
 
 **Cost:** 3 Pro plans (Claude + Gemini + ChatGPT) cover everything for ~$60/month.
 
@@ -558,17 +576,19 @@ MIT
 
 Top personal non-fork, non-archived repos from all-time OMC contributors (100+ GitHub stars).
 
-- [@Yeachan-Heo](https://github.com/Yeachan-Heo) — [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) (⭐ 35k)
-- [@junhoyeo](https://github.com/junhoyeo) — [tokscale](https://github.com/junhoyeo/tokscale) (⭐ 3.2k)
-- [@psmux](https://github.com/psmux) — [psmux](https://github.com/psmux/psmux) (⭐ 2.1k)
+- [@Yeachan-Heo](https://github.com/Yeachan-Heo) — [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) (⭐ 36k)
+- [@junhoyeo](https://github.com/junhoyeo) — [tokscale](https://github.com/junhoyeo/tokscale) (⭐ 3.6k)
+- [@psmux](https://github.com/psmux) — [psmux](https://github.com/psmux/psmux) (⭐ 2.4k)
 - [@BowTiedSwan](https://github.com/BowTiedSwan) — [buildflow](https://github.com/BowTiedSwan/buildflow) (⭐ 292)
-- [@alohays](https://github.com/alohays) — [awesome-visual-representation-learning-with-transformers](https://github.com/alohays/awesome-visual-representation-learning-with-transformers) (⭐ 269)
+- [@J-Pster](https://github.com/J-Pster) — [Psters_AI_Workflow](https://github.com/J-Pster/Psters_AI_Workflow) (⭐ 290)
+- [@alohays](https://github.com/alohays) — [awesome-visual-representation-learning-with-transformers](https://github.com/alohays/awesome-visual-representation-learning-with-transformers) (⭐ 267)
 - [@jcwleo](https://github.com/jcwleo) — [random-network-distillation-pytorch](https://github.com/jcwleo/random-network-distillation-pytorch) (⭐ 262)
-- [@MeroZemory](https://github.com/MeroZemory) — [ida-multi-mcp](https://github.com/MeroZemory/ida-multi-mcp) (⭐ 235)
-- [@shaun0927](https://github.com/shaun0927) — [openchrome](https://github.com/shaun0927/openchrome) (⭐ 210)
+- [@MeroZemory](https://github.com/MeroZemory) — [ida-multi-mcp](https://github.com/MeroZemory/ida-multi-mcp) (⭐ 261)
+- [@shaun0927](https://github.com/shaun0927) — [openchrome](https://github.com/shaun0927/openchrome) (⭐ 216)
+- [@HaD0Yun](https://github.com/HaD0Yun) — [Doyunha-Gopeak](https://github.com/HaD0Yun/Doyunha-Gopeak) (⭐ 205)
 - [@emgeee](https://github.com/emgeee) — [mean-tutorial](https://github.com/emgeee/mean-tutorial) (⭐ 200)
-- [@HaD0Yun](https://github.com/HaD0Yun) — [Doyunha-Gopeak](https://github.com/HaD0Yun/Doyunha-Gopeak) (⭐ 190)
 - [@anduinnn](https://github.com/anduinnn) — [HiFiNi-Auto-CheckIn](https://github.com/anduinnn/HiFiNi-Auto-CheckIn) (⭐ 171)
+- [@devswha](https://github.com/devswha) — [patina](https://github.com/devswha/patina) (⭐ 156)
 - [@Znuff](https://github.com/Znuff) — [consolas-powerline](https://github.com/Znuff/consolas-powerline) (⭐ 146)
 
 <!-- OMC:FEATURED-CONTRIBUTORS:END -->

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 vi.mock('fs', async () => {
     const actual = await vi.importActual('fs');
@@ -38,6 +38,23 @@ async function loadInstallerWithEnv(claudeConfigDir, homeDir) {
     process.env.HOME = homeDir;
     return import('../installer/index.js');
 }
+function writePluginFile(path, content) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+}
+function writeCompletePluginPayload(root) {
+    writePluginFile(join(root, 'dist', 'hooks', 'skill-bridge.cjs'), 'console.log("skill bridge");\n');
+    writePluginFile(join(root, 'bridge', 'cli.cjs'), 'console.log("bridge");\n');
+    writePluginFile(join(root, 'hooks', 'hooks.json'), '{}\n');
+    writePluginFile(join(root, 'skills', 'plan', 'SKILL.md'), '# plan\n');
+    writePluginFile(join(root, 'commands', 'omc-setup.md'), 'Read skills/omc-setup/SKILL.md and pass $ARGUMENTS.\n');
+    writePluginFile(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
+        name: 'oh-my-claudecode',
+        commands: './commands/',
+        skills: ['./skills/plan/'],
+    }, null, 2));
+    writePluginFile(join(root, 'package.json'), JSON.stringify({ name: 'oh-my-claude-sisyphus', version: '9.9.9' }, null, 2));
+}
 describe('installer legacy agent sync gating (issue #1502)', () => {
     let tempRoot;
     let homeDir;
@@ -72,6 +89,7 @@ describe('installer legacy agent sync gating (issue #1502)', () => {
     it('skips recreating ~/.claude/agents when installed plugin agent files already exist', async () => {
         const pluginInstallPath = join(claudeConfigDir, 'plugins', 'cache', 'omc', 'oh-my-claudecode', '9.9.9');
         const pluginAgentsDir = join(pluginInstallPath, 'agents');
+        writeCompletePluginPayload(pluginInstallPath);
         mkdirSync(pluginAgentsDir, { recursive: true });
         writeFileSync(join(pluginAgentsDir, 'executor.md'), '---\nname: executor\ndescription: test\n---\n');
         const installedPluginsPath = join(claudeConfigDir, 'plugins', 'installed_plugins.json');

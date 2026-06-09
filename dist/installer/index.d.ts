@@ -166,6 +166,10 @@ export declare function cleanupStaleSkills(log: (msg: string) => void): string[]
  */
 export declare function prunePluginDuplicateSkills(log: (msg: string) => void): string[];
 export declare function getInstalledOmcPluginRoots(): string[];
+export declare function validatePluginCachePayload(root: string): {
+    valid: boolean;
+    errors: string[];
+};
 export declare function compactPluginSkillPayload(targetRoot: string): {
     compacted: number;
     totalBytes: number;

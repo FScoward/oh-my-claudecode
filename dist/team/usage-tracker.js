@@ -10,17 +10,21 @@
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { getOmcRoot } from '../lib/worktree-paths.js';
 import { appendFileWithMode, ensureDirWithMode, validateResolvedPath } from './fs-utils.js';
 function getUsageLogPath(workingDirectory, teamName) {
-    return join(workingDirectory, '.omc', 'logs', `team-usage-${teamName}.jsonl`);
+    return join(getOmcRoot(workingDirectory), 'logs', `team-usage-${teamName}.jsonl`);
 }
 /**
  * Record usage for a completed task.
  */
 export function recordTaskUsage(workingDirectory, teamName, record) {
     const logPath = getUsageLogPath(workingDirectory, teamName);
-    const dir = join(workingDirectory, '.omc', 'logs');
-    validateResolvedPath(logPath, workingDirectory);
+    const dir = join(getOmcRoot(workingDirectory), 'logs');
+    // logPath lives under getOmcRoot(...)/logs, which in a .omc-workspace layout
+    // is ABOVE workingDirectory. Validate against the shared logs dir (still
+    // catches teamName traversal) instead of the sub-repo.
+    validateResolvedPath(logPath, dir);
     ensureDirWithMode(dir);
     appendFileWithMode(logPath, JSON.stringify(record) + '\n');
 }

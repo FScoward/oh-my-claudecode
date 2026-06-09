@@ -18742,6 +18742,8 @@ async function ensureBridge(sessionId, projectDir) {
 }
 async function killBridgeWithEscalation(sessionId, options) {
   const gracePeriod = options?.gracePeriodMs ?? DEFAULT_GRACE_PERIOD_MS;
+  const sigtermGraceMs = options?.sigtermGraceMs ?? SIGTERM_GRACE_MS;
+  const finalWaitMs = options?.finalWaitMs ?? 1e3;
   const startTime = Date.now();
   const metaPath = getBridgeMetaPath(sessionId);
   const meta = await safeReadJson(metaPath);
@@ -18775,10 +18777,10 @@ async function killBridgeWithEscalation(sessionId, options) {
   if (!await waitForExit(gracePeriod)) {
     terminatedBy = "SIGTERM";
     killProcessGroup(meta.pid, "SIGTERM");
-    if (!await waitForExit(SIGTERM_GRACE_MS)) {
+    if (!await waitForExit(sigtermGraceMs)) {
       terminatedBy = "SIGKILL";
       killProcessGroup(meta.pid, "SIGKILL");
-      await waitForExit(1e3);
+      await waitForExit(finalWaitMs);
     }
   }
   await deleteBridgeMeta(sessionId);
@@ -18796,7 +18798,7 @@ async function killBridgeWithEscalation(sessionId, options) {
     terminationTimeMs: Date.now() - startTime
   };
 }
-async function cleanupBridgeSessions(sessionIds) {
+async function cleanupBridgeSessions(sessionIds, options = {}) {
   const uniqueSessionIds = [...new Set(Array.from(sessionIds).filter(Boolean))];
   const result = {
     requestedSessions: uniqueSessionIds.length,
@@ -18804,7 +18806,7 @@ async function cleanupBridgeSessions(sessionIds) {
     terminatedSessions: 0,
     errors: []
   };
-  for (const sessionId of uniqueSessionIds) {
+  const cleanupOne = async (sessionId) => {
     try {
       ownedBridgeSessionIds.delete(sessionId);
       const metaPath = getBridgeMetaPath(sessionId);
@@ -18813,12 +18815,12 @@ async function cleanupBridgeSessions(sessionIds) {
       const lockPath = getSessionLockPath(sessionId);
       const hasArtifacts = fs3.existsSync(metaPath) || fs3.existsSync(socketPath) || fs3.existsSync(portPath) || fs3.existsSync(lockPath);
       if (!hasArtifacts) {
-        continue;
+        return;
       }
       result.foundSessions++;
       const meta = await safeReadJson(metaPath);
       if (meta && isValidBridgeMeta(meta)) {
-        const escalation = await killBridgeWithEscalation(sessionId);
+        const escalation = await killBridgeWithEscalation(sessionId, options);
         if (escalation.terminatedBy) {
           result.terminatedSessions++;
         }
@@ -18830,6 +18832,13 @@ async function cleanupBridgeSessions(sessionIds) {
       await removeFileIfExists(lockPath);
     } catch (error2) {
       result.errors.push(`session=${sessionId}: ${error2.message}`);
+    }
+  };
+  if (options.parallel) {
+    await Promise.all(uniqueSessionIds.map(cleanupOne));
+  } else {
+    for (const sessionId of uniqueSessionIds) {
+      await cleanupOne(sessionId);
     }
   }
   return result;
@@ -20944,6 +20953,7 @@ var import_child_process8 = require("child_process");
 var import_fs10 = require("fs");
 var import_os3 = require("os");
 var import_path11 = require("path");
+var WORKSPACE_MARKER = ".omc-workspace";
 var OmcPaths = {
   ROOT: ".omc",
   STATE: ".omc/state",
@@ -20963,6 +20973,61 @@ var OmcPaths = {
 };
 var MAX_WORKTREE_CACHE_SIZE = 8;
 var worktreeCacheMap = /* @__PURE__ */ new Map();
+var workspaceCacheMap = /* @__PURE__ */ new Map();
+function findWorkspaceRoot(startDir) {
+  if (process.env.OMC_DISABLE_MULTIREPO === "1") return null;
+  const effectiveStart = startDir || process.cwd();
+  let current;
+  try {
+    current = (0, import_path11.resolve)(effectiveStart);
+  } catch {
+    return null;
+  }
+  if (workspaceCacheMap.has(current)) {
+    const cached2 = workspaceCacheMap.get(current) ?? null;
+    workspaceCacheMap.delete(current);
+    workspaceCacheMap.set(current, cached2);
+    return cached2;
+  }
+  const home = (() => {
+    try {
+      return (0, import_path11.resolve)((0, import_os3.homedir)());
+    } catch {
+      return null;
+    }
+  })();
+  let cursor = current;
+  let result = null;
+  while (true) {
+    if (home && cursor === home) break;
+    if ((0, import_fs10.existsSync)((0, import_path11.join)(cursor, WORKSPACE_MARKER))) {
+      result = cursor;
+      break;
+    }
+    const parent = (0, import_path11.dirname)(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  if (workspaceCacheMap.size >= MAX_WORKTREE_CACHE_SIZE) {
+    const oldest = workspaceCacheMap.keys().next().value;
+    if (oldest !== void 0) workspaceCacheMap.delete(oldest);
+  }
+  workspaceCacheMap.set(current, result);
+  return result;
+}
+function readWorkspaceMarkerConfig(workspaceRoot) {
+  try {
+    const raw = (0, import_fs10.readFileSync)((0, import_path11.join)(workspaceRoot, WORKSPACE_MARKER), "utf-8").trim();
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
 function getWorktreeRoot(cwd) {
   const effectiveCwd = cwd || process.cwd();
   if (worktreeCacheMap.has(effectiveCwd)) {
@@ -21001,6 +21066,18 @@ function validatePath(inputPath) {
 var dualDirWarnings = /* @__PURE__ */ new Set();
 function getProjectIdentifier(worktreeRoot) {
   const root = worktreeRoot || getWorktreeRoot() || process.cwd();
+  const workspaceRoot = findWorkspaceRoot(root);
+  if (workspaceRoot) {
+    const cfg = readWorkspaceMarkerConfig(workspaceRoot);
+    if (cfg.id && typeof cfg.id === "string" && cfg.id.trim()) {
+      const safeId = cfg.id.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+      const hash3 = (0, import_crypto.createHash)("sha256").update(safeId).digest("hex").slice(0, 16);
+      return `${safeId}-${hash3}`;
+    }
+    const hash2 = (0, import_crypto.createHash)("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
+    const dirName2 = (0, import_path11.basename)(workspaceRoot).replace(/[^a-zA-Z0-9_-]/g, "_");
+    return `${dirName2}-${hash2}`;
+  }
   let source;
   try {
     const remoteUrl = (0, import_child_process8.execSync)("git remote get-url origin", {
@@ -21049,6 +21126,10 @@ function getOmcRoot(worktreeRoot) {
       );
     }
     return centralizedPath;
+  }
+  const workspaceAnchor = findWorkspaceRoot(worktreeRoot);
+  if (workspaceAnchor) {
+    return (0, import_path11.join)(workspaceAnchor, OmcPaths.ROOT);
   }
   const root = worktreeRoot || getWorktreeRoot() || process.cwd();
   return (0, import_path11.join)(root, OmcPaths.ROOT);
@@ -22620,6 +22701,25 @@ var pythonReplTool = {
 var import_fs14 = require("fs");
 var import_path15 = require("path");
 
+// src/lib/session-id.ts
+function readEnv() {
+  const value = process.env.OMC_SESSION_ID;
+  return value && value.trim() ? value.trim() : void 0;
+}
+function readPayload(payload) {
+  if (!payload || typeof payload !== "object") return void 0;
+  const value = payload.session_id;
+  return typeof value === "string" && value.trim() ? value.trim() : void 0;
+}
+function resolveSessionId(input) {
+  const env = readEnv();
+  const payload = readPayload(input.hookPayload);
+  if (input.context === "cli") {
+    return env ?? payload;
+  }
+  return payload ?? env;
+}
+
 // src/lib/payload-limits.ts
 var DEFAULT_PAYLOAD_LIMITS = {
   maxPayloadBytes: 1048576,
@@ -23152,7 +23252,7 @@ function getLegacyStateFileCandidates(mode, root) {
   return [...new Set(candidates)];
 }
 function getWorkingDirectoryLocalOmcRoot(root) {
-  return (0, import_path15.join)(root, ".omc");
+  return (0, import_path15.join)(root, OmcPaths.ROOT);
 }
 function shouldCheckWorkingDirectoryLocalState(root) {
   return getWorkingDirectoryLocalOmcRoot(root) !== getOmcRoot(root);
@@ -23923,17 +24023,20 @@ var stateClearTool = {
 };
 var stateListActiveTool = {
   name: "state_list_active",
-  description: "List all currently active modes. Returns which modes have active state files.",
+  description: "List all currently active modes. By default, scopes to the current session (OMC_SESSION_ID). Pass all:true to list active modes across all sessions.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   schema: {
     workingDirectory: external_exports.string().optional().describe("Working directory (defaults to cwd)"),
-    session_id: external_exports.string().optional().describe("Session ID for session-scoped state isolation. When provided, the tool operates only within that session. When omitted, the tool aggregates legacy state plus all session-scoped state (may include other sessions).")
+    session_id: external_exports.string().optional().describe("Explicit session ID to scope the listing. Overrides OMC_SESSION_ID when provided."),
+    all: external_exports.boolean().optional().describe("When true, list active modes across all sessions (legacy + every session-scoped dir). Overrides the default current-session scope.")
   },
   handler: async (args) => {
-    const { workingDirectory, session_id } = args;
+    const { workingDirectory, session_id, all } = args;
     try {
       const root = validateWorkingDirectory(workingDirectory);
-      const sessionId = session_id;
+      const explicitSessionId = session_id;
+      const showAll = all === true;
+      const sessionId = explicitSessionId ?? (showAll ? void 0 : resolveSessionId({ context: "cli" }));
       if (sessionId) {
         validateSessionId(sessionId);
         const activeModes = [...getActiveModes(root, sessionId)];
@@ -25043,6 +25146,14 @@ var CACHE_EXPIRY_MS = 24 * 60 * 60 * 1e3;
 function getMemoryPath(projectRoot) {
   return getWorktreeProjectMemoryPath(projectRoot);
 }
+function normalizeProjectMemory(memory) {
+  return {
+    ...memory,
+    customNotes: Array.isArray(memory.customNotes) ? memory.customNotes : [],
+    userDirectives: Array.isArray(memory.userDirectives) ? memory.userDirectives : [],
+    hotPaths: Array.isArray(memory.hotPaths) ? memory.hotPaths : []
+  };
+}
 async function loadProjectMemory(projectRoot) {
   const memoryPath = getMemoryPath(projectRoot);
   try {
@@ -25051,7 +25162,7 @@ async function loadProjectMemory(projectRoot) {
     if (!memory.version || !memory.projectRoot || !memory.lastScanned) {
       return null;
     }
-    return memory;
+    return normalizeProjectMemory(memory);
   } catch (_error) {
     return null;
   }
@@ -25088,22 +25199,23 @@ var import_path22 = __toESM(require("path"), 1);
 
 // src/hooks/project-memory/directive-detector.ts
 function addDirective(directives, newDirective) {
-  const isDuplicate = directives.some(
+  const directiveList = Array.isArray(directives) ? directives : [];
+  const isDuplicate = directiveList.some(
     (d) => d.directive.toLowerCase() === newDirective.directive.toLowerCase()
   );
   if (!isDuplicate) {
-    directives.push(newDirective);
-    if (directives.length > 20) {
-      directives.sort((a, b) => {
+    directiveList.push(newDirective);
+    if (directiveList.length > 20) {
+      directiveList.sort((a, b) => {
         if (a.priority !== b.priority) {
           return a.priority === "high" ? -1 : 1;
         }
         return b.timestamp - a.timestamp;
       });
-      directives.splice(20);
+      directiveList.splice(20);
     }
   }
-  return directives;
+  return directiveList;
 }
 
 // src/hooks/project-memory/learner.ts
@@ -25128,6 +25240,7 @@ async function addCustomNote(projectRoot, category, content) {
         if (!memory) {
           return;
         }
+        memory.customNotes = Array.isArray(memory.customNotes) ? memory.customNotes : [];
         memory.customNotes.push({
           timestamp: Date.now(),
           source: "manual",
@@ -26118,7 +26231,7 @@ var sessionSearchTool = {
 // src/tools/trace-tools.ts
 var REPLAY_PREFIX2 = "agent-replay-";
 function findLatestSessionId(directory) {
-  const stateDir = (0, import_path27.join)(directory, ".omc", "state");
+  const stateDir = (0, import_path27.join)(getOmcRoot(directory), "state");
   try {
     const files = (0, import_fs20.readdirSync)(stateDir).filter((f) => f.startsWith(REPLAY_PREFIX2) && f.endsWith(".jsonl")).map((f) => ({
       name: f,

@@ -315,6 +315,7 @@ Manages permanent project-level memory.
   - `project-memory-session.mjs` (SessionStart): Loads project memory when session starts
   - `project-memory-posttool.mjs` (PostToolUse): Updates memory after tool use
   - `project-memory-precompact.mjs` (PreCompact): Preserves memory before compaction
+- **Multi-session contract**: Both writers acquire `withProjectMemoryLock` (see `src/lib/file-lock.ts`) before reading or rewriting `project-memory.json`. Concurrent sessions in the same workspace serialize through this lock, so lost-update races between parallel Claude sessions are impossible. See `tests/integration/concurrent-project-memory.test.ts` for the regression guard.
 
 Two types of data are stored in project-memory:
 
@@ -416,6 +417,12 @@ These keywords inject an inline mode message rather than invoking a skill.
 | `ultrathink`, `think hard`, `think deeply` | Activates extended reasoning mode |
 | `deepsearch`, `search the codebase`, `find in codebase` | Activates codebase-focused search mode |
 | `deep-analyze`, `deepanalyze` | Activates deep analysis mode |
+
+### Localized Triggers (Korean / Japanese)
+
+`keyword-detector.mjs` also recognizes Korean and Japanese aliases for these keywords (e.g. `랄프` / `ラルフ` → ralph, `코드 리뷰` / `コード レビュー` → code-review, `딥 분석` / `ディープ アナライズ` → analyze). Because Korean and Japanese have no ASCII word boundary, these aliases match by substring, so a localized alias inside a longer noun phrase still routes (e.g. `コードレビュー記事を要約して` → code-review).
+
+See [REFERENCE.md → Magic Keywords → Localized triggers](./REFERENCE.md#magic-keywords) for the full alias table and routing-behavior details (reviewer-suffix guard, informational suppression including `違いを教えて`/`何が違う` difference questions).
 
 ### Priority and Conflict Resolution
 

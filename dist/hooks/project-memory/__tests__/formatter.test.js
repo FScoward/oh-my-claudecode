@@ -3,6 +3,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { formatContextSummary, formatFullContext } from "../formatter.js";
+import { normalizeProjectMemory } from "../storage.js";
 import { SCHEMA_VERSION } from "../constants.js";
 const NOW = Date.parse("2026-03-24T15:00:00Z");
 // Helper to create base memory with all required fields
@@ -41,8 +42,33 @@ const createBaseMemory = (overrides = {}) => ({
     userDirectives: [],
     ...overrides,
 });
+const createLoadNormalizedMinimalMemory = () => {
+    const { customNotes: _customNotes, userDirectives: _userDirectives, hotPaths: _hotPaths, ...minimalPersistedMemory } = createBaseMemory({
+        techStack: {
+            languages: [
+                {
+                    name: "TypeScript",
+                    version: null,
+                    confidence: "high",
+                    markers: ["tsconfig.json"],
+                },
+            ],
+            frameworks: [],
+            packageManager: "npm",
+            runtime: null,
+        },
+    });
+    return normalizeProjectMemory(minimalPersistedMemory);
+};
 describe("Project Memory Formatter", () => {
     describe("formatContextSummary", () => {
+        it("formats load-normalized minimal persisted memory with missing list fields", () => {
+            const memory = createLoadNormalizedMinimalMemory();
+            const summary = formatContextSummary(memory, { now: NOW });
+            expect(summary).toContain("[Project Environment]");
+            expect(summary).not.toContain("[Directives]");
+            expect(summary).not.toContain("[Recent Learnings]");
+        });
         it("formats the summary in progressive disclosure order", () => {
             const memory = createBaseMemory({
                 techStack: {
@@ -250,6 +276,13 @@ describe("Project Memory Formatter", () => {
         });
     });
     describe("formatFullContext", () => {
+        it("formats load-normalized minimal persisted memory with missing customNotes", () => {
+            const memory = createLoadNormalizedMinimalMemory();
+            const full = formatFullContext(memory);
+            expect(full).toContain("<project-memory>");
+            expect(full).toContain("TypeScript");
+            expect(full).not.toContain("**Custom Notes:**");
+        });
         it("should format complete project details", () => {
             const memory = createBaseMemory({
                 techStack: {

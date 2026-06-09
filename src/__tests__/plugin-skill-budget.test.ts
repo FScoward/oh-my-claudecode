@@ -84,6 +84,18 @@ describe('plugin skill context budget gate (issues #2943, #2986)', () => {
         expect(Buffer.byteLength(shim), `${skillDir} compact shim size`).toBeLessThan(COMPACT_PLUGIN_SKILL_PER_FILE_BUDGET_BYTES);
         expect(shim, `${skillDir} shim should point to archived body`).toContain(`../../skill-bodies/${skillDir}/SKILL.md`);
         expect(shim, `${skillDir} shim should expose runtime body override`).toContain('omc-full-body:');
+        expect(shim, `${skillDir} shim should prefer plugin root env vars`).toContain(
+          `\${CLAUDE_PLUGIN_ROOT:-\${OMC_PLUGIN_ROOT}}/skill-bodies/${skillDir}/SKILL.md`,
+        );
+        expect(shim, `${skillDir} shim should define plugin root by containing directories`).toContain(
+          'The plugin root is the directory containing both `skills/` and `skill-bodies/`.',
+        );
+        expect(shim, `${skillDir} shim should reject file-relative skill-bodies lookup`).toContain(
+          `Do not resolve \`skill-bodies/${skillDir}/SKILL.md\` under this shim's \`skills/${skillDir}/\` directory`,
+        );
+        expect(shim, `${skillDir} shim should not instruct ambiguous SKILL.md-relative resolution`).not.toContain(
+          'Resolve that path relative to this SKILL.md file',
+        );
         expect(archived, `${skillDir} full skill body should be preserved`).toBe(source);
       }
     } finally {
@@ -126,11 +138,21 @@ describe('plugin skill context budget gate (issues #2943, #2986)', () => {
       const targetRoot = join(tempRoot, 'cache', 'omc', 'oh-my-claudecode', '4.14.1');
       mkdirSync(join(sourceRoot, '.claude-plugin'), { recursive: true });
       mkdirSync(join(sourceRoot, 'commands'), { recursive: true });
+      mkdirSync(join(sourceRoot, 'dist', 'hooks'), { recursive: true });
+      mkdirSync(join(sourceRoot, 'bridge'), { recursive: true });
+      mkdirSync(join(sourceRoot, 'hooks'), { recursive: true });
+      mkdirSync(join(sourceRoot, 'skills', 'plan'), { recursive: true });
       writeFileSync(join(sourceRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
         name: 'oh-my-claudecode',
         commands: './commands/',
+        skills: ['./skills/plan/'],
       }, null, 2));
       writeFileSync(join(sourceRoot, 'commands', 'omc-setup.md'), 'Read skills/omc-setup/SKILL.md and pass $ARGUMENTS.\n');
+      writeFileSync(join(sourceRoot, 'dist', 'hooks', 'skill-bridge.cjs'), 'console.log("skill bridge");\n');
+      writeFileSync(join(sourceRoot, 'bridge', 'cli.cjs'), 'console.log("bridge");\n');
+      writeFileSync(join(sourceRoot, 'hooks', 'hooks.json'), '{}\n');
+      writeFileSync(join(sourceRoot, 'skills', 'plan', 'SKILL.md'), 'name: plan\n');
+      writeFileSync(join(sourceRoot, 'package.json'), JSON.stringify({ name: 'oh-my-claude-sisyphus', version: '4.14.1' }));
 
       const result = copyPluginSyncPayload(sourceRoot, [targetRoot]);
 
@@ -139,8 +161,9 @@ describe('plugin skill context budget gate (issues #2943, #2986)', () => {
 
       const manifest = JSON.parse(
         readFileSync(join(targetRoot, '.claude-plugin', 'plugin.json'), 'utf-8')
-      ) as { commands?: string };
+      ) as { commands?: string; skills?: string[] };
       expect(manifest.commands).toBe('./commands/');
+      expect(manifest.skills).toEqual(['./skills/plan/']);
       expect(existsSync(join(targetRoot, 'commands'))).toBe(true);
       expect(readFileSync(join(targetRoot, 'commands', 'omc-setup.md'), 'utf-8')).toContain('$ARGUMENTS');
     } finally {

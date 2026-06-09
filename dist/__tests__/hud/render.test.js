@@ -3,6 +3,11 @@ import { limitOutputLines } from '../../hud/render.js';
 import { render } from '../../hud/render.js';
 import { DEFAULT_HUD_CONFIG, PRESET_CONFIGS } from '../../hud/types.js';
 import { stringWidth } from '../../utils/string-width.js';
+// Force non-local so the OMC banner omits the "L" local-build suffix under test.
+vi.mock('../../lib/version.js', async (importOriginal) => ({
+    ...(await importOriginal()),
+    isRuntimePackageLocal: () => false,
+}));
 // Mock git elements
 vi.mock('../../hud/elements/git.js', () => ({
     renderGitRepo: vi.fn(() => 'repo:my-repo'),

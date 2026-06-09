@@ -94,6 +94,13 @@ describe('npm package hook surface regression', () => {
         const packedFiles = getPackedFiles();
         expect(packedFiles.has('.claude-plugin/plugin.json')).toBe(true);
     });
+    it('packs the runtime-critical plugin cache payload surface', () => {
+        const packedFiles = getPackedFiles();
+        expect(packedFiles.has('commands/omc-setup.md')).toBe(true);
+        expect(packedFiles.has('dist/hooks/skill-bridge.cjs')).toBe(true);
+        expect(packedFiles.has('bridge/cli.cjs')).toBe(true);
+        expect(packedFiles.has('.claude-plugin/plugin.json')).toBe(true);
+    });
     it('packs hooks.json, hook entry scripts, and their local script dependencies', () => {
         const requiredFiles = new Set(['hooks/hooks.json']);
         for (const entryRelPath of listHookScriptEntries()) {

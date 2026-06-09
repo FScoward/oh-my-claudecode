@@ -86,7 +86,7 @@ function writeStopBreaker(tempDir, sessionId, name, count) {
 function writeSubagentTrackingState(tempDir, agents) {
     const stateDir = join(tempDir, '.omc', 'state');
     mkdirSync(stateDir, { recursive: true });
-    writeFileSync(join(stateDir, 'subagent-tracking.json'), JSON.stringify({
+    writeFileSync(join(stateDir, 'subagent-tracking-state.json'), JSON.stringify({
         agents,
         total_spawned: agents.length,
         total_completed: agents.filter((agent) => agent.status === 'completed').length,
@@ -654,7 +654,7 @@ describe('ralplan standalone stop enforcement', () => {
                 },
             ]);
             const staleUpdatedAt = new Date(now.getTime() - 10_000).toISOString();
-            const trackingPath = join(tempDir, '.omc', 'state', 'subagent-tracking.json');
+            const trackingPath = join(tempDir, '.omc', 'state', 'subagent-tracking-state.json');
             const tracking = JSON.parse(readFileSync(trackingPath, 'utf-8'));
             tracking.last_updated = staleUpdatedAt;
             writeFileSync(trackingPath, JSON.stringify(tracking, null, 2));

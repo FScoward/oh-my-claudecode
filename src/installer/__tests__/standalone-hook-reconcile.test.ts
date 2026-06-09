@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
@@ -13,6 +14,27 @@ let testHomeDir: string;
 async function loadInstaller() {
   vi.resetModules();
   return import('../index.js');
+}
+
+function writePluginFile(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+}
+
+function writeCompletePluginPayload(root: string): void {
+  writePluginFile(join(root, 'dist', 'hooks', 'skill-bridge.cjs'), 'console.log("skill bridge");\n');
+  writePluginFile(join(root, 'bridge', 'cli.cjs'), 'console.log("bridge");\n');
+  writePluginFile(join(root, 'hooks', 'hooks.json'), JSON.stringify({
+    hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node test.mjs' }] }] },
+  }));
+  writePluginFile(join(root, 'skills', 'plan', 'SKILL.md'), '# plan\n');
+  writePluginFile(join(root, 'commands', 'omc-setup.md'), 'Read skills/omc-setup/SKILL.md and pass $ARGUMENTS.\n');
+  writePluginFile(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
+    name: 'oh-my-claudecode',
+    commands: './commands/',
+    skills: ['./skills/plan/'],
+  }, null, 2));
+  writePluginFile(join(root, 'package.json'), JSON.stringify({ name: 'oh-my-claude-sisyphus', version: '9.9.9' }, null, 2));
 }
 
 describe('install() standalone hook reconciliation', () => {
@@ -86,6 +108,73 @@ describe('install() standalone hook reconciliation', () => {
     expect(readFileSync(join(testClaudeDir, 'hooks', 'keyword-detector.mjs'), 'utf-8')).toContain('Ralph keywords');
     expect(readFileSync(join(testClaudeDir, 'hooks', 'pre-tool-use.mjs'), 'utf-8')).toContain('PreToolUse');
     expect(readFileSync(join(testClaudeDir, 'hooks', 'code-simplifier.mjs'), 'utf-8')).toContain('Code Simplifier');
+  });
+
+  it('installs standalone hooks with all runtime helper imports', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'omc-standalone-hook-project-'));
+    try {
+      mkdirSync(join(projectDir, '.git'), { recursive: true });
+
+      const { install } = await loadInstaller();
+      const result = install({
+        force: true,
+        skipClaudeCheck: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(existsSync(join(testClaudeDir, 'hooks', 'lib', 'state-root.mjs'))).toBe(true);
+      expect(existsSync(join(testClaudeDir, 'hooks', 'lib', 'model-routing-override-message.mjs'))).toBe(true);
+
+      const hookInputs: Array<{ file: string; input: Record<string, unknown> }> = [
+        {
+          file: 'session-start.mjs',
+          input: { hook_event_name: 'SessionStart', session_id: 'ci-upgrade-test', cwd: projectDir },
+        },
+        {
+          file: 'keyword-detector.mjs',
+          input: { hook_event_name: 'UserPromptSubmit', session_id: 'ci-upgrade-test', cwd: projectDir, prompt: 'hello' },
+        },
+        {
+          file: 'pre-tool-use.mjs',
+          input: { hook_event_name: 'PreToolUse', session_id: 'ci-upgrade-test', cwd: projectDir, tool_name: 'Read', tool_input: {} },
+        },
+        {
+          file: 'post-tool-use.mjs',
+          input: { hook_event_name: 'PostToolUse', session_id: 'ci-upgrade-test', cwd: projectDir, tool_name: 'Read', tool_input: {}, tool_response: 'ok' },
+        },
+        {
+          file: 'post-tool-use-failure.mjs',
+          input: { hook_event_name: 'PostToolUseFailure', session_id: 'ci-upgrade-test', cwd: projectDir, tool_name: 'Read', tool_input: {}, error: 'synthetic failure' },
+        },
+        {
+          file: 'persistent-mode.mjs',
+          input: { hook_event_name: 'Stop', session_id: 'ci-upgrade-test', cwd: projectDir },
+        },
+        {
+          file: 'code-simplifier.mjs',
+          input: { hook_event_name: 'Stop', session_id: 'ci-upgrade-test', cwd: projectDir },
+        },
+      ];
+
+      for (const { file, input } of hookInputs) {
+        const raw = execFileSync(process.execPath, [join(testClaudeDir, 'hooks', file)], {
+          input: JSON.stringify(input),
+          encoding: 'utf-8',
+          env: {
+            ...process.env,
+            CLAUDE_CONFIG_DIR: testClaudeDir,
+            HOME: testHomeDir,
+            USERPROFILE: testHomeDir,
+          },
+          timeout: 15000,
+        }).trim();
+
+        const parsed = JSON.parse(raw) as { continue?: boolean };
+        expect(parsed.continue, file).toBe(true);
+      }
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('preserves non-OMC ~/.claude/hooks commands while adding standalone OMC hooks', async () => {
@@ -224,13 +313,10 @@ describe('install() plugin-provided hook deduplication (#2252)', () => {
   });
 
   function setupPluginWithHooks() {
-    // Create a fake plugin root with hooks/hooks.json
+    // Create a fake plugin root with the complete runtime payload required
+    // before installer code may trust plugin-provided hooks.
     fakePluginRoot = mkdtempSync(join(tmpdir(), 'omc-fake-plugin-'));
-    const hooksDir = join(fakePluginRoot, 'hooks');
-    mkdirSync(hooksDir, { recursive: true });
-    writeFileSync(join(hooksDir, 'hooks.json'), JSON.stringify({
-      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node test.mjs' }] }] },
-    }));
+    writeCompletePluginPayload(fakePluginRoot);
 
     // Register plugin in installed_plugins.json
     const pluginsDir = join(testClaudeDir, 'plugins');

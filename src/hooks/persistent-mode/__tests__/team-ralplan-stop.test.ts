@@ -162,7 +162,7 @@ function writeSubagentTrackingState(
   const stateDir = join(tempDir, '.omc', 'state');
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(
-    join(stateDir, 'subagent-tracking.json'),
+    join(stateDir, 'subagent-tracking-state.json'),
     JSON.stringify(
       {
         agents,
@@ -821,7 +821,7 @@ describe('ralplan standalone stop enforcement', () => {
       ]);
 
       const staleUpdatedAt = new Date(now.getTime() - 10_000).toISOString();
-      const trackingPath = join(tempDir, '.omc', 'state', 'subagent-tracking.json');
+      const trackingPath = join(tempDir, '.omc', 'state', 'subagent-tracking-state.json');
       const tracking = JSON.parse(readFileSync(trackingPath, 'utf-8')) as { last_updated?: string };
       tracking.last_updated = staleUpdatedAt;
       writeFileSync(trackingPath, JSON.stringify(tracking, null, 2));

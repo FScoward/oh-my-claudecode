@@ -8,7 +8,7 @@ import { truncateToWidth } from '../../utils/string-width.js';
 import { DEFAULT_HUD_LABELS } from '../types.js';
 /**
  * Extract version from a model ID string.
- * E.g., 'claude-opus-4-7-20260416' -> '4.7'
+ * E.g., 'claude-opus-4-8-20260528' -> '4.8'
  *       'claude-sonnet-4-6-20260217' -> '4.6'
  *       'claude-haiku-4-5-20251001' -> '4.5'
  *       'claude-3-5-sonnet-20241022' -> '3.5'
@@ -24,7 +24,7 @@ function extractVersion(modelId) {
     if (legacyIdMatch) {
         return legacyIdMatch[2] ? `${legacyIdMatch[1]}.${legacyIdMatch[2]}` : legacyIdMatch[1];
     }
-    // Match display name patterns like "Sonnet 4.5", "Opus 4.7"
+    // Match display name patterns like "Sonnet 4.5", "Opus 4.8"
     const displayMatch = modelId.match(/(?:opus|sonnet|haiku)\s+(\d+(?:\.\d+)?)/i);
     if (displayMatch)
         return displayMatch[1];

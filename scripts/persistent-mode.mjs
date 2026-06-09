@@ -21,6 +21,7 @@ import {
   readSync,
   closeSync,
 } from "fs";
+import { spawn } from "child_process";
 import { join, dirname, resolve, normalize } from "path";
 import { homedir } from "os";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -95,6 +96,65 @@ function writeJsonFile(path, data) {
     const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(tmp, JSON.stringify(data, null, 2));
     renameSync(tmp, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getIdleCooldownSeconds() {
+  const configPath = join(homedir(), ".omc", "config.json");
+  const config = readJsonFile(configPath);
+  const val = config?.notificationCooldown?.sessionIdleSeconds;
+  return typeof val === "number" ? val : 60;
+}
+
+function shouldSendIdleNotification(stateDir) {
+  const cooldownSecs = getIdleCooldownSeconds();
+  const cooldownPath = join(stateDir, "idle-notif-cooldown.json");
+  const data = readJsonFile(cooldownPath);
+
+  if (cooldownSecs === 0) return true;
+
+  if (data?.lastSentAt) {
+    const elapsed = (Date.now() - new Date(data.lastSentAt).getTime()) / 1000;
+    if (Number.isFinite(elapsed) && elapsed < cooldownSecs) return false;
+  }
+  return true;
+}
+
+function recordIdleNotificationSent(stateDir) {
+  const cooldownPath = join(stateDir, "idle-notif-cooldown.json");
+  writeJsonFile(cooldownPath, { lastSentAt: new Date().toISOString() });
+}
+
+function dispatchIdleNotificationInBackground(sessionId, directory) {
+  if (process.env.OMC_NOTIFY === "0") return false;
+
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  if (!pluginRoot) return false;
+
+  const notificationsModuleUrl = pathToFileURL(join(pluginRoot, "dist", "notifications", "index.js")).href;
+  const payload = {
+    sessionId,
+    projectPath: directory,
+    profileName: process.env.OMC_NOTIFY_PROFILE,
+  };
+  const childSource = `import(${JSON.stringify(notificationsModuleUrl)})\n` +
+    `  .then(({ notify }) => notify("session-idle", ${JSON.stringify(payload)}))\n` +
+    `  .catch(() => {});`;
+
+  try {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", childSource], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        OMC_HOOK_BACKGROUND_CHILD: "1",
+      },
+    });
+    child.unref();
     return true;
   } catch {
     return false;
@@ -516,7 +576,7 @@ function normalizePhaseValue(value) {
     : "";
 }
 
-function isUltragoalTerminalState(state, directory) {
+function isUltragoalTerminalState(state, omcRoot) {
   if (!state || typeof state !== "object") return false;
   if (state.active === false) return true;
   if (typeof state.completed_at === "string" && state.completed_at.length > 0) return true;
@@ -525,7 +585,7 @@ function isUltragoalTerminalState(state, directory) {
   const phase = normalizePhaseValue(state.current_phase ?? state.phase ?? state.status);
   if (phase && ULTRAGOAL_TERMINAL_PHASES.has(phase)) return true;
 
-  const plan = readJsonFile(join(directory, ".omc", "ultragoal", "goals.json"));
+  const plan = readJsonFile(join(omcRoot, "ultragoal", "goals.json"));
   if (!plan || typeof plan !== "object") return false;
   if (plan.aggregateCompletion?.status === "complete") return true;
   if (!Array.isArray(plan.goals) || plan.goals.length === 0) return false;
@@ -535,7 +595,7 @@ function isUltragoalTerminalState(state, directory) {
   });
 }
 
-function getUltragoalObjective(state, directory) {
+function getUltragoalObjective(state, omcRoot) {
   const candidates = [
     state?.claude_goal_objective,
     state?.claudeGoalObjective,
@@ -550,7 +610,7 @@ function getUltragoalObjective(state, directory) {
   for (const value of candidates) {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
-  const plan = readJsonFile(join(directory, ".omc", "ultragoal", "goals.json"));
+  const plan = readJsonFile(join(omcRoot, "ultragoal", "goals.json"));
   if (typeof plan?.claudeObjective === "string" && plan.claudeObjective.trim()) return plan.claudeObjective.trim();
   if (typeof plan?.aggregateCompletion?.objective === "string" && plan.aggregateCompletion.objective.trim()) {
     return plan.aggregateCompletion.objective.trim();
@@ -636,7 +696,7 @@ function countIncompleteTasks(sessionId) {
   return count;
 }
 
-function countIncompleteTodos(sessionId, projectDir) {
+async function countIncompleteTodos(sessionId, projectDir) {
   let count = 0;
 
   // Session-specific todos only (no global scan)
@@ -666,8 +726,9 @@ function countIncompleteTodos(sessionId, projectDir) {
   }
 
   // Project-local todos only
+  const omcRoot = await resolveOmcStateRoot(projectDir);
   for (const path of [
-    join(projectDir, ".omc", "todos.json"),
+    join(omcRoot, "todos.json"),
     join(projectDir, ".claude", "todos.json"),
   ]) {
     try {
@@ -885,6 +946,14 @@ async function main() {
       data = JSON.parse(input);
     } catch {}
 
+    // Claude Code sets stop_hook_active when a Stop hook is already running.
+    // Never emit another decision:block in that re-entrant path: doing so trips
+    // Claude Code's safety override for repeatedly blocked Stop hooks.
+    if (data.stop_hook_active === true) {
+      console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+      return;
+    }
+
     const directory = data.cwd || data.directory || process.cwd();
     const sessionIdRaw = data.sessionId || data.session_id || data.sessionid || "";
     const sessionId = sanitizeSessionId(sessionIdRaw);
@@ -996,7 +1065,7 @@ async function main() {
 
     // Count incomplete items (session-specific + project-local only)
     const taskCount = countIncompleteTasks(sessionId);
-    const todoCount = countIncompleteTodos(sessionId, directory);
+    const todoCount = await countIncompleteTodos(sessionId, directory);
     const totalIncomplete = taskCount + todoCount;
 
     // Priority 1: Ralph Loop (explicit persistence mode)
@@ -1088,7 +1157,7 @@ async function main() {
       const sessionMatches = hasValidSessionId
         ? ultragoal.state.session_id === sessionId
         : !ultragoal.state.session_id || ultragoal.state.session_id === sessionId;
-      if (sessionMatches && !isUltragoalTerminalState(ultragoal.state, directory)) {
+      if (sessionMatches && !isUltragoalTerminalState(ultragoal.state, omcRoot)) {
         const newCount = (ultragoal.state.reinforcement_count || 0) + 1;
         const maxReinforcements = ultragoal.state.max_reinforcements || 50;
 
@@ -1109,7 +1178,7 @@ async function main() {
         writeJsonFile(ultragoal.path, ultragoal.state);
 
         let reason = `[ULTRAGOAL #${newCount}/${maxReinforcements}] Ultragoal mode is active. Continue the durable goal workflow, keep the matching Claude /goal active, and checkpoint .omc/ultragoal/ledger.jsonl before stopping. When all ultragoal stories are complete and the final quality gate passes, run /oh-my-claudecode:cancel to cleanly exit.`;
-        const objective = getUltragoalObjective(ultragoal.state, directory);
+        const objective = getUltragoalObjective(ultragoal.state, omcRoot);
         if (objective) reason += `\nClaude /goal objective: ${objective}`;
         if (errorGuidance) {
           reason = errorGuidance + reason;
@@ -1439,6 +1508,11 @@ async function main() {
     }
 
     // No blocking needed
+    if (sessionId && shouldSendIdleNotification(stateDir)) {
+      if (dispatchIdleNotificationInBackground(sessionId, directory)) {
+        recordIdleNotificationSent(stateDir);
+      }
+    }
     console.log(JSON.stringify({ continue: true, suppressOutput: true }));
   } catch (error) {
     // On any error, allow stop rather than blocking forever

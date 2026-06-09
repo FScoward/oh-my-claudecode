@@ -29,6 +29,7 @@ const { getClaudeConfigDir } = await import(pathToFileURL(join(__dirname, 'lib',
 const { readStdin } = await import(
   pathToFileURL(join(__dirname, "lib", "stdin.mjs")).href
 );
+const { resolveOmcStateRoot } = await import(pathToFileURL(join(__dirname, 'lib', 'state-root.mjs')).href);
 
 function readJsonFile(path) {
   try {
@@ -546,7 +547,7 @@ function countIncompleteTasks(sessionId) {
   return count;
 }
 
-function countIncompleteTodos(sessionId, projectDir) {
+async function countIncompleteTodos(sessionId, projectDir) {
   let count = 0;
 
   // Session-specific todos only (no global scan)
@@ -576,8 +577,9 @@ function countIncompleteTodos(sessionId, projectDir) {
   }
 
   // Project-local todos only
+  const projectOmcRoot = await resolveOmcStateRoot(projectDir);
   for (const path of [
-    join(projectDir, ".omc", "todos.json"),
+    join(projectOmcRoot, "todos.json"),
     join(projectDir, ".claude", "todos.json"),
   ]) {
     try {
@@ -776,7 +778,8 @@ async function main() {
     const sessionIdRaw = data.sessionId || data.session_id || data.sessionid || "";
     const sessionId = sanitizeSessionId(sessionIdRaw);
     const hasValidSessionId = isValidSessionId(sessionIdRaw);
-    const stateDir = join(directory, ".omc", "state");
+    const omcRoot = await resolveOmcStateRoot(directory);
+    const stateDir = join(omcRoot, "state");
     const globalStateDir = join(homedir(), ".omc", "state");
 
     // CRITICAL: Never block context-limit stops.
@@ -860,7 +863,7 @@ async function main() {
 
     // Count incomplete items (session-specific + project-local only)
     const taskCount = countIncompleteTasks(sessionId);
-    const todoCount = countIncompleteTodos(sessionId, directory);
+    const todoCount = await countIncompleteTodos(sessionId, directory);
     const totalIncomplete = taskCount + todoCount;
 
     // Check if cancel is in progress - if so, allow stop immediately

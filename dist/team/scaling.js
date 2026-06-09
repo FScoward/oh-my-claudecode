@@ -24,7 +24,7 @@ import { writeWorkerOverlay } from './worker-bootstrap.js';
 import { ensureWorkerWorktree, installWorktreeRootAgents, prepareWorkerWorktreeForRemoval, removeWorkerWorktree, restoreWorktreeRootAgents, } from './git-worktree.js';
 // ── Environment gate ──────────────────────────────────────────────────────────
 const OMC_TEAM_SCALING_ENABLED_ENV = 'OMC_TEAM_SCALING_ENABLED';
-const CLI_AGENT_TYPES = new Set(['claude', 'codex', 'gemini']);
+const CLI_AGENT_TYPES = new Set(['claude', 'codex', 'gemini', 'grok']);
 export function isScalingEnabled(env = process.env) {
     const raw = env[OMC_TEAM_SCALING_ENABLED_ENV];
     if (!raw)
@@ -42,6 +42,34 @@ function asCliAgentType(agentType) {
         return agentType;
     }
     throw new Error(`Unknown agent type: ${agentType}. Supported: ${Array.from(CLI_AGENT_TYPES).join(', ')}`);
+}
+function configuredTmuxTarget(tmuxSession) {
+    const expectedTarget = typeof tmuxSession === 'string' ? tmuxSession.trim() : '';
+    return {
+        expectedTarget,
+        format: expectedTarget.includes(':') ? '#{session_name}:#{window_index}' : '#{session_name}',
+    };
+}
+function validateSplitTargetPaneInConfiguredSession(splitTarget, tmuxSession) {
+    const { expectedTarget, format } = configuredTmuxTarget(tmuxSession);
+    if (!splitTarget.trim()) {
+        return 'Refusing to split tmux pane: missing leader/worker pane target.';
+    }
+    if (!expectedTarget) {
+        return `Refusing to split tmux pane ${splitTarget}: missing configured tmux_session.`;
+    }
+    const result = tmuxSpawn(['display-message', '-t', splitTarget, '-p', format]);
+    if (result.status !== 0) {
+        const reason = (result.stderr || '').trim()
+            || (result.error instanceof Error ? result.error.message : undefined)
+            || `tmux display-message exited with status ${result.status}`;
+        return `Refusing to split tmux pane ${splitTarget}: unable to validate pane belongs to configured tmux_session ${expectedTarget} (${reason}).`;
+    }
+    const actualTarget = (result.stdout || '').trim().split('\n')[0]?.trim() ?? '';
+    if (actualTarget !== expectedTarget) {
+        return `Refusing to split tmux pane ${splitTarget}: pane belongs to tmux target ${actualTarget || '<unknown>'}, expected ${expectedTarget}.`;
+    }
+    return null;
 }
 // ── Scale Up ──────────────────────────────────────────────────────────────────
 /**
@@ -150,6 +178,17 @@ export async function scaleUp(teamName, count, agentType, tasks, cwd, env = proc
                     ok: false,
                     error: `Worker ${workerName} already exists in team ${sanitized}; refusing to spawn duplicate worker identity.`,
                 };
+            }
+            // Validate the tmux split target before creating worker directories,
+            // worktrees, or overlays so a stale/malformed pane id cannot cause side
+            // effects in the wrong live tmux session.
+            const splitTarget = config.workers.length > 0
+                ? (config.workers[config.workers.length - 1]?.pane_id ?? config.leader_pane_id ?? '')
+                : (config.leader_pane_id ?? '');
+            const splitDirection = splitTarget === (config.leader_pane_id ?? '') ? '-h' : '-v';
+            const splitTargetError = validateSplitTargetPaneInConfiguredSession(splitTarget, config.tmux_session);
+            if (splitTargetError) {
+                return await rollbackScaleUp(splitTargetError);
             }
             // Create worker directory
             const workerDirPath = absPath(leaderCwd, TeamPaths.workerDir(sanitized, workerName));
@@ -293,10 +332,6 @@ export async function scaleUp(teamName, count, agentType, tasks, cwd, env = proc
                 return await rollbackScaleUp(`Failed to build worker start command for ${workerName}: ${reason}`);
             }
             // Split from the rightmost worker pane or the leader pane
-            const splitTarget = config.workers.length > 0
-                ? (config.workers[config.workers.length - 1]?.pane_id ?? config.leader_pane_id ?? '')
-                : (config.leader_pane_id ?? '');
-            const splitDirection = splitTarget === (config.leader_pane_id ?? '') ? '-h' : '-v';
             const result = tmuxSpawn([
                 'split-window', splitDirection, '-t', splitTarget, '-d', '-P', '-F', '#{pane_id}', '-c', workerCwd, cmd,
             ]);

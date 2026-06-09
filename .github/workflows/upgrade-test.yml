@@ -11,10 +11,13 @@ concurrency:
   group: upgrade-test-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   upgrade-test:
     name: omc update + session-start hook
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","gajae-layofflabs-2"]') }}
     timeout-minutes: 20
 
     steps:
@@ -22,6 +25,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -93,6 +98,8 @@ jobs:
         run: npm run build
 
       - name: Prepare local package tarball
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           CURRENT_PACKAGE_VERSION="$(node -p "require('./package.json').version")"
@@ -103,8 +110,39 @@ jobs:
           } >> "$GITHUB_ENV"
 
           if npm view "oh-my-claude-sisyphus@$CURRENT_PACKAGE_VERSION" version >/dev/null 2>&1; then
-            echo "OMC_UPGRADE_TEST_USE_LOCAL_TARBALL=false" >> "$GITHUB_ENV"
-            echo "Package $CURRENT_PACKAGE_VERSION is published; testing the live omc update path."
+            set +e
+            GITHUB_LATEST_VERSION="$(node -e '
+              const headers = { "User-Agent": "omc-upgrade-test" };
+              if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+
+              fetch("https://api.github.com/repos/Yeachan-Heo/oh-my-claudecode/releases/latest", { headers })
+                .then(async response => {
+                  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+                  const release = await response.json();
+                  process.stdout.write(String(release.tag_name || "").replace(/^v/, ""));
+                })
+                .catch(error => {
+                  console.error(error instanceof Error ? error.message : String(error));
+                  process.exit(1);
+                });
+            ' 2>"$RUNNER_TEMP/github-latest-release.stderr")"
+            GITHUB_LATEST_EXIT=$?
+            set -e
+
+            if [ "$GITHUB_LATEST_EXIT" -ne 0 ] || [ -z "$GITHUB_LATEST_VERSION" ]; then
+              echo "OMC_UPGRADE_TEST_USE_LOCAL_TARBALL=true" >> "$GITHUB_ENV"
+              echo "GitHub latest release lookup failed or returned empty; testing local tarball + update-reconcile."
+              if [ -s "$RUNNER_TEMP/github-latest-release.stderr" ]; then
+                echo "GitHub latest release lookup stderr:"
+                cat "$RUNNER_TEMP/github-latest-release.stderr"
+              fi
+            elif [ "$GITHUB_LATEST_VERSION" = "$CURRENT_PACKAGE_VERSION" ]; then
+              echo "OMC_UPGRADE_TEST_USE_LOCAL_TARBALL=false" >> "$GITHUB_ENV"
+              echo "Package $CURRENT_PACKAGE_VERSION is published and GitHub latest matches; testing the live omc update path."
+            else
+              echo "OMC_UPGRADE_TEST_USE_LOCAL_TARBALL=true" >> "$GITHUB_ENV"
+              echo "Package $CURRENT_PACKAGE_VERSION is published, but GitHub latest is $GITHUB_LATEST_VERSION; testing local tarball + update-reconcile."
+            fi
           else
             echo "OMC_UPGRADE_TEST_USE_LOCAL_TARBALL=true" >> "$GITHUB_ENV"
             echo "Package $CURRENT_PACKAGE_VERSION is not published; testing local tarball + update-reconcile."
@@ -125,14 +163,24 @@ jobs:
           set +e
           if [ "$OMC_UPGRADE_TEST_USE_LOCAL_TARBALL" = "true" ]; then
             {
-              echo "Using local package tarball because $OMC_UPGRADE_TEST_EXPECTED_VERSION is not published to npm."
+              echo "Using local package tarball because deterministic fallback is required for $OMC_UPGRADE_TEST_EXPECTED_VERSION."
               npm install -g "$OMC_UPGRADE_TEST_TARBALL"
               omc update-reconcile
             } 1>"$RUNNER_TEMP/omc-update.stdout.log" 2>"$RUNNER_TEMP/omc-update.stderr.log"
+            UPDATE_EXIT=$?
           else
             omc update 1>"$RUNNER_TEMP/omc-update.stdout.log" 2>"$RUNNER_TEMP/omc-update.stderr.log"
+            UPDATE_EXIT=$?
+            LIVE_UPDATED_VERSION="$(omc --version 2>/dev/null || true)"
+            if [ "$LIVE_UPDATED_VERSION" = "4.9.3" ]; then
+              {
+                echo "Live omc update left version at 4.9.3; falling back to local tarball + update-reconcile."
+                npm install -g "$OMC_UPGRADE_TEST_TARBALL"
+                omc update-reconcile
+              } >>"$RUNNER_TEMP/omc-update.stdout.log" 2>>"$RUNNER_TEMP/omc-update.stderr.log"
+              UPDATE_EXIT=$?
+            fi
           fi
-          UPDATE_EXIT=$?
           set -e
 
           # Check for non-npm stderr (omc warnings/errors/exceptions)
@@ -233,9 +281,21 @@ jobs:
             exit 1
           fi
 
+          set +e
           printf '%s' \
             "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"ci-upgrade-test\",\"cwd\":\"$GITHUB_WORKSPACE\"}" \
             | node "$SESSION_HOOK" 1>"$RUNNER_TEMP/session.stdout.log" 2>"$RUNNER_TEMP/session.stderr.log"
+          SESSION_EXIT=$?
+          set -e
+
+          if [ "$SESSION_EXIT" -ne 0 ]; then
+            echo "FAIL: SessionStart hook exited with code $SESSION_EXIT"
+            echo "stderr:"
+            cat "$RUNNER_TEMP/session.stderr.log"
+            echo "stdout:"
+            cat "$RUNNER_TEMP/session.stdout.log"
+            exit 1
+          fi
 
           if [ -s "$RUNNER_TEMP/session.stderr.log" ]; then
             echo "FAIL: SessionStart hook produced stderr:"

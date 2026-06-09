@@ -69,10 +69,10 @@ describe('Builtin Skills', () => {
   });
 
   describe('createBuiltinSkills()', () => {
-    it('should return correct number of skills (35 canonical + 3 aliases)', () => {
+    it('should return correct number of skills (36 canonical + 3 aliases)', () => {
       const skills = createBuiltinSkills();
-      // 38 entries: 35 canonical skills + 3 deprecated aliases (cancel-ralph, learner, psm)
-      expect(skills).toHaveLength(38);
+      // 39 entries: 36 canonical skills + 3 deprecated aliases (cancel-ralph, learner, psm)
+      expect(skills).toHaveLength(39);
     });
 
     it('should return an array of BuiltinSkill objects', () => {
@@ -138,6 +138,7 @@ describe('Builtin Skills', () => {
         'hud',
         'skillify',
         'learner',
+        'local-build-reminder',
         'mcp-setup',
         'omc-setup',
         'omc-teams',
@@ -778,6 +779,16 @@ describe('Builtin Skills', () => {
       expect(skill?.template).toContain('tmux capture-pane -pt <pane-id> -S -20');
     });
 
+    it('should accept native Windows psmux before emitting WSL-required team guidance', () => {
+      const skill = getBuiltinSkill('team');
+      expect(skill).toBeDefined();
+      expect(skill?.template).toContain('Windows psmux tmux-compatible gate');
+      expect(skill?.template).toContain('do **not** tell users that `/team` requires WSL');
+      expect(skill?.template).toContain('Treat a successful psmux-backed `tmux -V` as tmux available');
+      expect(skill?.template).toContain('continue the normal Team flow; do not emit WSL-required guidance');
+      expect(skill?.template).toContain('Only when no tmux-compatible binary is available');
+    });
+
     it('should document allowed omc-teams agent types and native team fallback', () => {
       const skill = getBuiltinSkill('omc-teams');
       expect(skill).toBeDefined();
@@ -818,7 +829,7 @@ describe('Builtin Skills', () => {
     it('should return canonical skill names by default', () => {
       const names = listBuiltinSkillNames();
 
-      expect(names).toHaveLength(35);
+      expect(names).toHaveLength(36);
       expect(names).toContain('ai-slop-cleaner');
       expect(names).toContain('ask');
       expect(names).toContain('autopilot');
@@ -856,7 +867,7 @@ describe('Builtin Skills', () => {
       const names = listBuiltinSkillNames({ includeAliases: true });
 
       // swarm alias removed in #1131; cancel-ralph, psm, and learner aliases still exist
-      expect(names).toHaveLength(38);
+      expect(names).toHaveLength(39);
       expect(names).toContain('ai-slop-cleaner');
       expect(names).toContain('autoresearch');
       expect(names).toContain('self-improve');

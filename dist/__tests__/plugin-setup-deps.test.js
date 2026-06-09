@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
@@ -103,8 +105,8 @@ describe('plugin-setup.mjs hook command portability', () => {
     }
     it('selects direct node only on win32 and find-node bootstrap elsewhere', () => {
         expect(scriptContent).toContain("process.platform === 'win32'");
-        expect(scriptContent).toContain('windowsRunCjsHookPrefix');
-        expect(scriptContent).toContain('unixFindNodeHookPrefix');
+        expect(scriptContent).toContain('hookPrefixForPlatform');
+        expect(scriptContent).toContain('normalizeHooksDataForPlatform');
     });
     it('leaves the canonical sh+find-node+run.cjs command unchanged', () => {
         const canonical = `${UNIX_PREFIX}"$CLAUDE_PLUGIN_ROOT"/scripts/keyword-detector.mjs`;
@@ -167,9 +169,148 @@ describe('plugin-setup.mjs hook command portability', () => {
             expect(patched, event).not.toContain('/bin/sh');
         }
     });
+    it('does not rewrite the source hooks manifest when run from a repository checkout', () => {
+        const hooksJsonPath = join(PACKAGE_ROOT, 'hooks', 'hooks.json');
+        const before = readFileSync(hooksJsonPath, 'utf-8');
+        const tempRoot = mkdtempSync(join(tmpdir(), 'omc-plugin-setup-source-hooks-'));
+        try {
+            const configDir = join(tempRoot, 'claude');
+            const fakeHome = join(tempRoot, 'home');
+            mkdirSync(configDir, { recursive: true });
+            mkdirSync(fakeHome, { recursive: true });
+            execFileSync(process.execPath, [PLUGIN_SETUP_PATH], {
+                cwd: PACKAGE_ROOT,
+                env: {
+                    ...process.env,
+                    CLAUDE_CONFIG_DIR: configDir,
+                    HOME: fakeHome,
+                },
+                stdio: 'pipe',
+            });
+            expect(readFileSync(hooksJsonPath, 'utf-8')).toBe(before);
+        }
+        finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
     it('normalizes current sh find-node commands to node run.cjs on Windows', () => {
         const current = 'sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/session-end.mjs';
         expect(patchCommand(current, WINDOWS_PREFIX)).toBe('node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/session-end.mjs');
+    });
+    it.runIf(process.platform !== 'win32')('executes a Unix hook command with minimal PATH by resolving Volta-managed node', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'omc-min-path-hook-'));
+        try {
+            const tempHome = join(tempRoot, 'home');
+            const tempBin = join(tempRoot, 'bin');
+            const voltaBin = join(tempHome, '.volta', 'bin');
+            mkdirSync(tempBin, { recursive: true });
+            mkdirSync(voltaBin, { recursive: true });
+            mkdirSync(join(tempHome, '.claude'), { recursive: true });
+            symlinkSync('/bin/sh', join(tempBin, 'sh'));
+            const argsFile = join(tempRoot, 'node-args.txt');
+            const fakeNode = join(voltaBin, 'node');
+            writeFileSync(fakeNode, '#!/bin/sh\nprintf "%s\\n" "$@" > "$OMC_FAKE_NODE_ARGS"\n');
+            chmodSync(fakeNode, 0o755);
+            const command = `${UNIX_PREFIX}"$CLAUDE_PLUGIN_ROOT"/scripts/keyword-detector.mjs --smoke`;
+            execFileSync('/bin/sh', ['-c', command], {
+                env: {
+                    HOME: tempHome,
+                    PATH: tempBin,
+                    CLAUDE_PLUGIN_ROOT: PACKAGE_ROOT,
+                    OMC_FAKE_NODE_ARGS: argsFile,
+                },
+                stdio: 'pipe',
+            });
+            const args = readFileSync(argsFile, 'utf-8').trim().split('\n');
+            expect(args[0]).toBe(join(PACKAGE_ROOT, 'scripts', 'run.cjs'));
+            expect(args[1]).toBe(join(PACKAGE_ROOT, 'scripts', 'keyword-detector.mjs'));
+            expect(args[2]).toBe('--smoke');
+        }
+        finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+    it.runIf(process.platform !== 'win32')('prefers concrete nvm node over a stale executable shim on PATH', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'omc-min-path-nvm-'));
+        try {
+            const tempHome = join(tempRoot, 'home');
+            const tempBin = join(tempRoot, 'bin');
+            const asdfBin = join(tempHome, '.asdf', 'shims');
+            const nvmBin = join(tempHome, '.nvm', 'versions', 'node', 'v22.14.0', 'bin');
+            mkdirSync(tempBin, { recursive: true });
+            mkdirSync(asdfBin, { recursive: true });
+            mkdirSync(nvmBin, { recursive: true });
+            mkdirSync(join(tempHome, '.claude'), { recursive: true });
+            symlinkSync('/bin/sh', join(tempBin, 'sh'));
+            writeFileSync(join(asdfBin, 'node'), '#!/bin/sh\nexit 127\n');
+            chmodSync(join(asdfBin, 'node'), 0o755);
+            const argsFile = join(tempRoot, 'node-args.txt');
+            const fakeNode = join(nvmBin, 'node');
+            writeFileSync(fakeNode, '#!/bin/sh\nprintf "%s\\n" "$@" > "$OMC_FAKE_NODE_ARGS"\n');
+            chmodSync(fakeNode, 0o755);
+            const command = `${UNIX_PREFIX}"$CLAUDE_PLUGIN_ROOT"/scripts/session-end.mjs`;
+            execFileSync('/bin/sh', ['-c', command], {
+                env: {
+                    HOME: tempHome,
+                    PATH: `${tempBin}:${asdfBin}`,
+                    CLAUDE_PLUGIN_ROOT: PACKAGE_ROOT,
+                    OMC_FAKE_NODE_ARGS: argsFile,
+                },
+                stdio: 'pipe',
+            });
+            const args = readFileSync(argsFile, 'utf-8').trim().split('\n');
+            expect(args[0]).toBe(join(PACKAGE_ROOT, 'scripts', 'run.cjs'));
+            expect(args[1]).toBe(join(PACKAGE_ROOT, 'scripts', 'session-end.mjs'));
+        }
+        finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+    it.runIf(process.platform !== 'win32')('prefers concrete nvm node over a stale stored nodeBinary shim', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'omc-stored-shim-'));
+        try {
+            const tempHome = join(tempRoot, 'home');
+            const tempBin = join(tempRoot, 'bin');
+            const asdfBin = join(tempHome, '.asdf', 'shims');
+            const nvmBin = join(tempHome, '.nvm', 'versions', 'node', 'v22.14.0', 'bin');
+            const claudeDir = join(tempHome, '.claude');
+            mkdirSync(tempBin, { recursive: true });
+            mkdirSync(asdfBin, { recursive: true });
+            mkdirSync(nvmBin, { recursive: true });
+            mkdirSync(claudeDir, { recursive: true });
+            symlinkSync('/bin/sh', join(tempBin, 'sh'));
+            const staleShim = join(asdfBin, 'node');
+            writeFileSync(staleShim, '#!/bin/sh\nexit 127\n');
+            chmodSync(staleShim, 0o755);
+            writeFileSync(join(claudeDir, '.omc-config.json'), JSON.stringify({ nodeBinary: staleShim }));
+            const argsFile = join(tempRoot, 'node-args.txt');
+            const fakeNode = join(nvmBin, 'node');
+            writeFileSync(fakeNode, '#!/bin/sh\nprintf "%s\\n" "$@" > "$OMC_FAKE_NODE_ARGS"\n');
+            chmodSync(fakeNode, 0o755);
+            const command = `${UNIX_PREFIX}"$CLAUDE_PLUGIN_ROOT"/scripts/session-end.mjs`;
+            execFileSync('/bin/sh', ['-c', command], {
+                env: {
+                    HOME: tempHome,
+                    PATH: tempBin,
+                    CLAUDE_PLUGIN_ROOT: PACKAGE_ROOT,
+                    OMC_FAKE_NODE_ARGS: argsFile,
+                },
+                stdio: 'pipe',
+            });
+            const args = readFileSync(argsFile, 'utf-8').trim().split('\n');
+            expect(args[0]).toBe(join(PACKAGE_ROOT, 'scripts', 'run.cjs'));
+            expect(args[1]).toBe(join(PACKAGE_ROOT, 'scripts', 'session-end.mjs'));
+        }
+        finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+    it('keeps the Windows hook command direct-node and shell-wrapper free', () => {
+        const command = patchCommand(`${UNIX_PREFIX}"$CLAUDE_PLUGIN_ROOT"/scripts/session-end.mjs`, WINDOWS_PREFIX);
+        expect(command).toBe('node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/session-end.mjs');
+        expect(command).not.toContain('find-node.sh');
+        expect(command).not.toMatch(/(?:^|\s)sh(?:\s|$)/);
+        expect(command).not.toContain('/bin/sh');
     });
 });
 //# sourceMappingURL=plugin-setup-deps.test.js.map

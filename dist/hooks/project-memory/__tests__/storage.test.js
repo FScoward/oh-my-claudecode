@@ -6,6 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { loadProjectMemory, saveProjectMemory, shouldRescan, deleteProjectMemory, getMemoryPath, } from '../storage.js';
+import { formatContextSummary, formatFullContext } from '../formatter.js';
 import { SCHEMA_VERSION } from '../constants.js';
 import { getProjectIdentifier } from '../../../lib/worktree-paths.js';
 // Helper to create base memory with all required fields
@@ -176,6 +177,33 @@ describe('Project Memory Storage', () => {
             expect(loaded?.version).toBe(SCHEMA_VERSION);
             expect(loaded?.techStack.languages[0].name).toBe('Rust');
             expect(loaded?.build.buildCommand).toBe('cargo build');
+        });
+        it('should normalize missing runtime list fields when loading minimal persisted memory', async () => {
+            const memoryPath = getMemoryPath(projectRoot);
+            await fs.mkdir(path.dirname(memoryPath), { recursive: true });
+            const { customNotes: _customNotes, userDirectives: _userDirectives, hotPaths: _hotPaths, ...minimalPersistedMemory } = createBaseMemory(projectRoot, {
+                techStack: {
+                    languages: [
+                        {
+                            name: 'TypeScript',
+                            version: null,
+                            confidence: 'high',
+                            markers: ['tsconfig.json'],
+                        },
+                    ],
+                    frameworks: [],
+                    packageManager: 'npm',
+                    runtime: null,
+                },
+            });
+            await fs.writeFile(memoryPath, JSON.stringify(minimalPersistedMemory), 'utf-8');
+            const loaded = await loadProjectMemory(projectRoot);
+            expect(loaded).not.toBeNull();
+            expect(loaded?.customNotes).toEqual([]);
+            expect(loaded?.userDirectives).toEqual([]);
+            expect(loaded?.hotPaths).toEqual([]);
+            expect(() => formatContextSummary(loaded)).not.toThrow();
+            expect(() => formatFullContext(loaded)).not.toThrow();
         });
         it('should return null for invalid JSON', async () => {
             // Create .omc directory

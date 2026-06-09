@@ -886,7 +886,7 @@ function getPromptText(input) {
     return "";
 }
 function isExplicitAskSlashInvocation(promptText) {
-    return /^\s*\/(?:oh-my-claudecode:)?ask\s+(?:claude|codex|gemini)\b/i.test(promptText);
+    return /^\s*\/(?:oh-my-claudecode:)?ask\s+(?:claude|codex|gemini|grok)\b/i.test(promptText);
 }
 function activateRalplanStartupState(directory, sessionId) {
     const now = new Date().toISOString();
@@ -2414,7 +2414,7 @@ export async function processHook(hookType, rawInput) {
             }
             case "code-simplifier": {
                 const directory = input.directory ?? process.cwd();
-                const stateDir = join(resolveToWorktreeRoot(directory), ".omc", "state");
+                const stateDir = join(getOmcRoot(directory), "state");
                 const { processCodeSimplifier } = await import("./code-simplifier/index.js");
                 const result = processCodeSimplifier(directory, stateDir);
                 if (result.shouldBlock) {

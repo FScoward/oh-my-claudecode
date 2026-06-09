@@ -105,7 +105,10 @@ describe('scaleUp launch config', () => {
             if (args[0] === 'split-window') {
                 return { status: 0, stdout: '%12\n', stderr: '' };
             }
-            if (args[0] === 'display-message') {
+            if (args[0] === 'display-message' && args.includes('#{session_name}:#{window_index}')) {
+                return { status: 0, stdout: 'demo-session:0\n', stderr: '' };
+            }
+            if (args[0] === 'display-message' && args.includes('#{pane_pid}')) {
                 return { status: 0, stdout: '4321\n', stderr: '' };
             }
             return { status: 0, stdout: '', stderr: '' };

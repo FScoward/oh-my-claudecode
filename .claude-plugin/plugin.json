@@ -1,6 +1,6 @@
 {
   "name": "oh-my-claudecode",
-  "version": "4.14.4",
+  "version": "4.14.6",
   "description": "Multi-agent orchestration system for Claude Code",
   "author": {
     "name": "oh-my-claudecode contributors"
@@ -30,6 +30,7 @@
     "./skills/external-context/",
     "./skills/hud/",
     "./skills/learner/",
+    "./skills/local-build-reminder/",
     "./skills/mcp-setup/",
     "./skills/omc-doctor/",
     "./skills/omc-reference/",

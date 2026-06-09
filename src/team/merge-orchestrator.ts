@@ -60,10 +60,11 @@ import { mkdir, appendFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { atomicWriteJson, ensureDirWithMode, validateResolvedPath } from './fs-utils.js';
+import { getOmcRoot } from '../lib/worktree-paths.js';
 import { isRuntimeV2Enabled } from './runtime-flags.js';
 import { sanitizeName } from './tmux-session.js';
 import { listTeamWorktrees, getWorktreePath, getBranchName } from './git-worktree.js';
-import { checkMergeConflicts, mergeWorkerBranch, validateBranchName } from './merge-coordinator.js';
+import { checkMergeConflicts, mergeWorkerBranch, validateBranchName, configureHarnessMergeAttributes } from './merge-coordinator.js';
 import { appendToInbox } from './worker-bootstrap.js';
 import { appendToLeaderInbox, ensureLeaderInbox } from './leader-inbox.js';
 import {
@@ -138,13 +139,12 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10000;
 // ---------------------------------------------------------------------------
 
 function mergerWorktreePathFor(repoRoot: string, teamName: string): string {
-  return join(repoRoot, '.omc', 'team', sanitizeName(teamName), 'merger');
+  return join(getOmcRoot(repoRoot), 'team', sanitizeName(teamName), 'merger');
 }
 
 function persistedStatePath(repoRoot: string, teamName: string): string {
   return join(
-    repoRoot,
-    '.omc',
+    getOmcRoot(repoRoot),
     'state',
     'team',
     sanitizeName(teamName),
@@ -154,8 +154,7 @@ function persistedStatePath(repoRoot: string, teamName: string): string {
 
 function teardownAuditPath(repoRoot: string, teamName: string): string {
   return join(
-    repoRoot,
-    '.omc',
+    getOmcRoot(repoRoot),
     'state',
     'team',
     sanitizeName(teamName),
@@ -165,8 +164,7 @@ function teardownAuditPath(repoRoot: string, teamName: string): string {
 
 function orchestratorEventLogPath(repoRoot: string, teamName: string): string {
   return join(
-    repoRoot,
-    '.omc',
+    getOmcRoot(repoRoot),
     'state',
     'team',
     sanitizeName(teamName),
@@ -354,12 +352,20 @@ export async function startMergeOrchestrator(
   const drainTimeoutMs = config.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
   const mergerPath = mergerWorktreePathFor(config.repoRoot, config.teamName);
 
-  // Validate paths stay under repoRoot (defence-in-depth).
-  validateResolvedPath(mergerPath, config.repoRoot);
+  // Validate paths stay under the shared OMC team root (defence-in-depth).
+  // mergerPath lives under getOmcRoot(...)/team, which in a .omc-workspace
+  // layout is ABOVE repoRoot — validating against repoRoot would false-positive.
+  validateResolvedPath(mergerPath, join(getOmcRoot(config.repoRoot), 'team'));
 
   // Bootstrap merger worktree + leader inbox.
   ensureMergerWorktree(config.repoRoot, mergerPath, config.leaderBranch);
   await ensureLeaderInbox(config.teamName, config.cwd);
+
+  // Stop harness overlay files (AGENTS.md, .claude/**) from blocking the
+  // auto-merge/auto-rebase fan-out on infrastructure unrelated to the task.
+  // Applies across the merger worktree and every worker worktree because they
+  // share the common git dir (#3224).
+  configureHarnessMergeAttributes(config.repoRoot);
 
   // Hydrate from persisted state if present (M6).
   const persistedPath = persistedStatePath(config.repoRoot, config.teamName);

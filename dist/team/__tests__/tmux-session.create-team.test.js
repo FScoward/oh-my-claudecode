@@ -23,6 +23,9 @@ vi.mock('child_process', async (importOriginal) => {
         if (args[0] === 'display-message' && args.includes('#{window_width}')) {
             return { stdout: '160\n', stderr: '' };
         }
+        if (args[0] === 'display-message' && args.includes('#{pane_dead} #{pane_current_command}')) {
+            return { stdout: '0 zsh\n', stderr: '' };
+        }
         if (args[0] === 'split-window') {
             mockedCalls.splitCount += 1;
             return { stdout: `%50${mockedCalls.splitCount}\n`, stderr: '' };
@@ -69,10 +72,16 @@ vi.mock('child_process', async (importOriginal) => {
             const args = parseTmuxShellCmd(cmd);
             return args ? runMockExec(args) : { stdout: '', stderr: '' };
         };
+    const execSyncMock = vi.fn((cmd) => {
+        if (cmd === 'tmux -V')
+            return 'tmux 3.4\n';
+        return '';
+    });
     return {
         ...actual,
         exec: execMock,
         execFile: execFileMock,
+        execSync: execSyncMock,
     };
 });
 import { createTeamSession, detectTeamMultiplexerContext } from '../tmux-session.js';

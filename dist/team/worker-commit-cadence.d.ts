@@ -2,7 +2,7 @@ export interface WorkerCadenceContext {
     teamName: string;
     workerName: string;
     worktreePath: string;
-    agentType: 'claude' | 'codex' | 'gemini' | 'cursor';
+    agentType: 'claude' | 'codex' | 'gemini' | 'cursor' | 'grok';
     enabled: boolean;
 }
 export type CadenceMethod = 'hook' | 'fallback-poll' | 'none';

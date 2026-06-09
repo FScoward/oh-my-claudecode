@@ -47,6 +47,10 @@ export declare function resolveSupportedShellAffinity(shellPath?: string): Worke
  *   5. Fallback: /bin/sh
  */
 export declare function buildWorkerLaunchSpec(shellPath?: string): WorkerLaunchSpec;
+export interface WaitForShellReadyOptions {
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+}
 export declare function buildWorkerStartCommand(config: WorkerPaneConfig): string;
 /** Validate tmux is available. Throws with install instructions if not. */
 export declare function validateTmux(hasTmuxContext?: boolean): void;
@@ -92,6 +96,7 @@ export declare function spawnWorkerInPane(sessionName: string, paneId: string, c
 export declare function captureTeamPane(paneId: string): Promise<string>;
 export declare function sendTeamPaneKey(paneId: string, key: string): Promise<void>;
 export declare function killTeamPane(paneId: string): Promise<void>;
+export declare function paneHasTrustPrompt(captured: string): boolean;
 export declare function paneHasActiveTask(captured: string): boolean;
 export declare function paneLooksReady(captured: string): boolean;
 export interface WaitForPaneReadyOptions {

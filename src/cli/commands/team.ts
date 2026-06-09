@@ -21,11 +21,12 @@ import { loadConfig } from '../../config/loader.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmuxExec } from '../tmux-utils.js';
+import { getOmcRoot } from '../../lib/worktree-paths.js';
 
 const HELP_TOKENS = new Set(['--help', '-h', 'help']);
 const MIN_WORKER_COUNT = 1;
 const MAX_WORKER_COUNT = 20;
-const VALID_TEAM_CLI_AGENT_TYPES = new Set(['claude', 'codex', 'gemini']);
+const VALID_TEAM_CLI_AGENT_TYPES = new Set(['claude', 'codex', 'gemini', 'grok']);
 const DEFAULT_TEAM_CLI_AGENT_TYPE: CliAgentType = 'claude';
 
 const TEAM_HELP = `
@@ -245,7 +246,7 @@ function slugifyTask(task: string): string {
 
 export function resolveAvailableTeamName(baseName: string, cwd: string): string {
   const sanitizedBase = slugifyTask(baseName);
-  const stateRoot = join(cwd, '.omc', 'state', 'team');
+  const stateRoot = join(getOmcRoot(cwd), 'state', 'team');
   const teamDir = (name: string) => join(stateRoot, name);
   if (!existsSync(teamDir(sanitizedBase))) return sanitizedBase;
 
@@ -354,6 +355,13 @@ function normalizeWorkerSpecSegment(match: RegExpMatchArray): NormalizedWorkerSp
   }
 
   if (explicitRole) {
+    if (!VALID_TEAM_CLI_AGENT_TYPES.has(token)) {
+      throw new Error(
+        `Invalid agent type "${token}" in worker spec "${match[0]}". ` +
+        `Expected one of: ${[...VALID_TEAM_CLI_AGENT_TYPES].join(', ')}. ` +
+        `For a role-only shorthand on the default agent, use "${count}:${explicitRole}".`,
+      );
+    }
     return { count, agentType: token, role: explicitRole };
   }
 
@@ -449,6 +457,17 @@ export function parseTeamArgs(tokens: string[], defaultAgentType: string = 'clau
       explicitWorkerSpec = true;
       filteredArgs.shift();
     }
+  }
+
+  // A token that clearly looks like a worker spec ("N:<word>...") but failed to
+  // fully parse must fail loudly rather than being silently swallowed into the
+  // task text, which would default the team to claude workers (see #3224).
+  if (!explicitWorkerSpec && /^\d+:[a-z]/i.test(first)) {
+    throw new Error(
+      `Invalid worker spec "${first}". Expected "N:agent-type[:role]" ` +
+      `(e.g. "3:codex" or "2:codex:architect"), optionally comma-separated ` +
+      `(e.g. "1:codex,1:gemini"). Agent type must be one of: ${[...VALID_TEAM_CLI_AGENT_TYPES].join(', ')}.`,
+    );
   }
 
   // Default: 3 workers with configured default agent type (falls back to claude)

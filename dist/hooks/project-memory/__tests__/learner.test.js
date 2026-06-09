@@ -6,7 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { learnFromToolOutput, addCustomNote } from '../learner.js';
-import { saveProjectMemory, loadProjectMemory } from '../storage.js';
+import { saveProjectMemory, loadProjectMemory, getMemoryPath } from '../storage.js';
 import { SCHEMA_VERSION } from '../constants.js';
 // Helper to create base memory with all required fields
 const createBaseMemory = (projectRoot) => ({
@@ -142,6 +142,23 @@ describe('Project Memory Learner', () => {
             await expect(learnFromToolOutput('Bash', { command: 'node --version' }, { stdout: 'Node.js v20.10.0' }, tempDir)).resolves.not.toThrow();
             const updated = await loadProjectMemory(tempDir);
             expect(updated?.customNotes).toHaveLength(0);
+        });
+        it('should initialize hot paths when saved memory is missing hotPaths', async () => {
+            const memoryPath = getMemoryPath(tempDir);
+            const minimalMemory = createBasicMemory();
+            const { hotPaths: _hotPaths, ...memoryWithoutHotPaths } = minimalMemory;
+            await fs.mkdir(path.dirname(memoryPath), { recursive: true });
+            await fs.writeFile(memoryPath, JSON.stringify(memoryWithoutHotPaths), 'utf-8');
+            await expect(learnFromToolOutput('Read', { file_path: path.join(tempDir, 'src', 'index.ts') }, '', tempDir)).resolves.not.toThrow();
+            const updated = await loadProjectMemory(tempDir);
+            expect(Array.isArray(updated?.hotPaths)).toBe(true);
+            expect(updated?.hotPaths).toEqual([
+                expect.objectContaining({
+                    path: 'src/index.ts',
+                    accessCount: 1,
+                    type: 'file',
+                }),
+            ]);
         });
         it('should do nothing if memory file does not exist', async () => {
             await expect(learnFromToolOutput('Bash', { command: 'pnpm build' }, '', tempDir)).resolves.not.toThrow();

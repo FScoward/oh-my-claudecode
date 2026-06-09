@@ -42,7 +42,7 @@ Complete reference for oh-my-claudecode. For quick start, see the main [README.m
 
 This integrates directly with Claude Code's plugin system and uses Node.js hooks.
 
-> **Note**: Direct npm/bun global installs are **not supported**. The plugin system handles all installation and hook setup automatically.
+> **Note**: Direct npm/bun global installs are **not supported** for the plugin install flow. When you only need the packaged CLI surface, the npm package exposes both `oh-my-claudecode` and `omc`; use `omc` in examples unless troubleshooting needs the long alias.
 
 ### Requirements
 
@@ -108,7 +108,10 @@ If both configurations exist, **project-scoped takes precedence** over global:
 | `OMC_PARALLEL_EXECUTION`   | `true`               | Enable/disable parallel agent execution                                                                                                                                                                                                                                     |
 | `OMC_CODEX_DEFAULT_MODEL`  | _(provider default)_ | Default model for Codex CLI workers                                                                                                                                                                                                                                         |
 | `OMC_GEMINI_DEFAULT_MODEL` | _(provider default)_ | Default model for Gemini CLI workers                                                                                                                                                                                                                                        |
+| `OMC_GROK_DEFAULT_MODEL`   | _(provider default)_ | Default model for Grok Build CLI workers                                                                                                                                                                                                                                    |
 | `OMC_LSP_TIMEOUT_MS`       | `15000`              | Timeout (ms) for LSP requests. Increase for large repos or slow language servers                                                                                                                                                                                            |
+| `OMC_MIGRATE_LEGACY_STATE` | _(unset)_            | Set to `1` to enable one-shot legacy→session-scoped state migration on next read. See [Legacy state migration](#legacy-state-migration-omc_migrate_legacy_state) below.                                                                                                      |
+| `OMC_DISABLE_MULTIREPO`    | _(unset)_            | Set to `1` to disable workspace-marker resolution and fall back to git-root + cwd resolution order. `OMC_STATE_DIR` is still honoured. See [Rollback / disable multi-repo](#rollback--disable-multi-repo-omc_disable_multirepo) below.                                       |
 | `DISABLE_OMC`              | _(unset)_            | Set to any value to disable all OMC hooks                                                                                                                                                                                                                                   |
 | `OMC_SKIP_HOOKS`           | _(unset)_            | Comma-separated list of hook names to skip                                                                                                                                                                                                                                  |
 
@@ -124,6 +127,109 @@ export OMC_STATE_DIR="$HOME/.claude/omc"
 This resolves to `~/.claude/omc/{project-identifier}/` where the project identifier uses a hash of the git remote URL (stable across worktrees/clones) with a fallback to the directory path hash for local-only repos.
 
 If both a legacy `{worktree}/.omc/` directory and a centralized directory exist, OMC logs a notice and uses the centralized directory. You can then migrate data from the legacy directory and remove it.
+
+#### Multi-repo workspaces with `.omc-workspace`
+
+When you have several independent git repos under one parent directory and the parent itself is **not** a git repo, OMC cannot infer a shared root via `git rev-parse --show-toplevel`. Each sub-repo would get its own isolated `.omc/`. To anchor a single `.omc/` at the parent, drop a `.omc-workspace` marker file there:
+
+```bash
+cd /path/to/my-workspace            # parent dir (not a git repo)
+echo '{}' > .omc-workspace          # empty JSON is fine
+```
+
+From any sub-directory (including inside any sub-git-repo), OMC resolves `.omc/` to `/path/to/my-workspace/.omc/`. The marker may also carry an explicit project identifier so all sessions share state regardless of the parent dir name:
+
+```json
+{ "id": "my-org-bidchex" }
+```
+
+Resolution order inside `getOmcRoot()`:
+
+1. `OMC_STATE_DIR` (centralized).
+2. `.omc-workspace` marker (multi-repo workspace).
+3. `git rev-parse --show-toplevel` (monorepo / single repo).
+4. `process.cwd()` (last resort).
+
+Once a workspace is anchored, multiple Claude Code sessions in different sub-repos can run `/ultragoal`, `/ralph`, `/ultrawork`, `/autopilot` in parallel without bleeding state. For `/ultragoal` specifically, pass `--plan-id <id>` or `--auto-plan-id` on `create-goals` so each session writes to `.omc/ultragoal/plans/{planId}/` instead of the shared `goals.json` — see "ultragoal multi-plan" below. The PARALLEL SESSION WARNING in `session-start.mjs` performs a PID-aware liveness check and no longer suppresses restore when the owner session is dead.
+
+#### `.omc/handoffs/` shared contract
+
+`.omc/handoffs/` is intentionally **shared across team runs** by design. Its purpose is inter-session message passing: team stage handoffs (plan → prd → exec → verify) accumulate here so a later `team` run can resume from the last non-terminal stage without losing decision history.
+
+**Only the `team` skill writes to `.omc/handoffs/`.** All other code that reads the directory does so read-only. This is enforced by the lint test `tests/lint/handoffs-writers.test.ts`, which scans `src/**` and `templates/**` and fails if any file outside `src/team/` or `src/hooks/team-pipeline/` references `handoffs/` as a write target.
+
+- Handoff files survive `TeamDelete` and session cancellation intentionally — they are post-mortem artifacts.
+- Do **not** session-scope `.omc/handoffs/` unless the `team` skill explicitly evolves to per-session inboxes (tracked as a follow-up in the ADR).
+
+#### Branded path types (`ReadPath` / `WritePath`)
+
+State-file path resolution returns a branded struct from `resolveSessionStatePaths()` in `src/lib/worktree-paths.ts`:
+
+```ts
+interface SessionStatePaths {
+  sessionScoped: string;
+  legacy: string;
+  effectiveRead: ReadPath;   // string & { __brand: 'ReadPath' }
+  effectiveWrite: WritePath; // string & { __brand: 'WritePath' }
+}
+```
+
+The brand prevents a hook from silently passing a read-fallback path to a writer (or vice versa) — TypeScript rejects the cross-assignment at compile time. The only legitimate producer of the brand is `resolveSessionStatePaths()` itself; an ESLint `no-restricted-syntax` rule in `eslint.config.js` blocks `as ReadPath` / `as WritePath` casts anywhere outside `worktree-paths.ts` and its tests. Compile-time regression guard at `src/lib/__tests__/session-state-paths.type-test.ts`.
+
+#### Legacy state migration (`OMC_MIGRATE_LEGACY_STATE`)
+
+When you adopt `OMC_STATE_DIR` or `.omc-workspace` on a repo that already has existing `{worktree}/.omc/state/` files, you can opt in to a one-shot copy of legacy state into the new session-scoped path:
+
+```bash
+export OMC_MIGRATE_LEGACY_STATE=1
+```
+
+Semantics:
+- **Trigger**: checked once per state-file read by callers that wrap their write through the migration helper.
+- **Operation**: copies `{omcRoot}/state/{name}-state.json` → `{omcRoot}/state/sessions/{sessionId}/{name}-state.json` using an atomic `.migrating` sentinel + rename for crash recovery.
+- **Idempotent**: a second run with the flag set is a no-op if the session-scoped file already exists.
+- **Opt-in only**: never triggers automatically; only when `OMC_MIGRATE_LEGACY_STATE=1` is set.
+- **No auto-trigger**: do not set this permanently in your shell profile; set it once for the migration session, then unset it.
+
+#### Rollback / disable multi-repo (`OMC_DISABLE_MULTIREPO`)
+
+If the workspace-marker resolution causes unexpected behaviour (e.g., after dropping a stale `.omc-workspace` marker), you can disable multi-repo path resolution in one env-var flip:
+
+```bash
+export OMC_DISABLE_MULTIREPO=1
+```
+
+Exact semantics:
+- **Skips** `.omc-workspace` marker detection — `findWorkspaceRoot()` returns `null` immediately.
+- **Falls back** to the standard `git rev-parse --show-toplevel` → `process.cwd()` resolution order.
+- **Preserves** `OMC_STATE_DIR` if set — centralized state storage still works.
+- **Scope**: per-process; set in the shell session where you run `claude`, not project-wide.
+
+To restore multi-repo behaviour, unset the variable:
+
+```bash
+unset OMC_DISABLE_MULTIREPO
+```
+
+#### Ultragoal multi-plan layout
+
+Default layout (single plan, monorepo / single session):
+
+```
+.omc/ultragoal/brief.md
+.omc/ultragoal/goals.json
+.omc/ultragoal/ledger.jsonl
+```
+
+Multi-plan layout, enabled by `--plan-id <id>` or `--auto-plan-id` on `omc ultragoal create-goals`:
+
+```
+.omc/ultragoal/plans/{planId}/brief.md
+.omc/ultragoal/plans/{planId}/goals.json
+.omc/ultragoal/plans/{planId}/ledger.jsonl
+```
+
+`--auto-plan-id` derives `{epochMs}-{slug}` from the brief title, so two parallel sessions running `omc ultragoal create-goals --auto-plan-id ...` never collide. Subsequent commands (`status`, `add-goal`, `complete-goals`, `checkpoint`, `record-review-blockers`) auto-resolve the plan when there is exactly one; when there are multiple, they require `--plan-id <id>`. `omc ultragoal list-plans` enumerates the available plan ids.
 
 ### When to Re-run Setup
 
@@ -392,11 +498,11 @@ omc ask gemini --prompt "suggest UX improvements"
 omc ask claude --agent-prompt executor --prompt "create an implementation plan"
 ```
 
-- Provider matrix: `claude | codex | gemini`
+- Provider matrix: `claude | codex | gemini | grok`
 - Artifacts: `.omc/artifacts/ask/{provider}-{slug}-{timestamp}.md`
 - Canonical env vars: `OMC_ASK_ADVISOR_SCRIPT`, `OMC_ASK_ORIGINAL_TASK`
 - Phase-1 aliases (deprecated warning): `OMX_ASK_ADVISOR_SCRIPT`, `OMX_ASK_ORIGINAL_TASK`
-- Skill entrypoint: `/oh-my-claudecode:ask <claude|codex|gemini> <prompt>` routes to this command
+- Skill entrypoint: `/oh-my-claudecode:ask <claude|codex|gemini|grok> <prompt>` routes to this command
 
 ### `omc team` (CLI runtime surface)
 
@@ -611,7 +717,7 @@ Marketplace/plugin installs compact the native plugin `skills/*/SKILL.md` files 
 | Skill                     | Description                                                      | Manual Command                              |
 | ------------------------- | ---------------------------------------------------------------- | ------------------------------------------- |
 | `ai-slop-cleaner`         | Anti-slop cleanup workflow with optional reviewer-only `--review` pass | `/oh-my-claudecode:ai-slop-cleaner`         |
-| `ask`                     | Ask Claude, Codex, or Gemini via local CLI and capture a reusable artifact | `/oh-my-claudecode:ask`               |
+| `ask`                     | Ask Claude, Codex, Gemini, or Grok via local CLI and capture a reusable artifact | `/oh-my-claudecode:ask`               |
 | `autoresearch`            | Stateful single-mission evaluator-driven improvement loop           | `/oh-my-claudecode:autoresearch`            |
 | `autopilot`               | Full autonomous execution from idea to working code              | `/oh-my-claudecode:autopilot`               |
 | `cancel`                  | Unified cancellation for active modes                            | `/oh-my-claudecode:cancel`                  |
@@ -652,14 +758,15 @@ Marketplace/plugin installs compact the native plugin `skills/*/SKILL.md` files 
 
 ## Slash Commands
 
-Most installed skills are exposed as `/oh-my-claudecode:<skill-name>`. Deep Interview is intentionally documented with the short `/deep-interview` path because that path receives OMC's rendered runtime threshold guidance before the interview starts. The skills table above is the full runtime-backed list; the commands below highlight common entrypoints and aliases. Compatibility keyword modes like `deep-analyze` and `tdd` are prompt-triggered behaviors, not standalone slash commands.
+Most installed skills are exposed as `/oh-my-claudecode:<skill-name>`. Deep Interview is intentionally documented with the short `/deep-interview` path because that path receives OMC's rendered runtime threshold guidance before the interview starts. The skills table above is the full runtime-backed list; the commands below highlight common entrypoints and aliases. Compatibility keyword modes like `deep-analyze` and `tdd` are prompt-triggered behaviors, not standalone slash commands. OMC's manual compaction helper is plugin-scoped as `/oh-my-claudecode:compact`; bare `/compact` remains Claude Code's native command and is not shadowed by OMC. The helper preserves the user's note and instructs them to run bare `/compact`; OMC does not invoke native compaction itself because Claude Code's built-in `/compact` is not a prompt skill.
 
 | Command                                                  | Description                                                                                   |
 | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `/oh-my-claudecode:ai-slop-cleaner <target>`             | Run the anti-slop cleanup workflow (`--review` for reviewer-only pass)                        |
-| `/oh-my-claudecode:ask <claude\|codex\|gemini> <prompt>` | Route a prompt through the selected advisor CLI and capture an ask artifact                   |
+| `/oh-my-claudecode:ask <claude\|codex\|gemini\|grok> <prompt>` | Route a prompt through the selected advisor CLI and capture an ask artifact                   |
 | `/oh-my-claudecode:autopilot <task>`                     | Full autonomous execution                                                                     |
 | `/oh-my-claudecode:configure-notifications`              | Configure notification integrations                                                           |
+| `/oh-my-claudecode:compact [note]`                        | Prepare an OMC-safe manual handoff telling the user to run bare `/compact [note]`              |
 | `/oh-my-claudecode:deep-dive <problem>`                  | Run the trace → deep-interview pipeline                                                       |
 | `/deep-interview <idea>`                                 | Socratic interview with ambiguity scoring before execution                                    |
 | `/oh-my-claudecode:deepinit [path]`                      | Index codebase with hierarchical AGENTS.md files                                              |
@@ -697,7 +804,7 @@ When present, OMC appends a standardized **Skill Pipeline** section to the rende
 
 ### Skills 2.0 Compatibility (MVP)
 
-OMC's canonical project-local skill directory remains `.omc/skills/`, but the runtime now also reads compatibility skills from `.agents/skills/`.
+OMC's canonical project-local skill directory remains `.omc/skills/`, and the runtime also reads Claude Code project skills from `.claude/skills/` plus compatibility skills from `.agents/skills/`.
 
 For builtin and slash-loaded skills, OMC also appends a standardized **Skill Resources** section when the skill directory contains bundled assets such as helper scripts, templates, or support libraries. This helps agents reuse packaged skill resources instead of recreating them ad hoc.
 
@@ -806,6 +913,34 @@ Use these trigger phrases in natural language prompts to activate enhanced modes
 | `code review`, `review code`                                                   | Comprehensive code review mode                                                                |
 | `security review`, `review security`                                           | Security-focused review mode                                                                  |
 | `cancelomc`, `stopomc`                                                         | Unified cancellation                                                                          |
+
+### Localized triggers (Korean / Japanese)
+
+The keyword detector recognizes localized aliases in addition to the English trigger phrases above. Each alias maps to the same skill/mode as its English counterpart:
+
+| Keyword          | Korean      | Japanese           |
+| ---------------- | ----------- | ------------------ |
+| `ralph`          | 랄프        | ラルフ             |
+| `autopilot`      | 오토파일럿  | オートパイロット   |
+| `ultrawork`      | 울트라워크  | ウルトラワーク     |
+| `ralplan`        | 랄플랜      | ラルプラン         |
+| `ultrathink`     | 울트라씽크  | ウルトラシンク     |
+| `ccg`            | 씨씨지      | シーシージー       |
+| `deep-interview` | 딥인터뷰    | ディープインタビュー |
+| `tdd`            | 테스트 퍼스트 | テスト ファースト |
+| `code-review`    | 코드 리뷰   | コード レビュー    |
+| `security-review`| 보안 리뷰   | セキュリティ レビュー |
+| `deepsearch`     | 딥 서치     | ディープ サーチ    |
+| `analyze`        | 딥 분석     | ディープ アナライズ |
+
+`cancelomc` / `stopomc` have no localized alias (cancellation is matched only by the English tokens).
+
+#### Localized routing behavior
+
+- **Substring matching (aggressive routing).** Korean and Japanese have no ASCII word boundary, so localized aliases are matched as substrings rather than whole words. This is intentional: a localized alias embedded in a longer noun phrase still routes — e.g. `コードレビュー記事を要約して` ("summarize this code-review article") activates **code-review** mode. Prefer the English form, or phrase around the alias, if you do not want that behavior.
+- **Reviewer-suffix guard.** `code-review` / `security-review` use a negative lookahead so "reviewer"-style nouns do not trigger review mode: `(?!어)` blocks Korean 리뷰어, and `(?!ア)` blocks any Japanese レビューア… form (e.g. レビューアー).
+- **Informational suppression.** Help-style questions are suppressed and pass through without activating a mode — e.g. Korean `뭐야` / Japanese `とは` / `使い方` near an alias.
+- **Difference questions.** Japanese "difference" phrasing — `…の違いを教えて`/`違いを説明`/`違いを知りたい` and `どう違う`/`何が違う`/`どこが違う` (e.g. `ディープサーチと普通の検索の違いを教えて`) — is treated as informational and suppressed. A work verb after `違い` (e.g. `違いを修正して`) is **not** suppressed and still activates.
 
 ### Examples
 

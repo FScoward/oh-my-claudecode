@@ -30,6 +30,7 @@ import { fileURLToPath } from 'url';
 import { getClaudeConfigDir } from './lib/config-dir.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { readStdin } from './lib/stdin.mjs';
+import { resolveOmcStateRoot } from './lib/state-root.mjs';
 
 // Resolve OMC package root: CLAUDE_PLUGIN_ROOT (plugin system) or derive from this script's location
 const _omcRoot = process.env.CLAUDE_PLUGIN_ROOT ||
@@ -205,7 +206,7 @@ function isExplicitRalplanSlashInvocation(prompt) {
 }
 
 function isExplicitAskSlashInvocation(prompt) {
-  return /^\s*\/(?:oh-my-claudecode:)?ask\s+(?:claude|codex|gemini)\b/i.test(prompt);
+  return /^\s*\/(?:oh-my-claudecode:)?ask\s+(?:claude|codex|gemini|grok)\b/i.test(prompt);
 }
 
 // Sanitize text to prevent false positives from code blocks, XML tags, URLs, and file paths
@@ -252,9 +253,15 @@ function sanitizeForKeywordDetection(text) {
     .replace(/^\s*>\s.*$/gm, '')
     .replace(/^\s*\|(?:[^|\n]*\|){2,}\s*$/gm, '')
     .replace(/^\s*\|?(?:\s*:?-{3,}:?\s*\|){1,}\s*$/gm, '')
-    // 4. Strip file paths: /foo/bar/baz or foo/bar/baz — uses lookbehind (Node.js supports it)
-    // The TypeScript version (index.ts) uses capture group + $1 replacement for broader compat
-    .replace(/(?<=^|[\s"'`(])(?:\/)?(?:[\w.-]+\/)+[\w.-]+/gm, '')
+    // 4. Strip file paths — uses lookbehind (Node.js supports it). Requires at least one
+    // slash-terminated directory segment (?:SEG+\/)+ so bare slash-commands like /ralph are NOT
+    // stripped (the .mjs has no pre-sanitization slash handler for them). Directory/stem segments
+    // are Unicode-aware (\w.- plus the NON_LATIN_SCRIPT_PATTERN ranges) so CJK file names like
+    // docs/コードレビュー.md are stripped. The final segment is bounded: a CJK-capable stem ending
+    // in a .ext, OR an ASCII-only extensionless name — so a no-space CJK directive following a path
+    // (e.g. src/auth.tsをコードレビューして) is NOT consumed by a greedy CJK tail and the alias
+    // still activates.
+    .replace(/(?<=^|[\s"'`(])(?:\/)?(?:[\w.\-　-鿿가-힯Ѐ-ӿ؀-ۿऀ-ॿ฀-๿က-႟]+\/)+(?:[\w.\-　-鿿가-힯Ѐ-ӿ؀-ۿऀ-ॿ฀-๿က-႟]*\.\w+|[\w.\-]+)/gm, '')
     // 5. Strip markdown code blocks (existing)
     .replace(/```[\s\S]*?```/g, '')
     // 6. Strip inline code (existing)
@@ -389,7 +396,7 @@ function stripPastedCommandPayloads(text) {
 const INFORMATIONAL_INTENT_PATTERNS = [
   /\b(?:what(?:'s|\s+is)|what\s+are|how\s+(?:to|do\s+i)\s+use|explain|explanation|tell\s+me\s+about|describe)\b/i,
   /(?:뭐야|뭔데|무엇(?:이야|인가요)?|어떻게|설명(?!서\s*(?:작성|만들|생성|추가|업데이트|수정|편집|쓰))|사용법|알려\s?줘|알려줄래|소개해?\s?줘|소개\s*부탁|설명해\s?줘|뭐가\s*달라|어떤\s*기능|기능\s*(?:알려|설명|뭐)|방법\s*(?:알려|설명|뭐))/u,
-  /(?:とは|って何|使い方|説明)/u,
+  /(?:とは|って何|使い方|説明|(?:について|に関して|違い)[^\n]{0,24}(?:教えて|説明|知りたい)|(?:どう|何が|どこが)違う)/u,
   /(?:什么是|什麼是|怎(?:么|樣)用|如何使用|解释|說明|说明)/u,
 ];
 const INFORMATIONAL_CONTEXT_WINDOW = 80;
@@ -614,9 +621,42 @@ function hasDiagnosticIntentNearKeyword(context, keyword) {
     new RegExp(`\\b${escaped}\\b[^\\n]{0,48}\\b(?:keeps?\\s+(?:looping|re-?running)|has\\s+(?:a\\s+)?(?:bug|issue|problem|error)|is\\s+(?:stuck|broken|failing)|loop(?:ing)?)\\b`, 'i'),
     new RegExp(`\\b(?:bug|issue|problem|error)\\b[^\\n]{0,16}\\b(?:with|in)\\s+\\b${escaped}\\b`, 'i'),
     new RegExp(`${escaped}.{0,14}(?:자꾸|계속).{0,14}(?:재실행|반복|루프|멈추)`, 'u'),
+    // Japanese: repeated-failure complaint — direct mirror of the Korean 자꾸/계속 line above
+    // (frequency adverb + problem verb). No P2 subject-particle pattern / no work-request escape: Korean parity.
+    new RegExp(`${escaped}[^\\n]{0,16}(?:また|何度も|ずっと|頻繁|繰り返|いつも)[^\\n]{0,16}(?:失敗|エラー|ループ|止ま|落ち|再実行|動かな|フリーズ|壊れ|クラッシュ|こけ|暴走|無限)`, 'u'),
   ];
 
   return patterns.some((pattern) => pattern.test(context));
+}
+
+function isRalphUltraworkMetaOrBanterContext(context, keywordText) {
+  const normalizedKeyword = (keywordText || '').toLowerCase().replace(/\s+/g, '');
+  if (!['ralph', '랄프', 'ラルフ', 'ultrawork', 'ulw', 'uw', '울트라워크', 'ウルトラワーク'].includes(normalizedKeyword)) {
+    return false;
+  }
+
+  const currentKeywordAliases = normalizedKeyword === 'ralph' || normalizedKeyword === '랄프' || normalizedKeyword === 'ラルフ'
+    ? ['랄프', 'ラルフ']
+    : ['울트라워크', 'ウルトラワーク'];
+  const currentKeywordPattern = currentKeywordAliases.join('|');
+  const imperativeVerbPattern = '켜|켜줘|실행|시작|돌려|돌려줘|써|써줘|사용해|진행해';
+  const koreanImperativePatterns = [
+    new RegExp(`(?:${currentKeywordPattern})[^?？\n]{0,16}(?:${imperativeVerbPattern})`, 'u'),
+    new RegExp(`(?:${imperativeVerbPattern})[^?？\n]{0,16}(?:${currentKeywordPattern})`, 'u'),
+  ];
+  if (koreanImperativePatterns.some((pattern) => pattern.test(context))) {
+    return false;
+  }
+
+  const metaOrBanterPatterns = [
+    /[?？].{0,12}(?:ㅋ{1,}|ㅎ{1,}|lol|lmao)/iu,
+    /(?:ㅋ{1,}|ㅎ{1,}|lol|lmao).{0,40}[?？]/iu,
+    /(?:ralph|랄프|ultrawork|ulw|uw|울트라워크).{0,40}(?:라도|줘야\s*해|쥐어\s*줘야\s*해|해야\s*해).{0,20}[?？]/iu,
+    /(?:관계|관련|연관|차이|비교).{0,40}(?:뭐|무엇|어떻게|설명|알려|궁금|인가|야|냐|니|까|[?？])/u,
+    /(?:뭐|무엇|어떻게|설명|알려|궁금).{0,40}(?:관계|관련|연관|차이|비교)/u,
+  ];
+
+  return metaOrBanterPatterns.some((pattern) => pattern.test(context));
 }
 
 function isInformationalKeywordContext(text, position, keywordLength, keywordText) {
@@ -631,6 +671,9 @@ function isInformationalKeywordContext(text, position, keywordLength, keywordTex
   if (keywordText) {
     if (hasActivationIntentNearKeyword(context, keywordText)) {
       return false;
+    }
+    if (isRalphUltraworkMetaOrBanterContext(context, keywordText)) {
+      return true;
     }
     if (hasDiagnosticIntentNearKeyword(context, keywordText)) {
       return true;
@@ -751,7 +794,8 @@ function hasActionableRalplanKeyword(text, pattern) {
 }
 
 // Create state file for a mode
-function activateState(directory, prompt, stateName, sessionId) {
+function activateState(directory, prompt, stateName, sessionId, omcRoot) {
+  const _omcRoot = omcRoot;
   const now = new Date().toISOString();
   // Sanitize prompt BEFORE writing to state: prevents pasted system echoes
   // and oversized blobs from being persisted and re-emitted by Stop hook.
@@ -819,7 +863,7 @@ function activateState(directory, prompt, stateName, sessionId) {
   // persistent-mode.mjs's readJsonFile (which would otherwise return null
   // and temporarily drop mode enforcement).
   if (sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) {
-    const sessionDir = join(directory, '.omc', 'state', 'sessions', sessionId);
+    const sessionDir = join(_omcRoot, 'state', 'sessions', sessionId);
     if (!existsSync(sessionDir)) {
       try { mkdirSync(sessionDir, { recursive: true }); } catch {}
     }
@@ -828,14 +872,15 @@ function activateState(directory, prompt, stateName, sessionId) {
   }
 
   // Fallback: write to legacy local .omc/state directory
-  const localDir = join(directory, '.omc', 'state');
+  const localDir = join(_omcRoot, 'state');
   if (!existsSync(localDir)) {
     try { mkdirSync(localDir, { recursive: true }); } catch {}
   }
   try { atomicWriteFileSync(join(localDir, `${stateName}-state.json`), JSON.stringify(state, null, 2)); } catch {}
 }
 
-function activateRalplanStartupState(directory, prompt, sessionId) {
+function activateRalplanStartupState(directory, prompt, sessionId, omcRoot) {
+  const _omcRoot = omcRoot;
   const now = new Date().toISOString();
   const state = {
     active: true,
@@ -850,7 +895,7 @@ function activateRalplanStartupState(directory, prompt, sessionId) {
   };
 
   if (sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) {
-    const sessionDir = join(directory, '.omc', 'state', 'sessions', sessionId);
+    const sessionDir = join(_omcRoot, 'state', 'sessions', sessionId);
     if (!existsSync(sessionDir)) {
       try { mkdirSync(sessionDir, { recursive: true }); } catch {}
     }
@@ -858,7 +903,7 @@ function activateRalplanStartupState(directory, prompt, sessionId) {
     return;
   }
 
-  const localDir = join(directory, '.omc', 'state');
+  const localDir = join(_omcRoot, 'state');
   if (!existsSync(localDir)) {
     try { mkdirSync(localDir, { recursive: true }); } catch {}
   }
@@ -868,15 +913,16 @@ function activateRalplanStartupState(directory, prompt, sessionId) {
 /**
  * Clear state files for cancel operation
  */
-function clearStateFiles(directory, modeNames, sessionId) {
+function clearStateFiles(directory, modeNames, sessionId, omcRoot) {
+  const _omcRoot = omcRoot;
   for (const name of modeNames) {
-    const localPath = join(directory, '.omc', 'state', `${name}-state.json`);
+    const localPath = join(_omcRoot, 'state', `${name}-state.json`);
     const globalPath = join(homedir(), '.omc', 'state', `${name}-state.json`);
     try { if (existsSync(localPath)) unlinkSync(localPath); } catch {}
     try { if (existsSync(globalPath)) unlinkSync(globalPath); } catch {}
     // Clear session-scoped file too
     if (sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) {
-      const sessionPath = join(directory, '.omc', 'state', 'sessions', sessionId, `${name}-state.json`);
+      const sessionPath = join(_omcRoot, 'state', 'sessions', sessionId, `${name}-state.json`);
       try { if (existsSync(sessionPath)) unlinkSync(sessionPath); } catch {}
     }
   }
@@ -886,12 +932,13 @@ function clearStateFiles(directory, modeNames, sessionId) {
  * Link ralph and team state files for composition.
  * Updates both state files to reference each other.
  */
-function linkRalphTeam(directory, sessionId) {
+function linkRalphTeam(directory, sessionId, omcRoot) {
+  const _omcRoot = omcRoot;
   const getStatePath = (modeName) => {
     if (sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) {
-      return join(directory, '.omc', 'state', 'sessions', sessionId, `${modeName}-state.json`);
+      return join(_omcRoot, 'state', 'sessions', sessionId, `${modeName}-state.json`);
     }
-    return join(directory, '.omc', 'state', `${modeName}-state.json`);
+    return join(_omcRoot, 'state', `${modeName}-state.json`);
   };
 
   // Update ralph state with linked_team
@@ -1076,6 +1123,7 @@ async function main() {
     try { data = JSON.parse(input); } catch {}
     const directory = data.cwd || data.directory || process.cwd();
     const sessionId = data.session_id || data.sessionId || '';
+    const omcRoot = await resolveOmcStateRoot(directory);
 
     const prompt = extractPrompt(input);
     if (!prompt) {
@@ -1092,7 +1140,7 @@ async function main() {
     }
 
     if (isExplicitRalplanSlashInvocation(prompt)) {
-      activateRalplanStartupState(directory, prompt, sessionId);
+      activateRalplanStartupState(directory, prompt, sessionId, omcRoot);
       console.log(JSON.stringify(createHookOutput(
         `[RALPLAN INIT]\n` +
         `Explicit /ralplan invoke detected during UserPromptSubmit.\n` +
@@ -1120,7 +1168,7 @@ async function main() {
     }
 
     // Ralph keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(ralph|don't stop|must complete|until done)\b|(랄프)(?!로렌)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ralph|don't stop|must complete|until done)\b|(랄프)(?!로렌)|(ラルフ)(?!・?ローレン)/i)) {
       matches.push({ name: 'ralph', args: '' });
     }
 
@@ -1129,7 +1177,7 @@ async function main() {
     // research prose (e.g. "autonomous driving", "autonomous agent") to be a
     // reliable trigger. Aligns with src/hooks/keyword-detector/index.ts and
     // templates/hooks/keyword-detector.mjs, which already exclude it.
-    if (hasActionableKeyword(cleanPrompt, /\b(autopilot|auto pilot|auto-pilot|full auto|fullsend)\b|(오토파일럿)/i) ||
+    if (hasActionableKeyword(cleanPrompt, /\b(autopilot|auto pilot|auto-pilot|full auto|fullsend)\b|(오토파일럿)|(オートパイロット)/i) ||
         hasActionableKeyword(cleanPrompt, /\b(build|create|make)\s+me\s+(an?\s+)?(app|feature|project|tool|plugin|website|api|server|cli|script|system|service|dashboard|bot|extension)\b/i) ||
         hasActionableKeyword(cleanPrompt, /\bi\s+want\s+a\s+/i) ||
         hasActionableKeyword(cleanPrompt, /\bi\s+want\s+an\s+/i) ||
@@ -1147,7 +1195,7 @@ async function main() {
     // Ultrapilot keywords removed — routed to team which is now explicit-only (/team).
 
     // Ultrawork keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(ultrawork|ulw|uw)\b|(울트라워크)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrawork|ulw|uw)\b|(울트라워크)|(ウルトラワーク)/i)) {
       matches.push({ name: 'ultrawork', args: '' });
     }
 
@@ -1155,17 +1203,17 @@ async function main() {
     // This prevents infinite spawning when Claude workers receive prompts containing "team".
 
     // CCG keywords (Claude-Codex-Gemini tri-model orchestration)
-    if (hasActionableKeyword(cleanPrompt, /\b(ccg|claude-codex-gemini)\b|(씨씨지)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ccg|claude-codex-gemini)\b|(씨씨지)|(シーシージー)/i)) {
       matches.push({ name: 'ccg', args: '' });
     }
 
     // Ralplan keyword
-    if (hasActionableRalplanKeyword(cleanPrompt, /\b(ralplan)\b|(랄플랜)/i)) {
+    if (hasActionableRalplanKeyword(cleanPrompt, /\b(ralplan)\b|(랄플랜)|(ラルプラン)/i)) {
       matches.push({ name: 'ralplan', args: '' });
     }
 
     // Deep interview keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]interview|ouroboros)\b|(딥인터뷰)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]interview|ouroboros)\b|(딥인터뷰)|(ディープインタビュー)/i)) {
       matches.push({ name: 'deep-interview', args: '' });
     }
 
@@ -1175,7 +1223,7 @@ async function main() {
     }
 
     // TDD keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(tdd)\b|(테스트\s?퍼스트)/i) ||
+    if (hasActionableKeyword(cleanPrompt, /\b(tdd)\b|(테스트\s?퍼스트)|(テスト\s?ファースト)/i) ||
         hasActionableKeyword(cleanPrompt, /\btest\s+first\b/i) ||
         hasActionableKeyword(cleanPrompt, /\bred\s+green\b/i)) {
       matches.push({ name: 'tdd', args: '' });
@@ -1183,30 +1231,30 @@ async function main() {
 
     // Code review keywords — skip when the prompt is echoed review-instruction text
     if (!isReviewSeedContext(cleanPrompt) &&
-        hasActionableKeyword(cleanPrompt, /\b(code\s+review|review\s+code)\b|(코드\s?리뷰)(?!어)/i)) {
+        hasActionableKeyword(cleanPrompt, /\b(code\s+review|review\s+code)\b|(코드\s?리뷰)(?!어)|(コード\s?レビュー)(?!ア)/i)) {
       matches.push({ name: 'code-review', args: '' });
     }
 
     // Security review keywords — skip when the prompt is echoed review-instruction text
     if (!isReviewSeedContext(cleanPrompt) &&
-        hasActionableKeyword(cleanPrompt, /\b(security\s+review|review\s+security)\b|(보안\s?리뷰)(?!어)/i)) {
+        hasActionableKeyword(cleanPrompt, /\b(security\s+review|review\s+security)\b|(보안\s?리뷰)(?!어)|(セキュリティ[ー]?\s?レビュー)(?!ア)/i)) {
       matches.push({ name: 'security-review', args: '' });
     }
 
     // Ultrathink keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(ultrathink|think hard|think deeply)\b|(울트라씽크)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrathink|think hard|think deeply)\b|(울트라씽크)|(ウルトラシンク)/i)) {
       matches.push({ name: 'ultrathink', args: '' });
     }
 
     // Deepsearch keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(deepsearch)\b|(딥\s?서치)/i) ||
+    if (hasActionableKeyword(cleanPrompt, /\b(deepsearch)\b|(딥\s?서치)|(ディープ\s?サーチ)/i) ||
         hasActionableKeyword(cleanPrompt, /\bsearch\s+(the\s+)?(codebase|code|files?|project)\b/i) ||
         hasActionableKeyword(cleanPrompt, /\bfind\s+(in\s+)?(codebase|code|all\s+files?)\b/i)) {
       matches.push({ name: 'deepsearch', args: '' });
     }
 
     // Analyze keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]?analyze|deepanalyze)\b|(딥\s?분석)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]?analyze|deepanalyze)\b|(딥\s?분석)|(ディープ\s?アナライズ)/i)) {
       matches.push({ name: 'analyze', args: '' });
     }
 
@@ -1246,11 +1294,11 @@ async function main() {
       // Detect if ralplan state exists (was recently active) — serves as "prior skill = ralplan" signal
       const ralplanStatePaths = sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)
         ? [
-            join(directory, '.omc', 'state', 'sessions', sessionId, 'ralplan-state.json'),
+            join(omcRoot, 'state', 'sessions', sessionId, 'ralplan-state.json'),
             join(directory, '.omx', 'state', 'sessions', sessionId, 'ralplan-state.json'),
           ]
         : [
-            join(directory, '.omc', 'state', 'ralplan-state.json'),
+            join(omcRoot, 'state', 'ralplan-state.json'),
             join(directory, '.omx', 'state', 'ralplan-state.json'),
           ];
       const ralplanState = readRalplanFollowupState(ralplanStatePaths, sessionId);
@@ -1314,7 +1362,7 @@ async function main() {
 
     // Handle cancel specially - clear states and emit
     if (resolved.length > 0 && resolved[0].name === 'cancel') {
-      clearStateFiles(directory, ['ralph', 'ultragoal', 'autopilot', 'ultrawork', 'swarm', 'ralplan'], sessionId);
+      clearStateFiles(directory, ['ralph', 'ultragoal', 'autopilot', 'ultrawork', 'swarm', 'ralplan'], sessionId, omcRoot);
       console.log(JSON.stringify(createHookOutput(createSkillInvocation('cancel', prompt))));
       return;
     }
@@ -1322,7 +1370,7 @@ async function main() {
     // Activate states for modes that need them (team removed — explicit-only via /team skill)
     const stateModes = resolved.filter(m => ['ralph', 'ultragoal', 'autopilot', 'ultrawork', 'ralplan'].includes(m.name));
     for (const mode of stateModes) {
-      activateState(directory, prompt, mode.name, sessionId);
+      activateState(directory, prompt, mode.name, sessionId, omcRoot);
     }
 
     // Record mode changes to flow trace
@@ -1336,7 +1384,7 @@ async function main() {
     const hasRalph = resolved.some(m => m.name === 'ralph');
     const hasUltrawork = resolved.some(m => m.name === 'ultrawork');
     if (hasRalph && !hasUltrawork) {
-      activateState(directory, prompt, 'ultrawork', sessionId);
+      activateState(directory, prompt, 'ultrawork', sessionId, omcRoot);
     }
 
     const additionalContextParts = [];

@@ -12,7 +12,7 @@ function makeTempDir() {
 function writeSubagentTrackingState(tempDir, agents) {
     const stateDir = join(tempDir, '.omc', 'state');
     mkdirSync(stateDir, { recursive: true });
-    writeFileSync(join(stateDir, 'subagent-tracking.json'), JSON.stringify({
+    writeFileSync(join(stateDir, 'subagent-tracking-state.json'), JSON.stringify({
         agents,
         total_spawned: agents.length,
         total_completed: agents.filter((agent) => agent.status === 'completed').length,
